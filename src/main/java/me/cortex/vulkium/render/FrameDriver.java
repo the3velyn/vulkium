@@ -95,8 +95,20 @@ public final class FrameDriver {
             logDispatchThrottled("draw: visibleRegionCount=0 (cull rejected every region)");
             return;
         }
-        logDispatchThrottled("draw: visibleRegionCount={} fbW={} fbH={}",
-            visibleRegionCount,
+
+        // Dispatch count semantics: task shader uses gl_WorkGroupID.x AS a section ID, indexing
+        // sectionData.data[sectionId]. So dispatch count must cover the whole addressable section
+        // range (regionId<<8 | posInRegion), not just regionCount. Iterating all allocated regions
+        // × 256 slots/region means empty slots no-op (renderRanges.w=0 → task emits 0 mesh
+        // workgroups) and populated slots emit real geometry. Gives us ~40×256=10240 task
+        // workgroups for a typical scene — fine for mesh-shader dispatch limits (65535+).
+        me.cortex.vulkium.managers.RegionManager rm = me.cortex.vulkium.Vulkium.regionManager();
+        int dispatchCount = rm == null ? visibleRegionCount
+            : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION;
+        if (dispatchCount == 0) return;
+
+        logDispatchThrottled("draw: visibleRegions={} dispatchSections={} fbW={} fbH={}",
+            visibleRegionCount, dispatchCount,
             me.cortex.vulkium.blaze3d.MojangColorFormat.width(),
             me.cortex.vulkium.blaze3d.MojangColorFormat.height());
 
@@ -153,7 +165,7 @@ public final class FrameDriver {
                     .combinedImageSampler(1, atlasView, atlasSampler,
                         org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                     .push(cmd);
-                pass.record(cmd, scene, visibleRegionCount, false /* renderFog */);
+                pass.record(cmd, scene, dispatchCount, false /* renderFog */);
             });
         } catch (Throwable t) {
             LOGGER.warn("Terrain draw failed (disabling drawTerrain this session)", t);
