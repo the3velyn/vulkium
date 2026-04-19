@@ -198,16 +198,21 @@ public final class FrameDriver {
                     sc.extent().set(fbW, fbH);
                     org.lwjgl.vulkan.VK10.vkCmdSetScissor(cmd, 0, sc);
 
-                    me.cortex.vulkium.vk.PushDescriptor.builder(
-                            pass.pipelineLayout().handle(),
-                            org.lwjgl.vulkan.VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                            1 /* set=1 textures */)
-                        .combinedImageSampler(0, atlasView, atlasSampler,
-                            org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                        .combinedImageSampler(1, atlasView, atlasSampler,
-                            org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                        .push(cmd);
-                    pass.record(cmd, scene, dispatchCount, false /* renderFog */);
+                    // DIAG: skip mesh-shader dispatch, leaving just the LOAD_OP_CLEAR red.
+                    // If red appears → render pass works, issue is in pipeline/draw itself.
+                    // If no red → the render-pass + barrier combination is still broken somehow.
+                    if (false) {
+                        me.cortex.vulkium.vk.PushDescriptor.builder(
+                                pass.pipelineLayout().handle(),
+                                org.lwjgl.vulkan.VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                                1 /* set=1 textures */)
+                            .combinedImageSampler(0, atlasView, atlasSampler,
+                                org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                            .combinedImageSampler(1, atlasView, atlasSampler,
+                                org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                            .push(cmd);
+                        pass.record(cmd, scene, dispatchCount, false /* renderFog */);
+                    }
 
                     // 4) End rendering. Do NOT transition back — Mojang's next sampler op will
                     //    do its own transition if needed (we left the attachment in COLOR_OPTIMAL
