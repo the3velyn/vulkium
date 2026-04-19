@@ -154,13 +154,19 @@ public final class FrameDriver {
                     // with undefined prior layout if rendering-info flags are right.
 
                     // 2) vkCmdBeginRendering with just the color attachment.
+                    // VULKIUM_DEBUG: CLEAR to bright red. If we see red anywhere in the frame,
+                    // our render pass is actually reaching Mojang's displayed color attachment.
+                    // If we don't see red, the view handle or submit path is wrong.
+                    org.lwjgl.vulkan.VkClearValue.Buffer clearVal = org.lwjgl.vulkan.VkClearValue.calloc(1, stack);
+                    clearVal.color().float32(0, 1.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
                     org.lwjgl.vulkan.VkRenderingAttachmentInfo.Buffer colorAtt = org.lwjgl.vulkan.VkRenderingAttachmentInfo.calloc(1, stack)
                         .sType$Default()
                         .imageView(colorViewHandle)
                         .imageLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                         .resolveMode(0)
-                        .loadOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_LOAD)
-                        .storeOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE);
+                        .loadOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_CLEAR)
+                        .storeOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE)
+                        .clearValue(clearVal.get(0));
 
                     org.lwjgl.vulkan.VkRenderingInfo renderInfo = org.lwjgl.vulkan.VkRenderingInfo.calloc(stack)
                         .sType$Default()
