@@ -85,30 +85,6 @@ void putVertex(uint id, Vertex V) {
 //     output write. We therefore run the per-quad visibility compute for every lane
 //     first, subgroup-reduce to obtain workgroup totals, then emit.
 void main() {
-    // DIAG: scatter a tiny magenta triangle per mesh workgroup purely via gl_WorkGroupID.
-    // No UBO, no payload reads. If we see dots, mesh pipeline is healthy and the earlier
-    // MVP/payload test failure was caused by reading those values. If red only, something
-    // regressed in the pipeline.
-    SetMeshOutputsEXT(3u, 1u);
-    if (gl_LocalInvocationIndex == 0u) {
-        // DIAG: project world pos (10, 64, 10) — close to surface near world origin.
-        // Do NDC offset AFTER perspective divide so screen-space size is always sensible.
-        vec4 c = MVP * vec4(10.0, 64.0, 10.0, 1.0);
-        if (c.w > 0.01) {
-            vec2 ndc = c.xy / c.w;
-            gl_MeshVerticesEXT[0].gl_Position = vec4(ndc.x - 0.06, ndc.y - 0.06, 0.5, 1.0);
-            gl_MeshVerticesEXT[1].gl_Position = vec4(ndc.x + 0.06, ndc.y - 0.06, 0.5, 1.0);
-            gl_MeshVerticesEXT[2].gl_Position = vec4(ndc.x,        ndc.y + 0.06, 0.5, 1.0);
-        } else {
-            // Behind camera / degenerate: put tiny marker at top-right so we know.
-            gl_MeshVerticesEXT[0].gl_Position = vec4(0.85, 0.85, 0.5, 1.0);
-            gl_MeshVerticesEXT[1].gl_Position = vec4(0.95, 0.85, 0.5, 1.0);
-            gl_MeshVerticesEXT[2].gl_Position = vec4(0.90, 0.95, 0.5, 1.0);
-        }
-        gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
-        gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
-    }
-    return;
     uint id = getOffset();
     bool validQuad = (id != uint(-1));
 
