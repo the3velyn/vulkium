@@ -57,6 +57,7 @@ public final class Vulkium implements ClientModInitializer {
         // world render which can start before CLIENT_STARTED under some launch paths. The
         // handlers early-out on isEnabled() when the probe hasn't yet concluded.
         FrameDriver.register();
+        VulkiumKeys.register();
     }
 
     private static void onClientStarted(Minecraft client) {
