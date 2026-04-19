@@ -91,12 +91,13 @@ void main() {
     // regressed in the pipeline.
     SetMeshOutputsEXT(3u, 1u);
     if (gl_LocalInvocationIndex == 0u) {
-        uint id = gl_WorkGroupID.x;
-        float x = mod(float(id), 64.0) / 64.0 * 2.0 - 1.0;
-        float y = floor(float(id) / 64.0) / 64.0 * 2.0 - 1.0;
-        gl_MeshVerticesEXT[0].gl_Position = vec4(x - 0.005, y - 0.005, 0.5, 1.0);
-        gl_MeshVerticesEXT[1].gl_Position = vec4(x + 0.005, y - 0.005, 0.5, 1.0);
-        gl_MeshVerticesEXT[2].gl_Position = vec4(x,         y + 0.005, 0.5, 1.0);
+        // DIAG: position encodes payload.origin.x only (no MVP). If we see a line of dots
+        // spanning X, payload is readable. If nothing, payload reading is the problem.
+        float px = clamp(payload.origin.x * 0.01, -0.9, 0.9);
+        float py = clamp(payload.origin.z * 0.01, -0.9, 0.9);
+        gl_MeshVerticesEXT[0].gl_Position = vec4(px - 0.01, py - 0.01, 0.5, 1.0);
+        gl_MeshVerticesEXT[1].gl_Position = vec4(px + 0.01, py - 0.01, 0.5, 1.0);
+        gl_MeshVerticesEXT[2].gl_Position = vec4(px,        py + 0.01, 0.5, 1.0);
         gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
         gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
     }
