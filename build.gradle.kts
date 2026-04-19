@@ -114,6 +114,9 @@ tasks.processResources {
     filesMatching("fabric.mod.json") {
         expand(mapOf("version" to inputs.properties["version"]))
     }
+    // Non-asset tracker files that live alongside shaders for human reference — keep them
+    // out of the jar so MC's resource-pack scanner doesn't warn about them each launch.
+    exclude("assets/vulkium/shaders/SHADERS_TODO.md")
 }
 
 tasks.jar {

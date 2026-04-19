@@ -17,7 +17,7 @@
   "accessWidener": "vulkium.accesswidener",
   "depends": {
     "fabricloader": ">=0.19.0",
-    "minecraft": ">=26.2-snapshot-3",
+    "minecraft": "*",
     "java": ">=25",
     "fabric-lifecycle-events-v1": "*"
   },
