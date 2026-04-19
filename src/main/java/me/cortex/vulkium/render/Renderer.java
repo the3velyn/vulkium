@@ -1,7 +1,11 @@
 package me.cortex.vulkium.render;
 
 import me.cortex.vulkium.Vulkium;
+import me.cortex.vulkium.VulkiumConfig;
+import me.cortex.vulkium.blaze3d.MojangDepthTap;
 import me.cortex.vulkium.managers.RegionManager;
+import me.cortex.vulkium.vk.CommandRecorder;
+import me.cortex.vulkium.vk.HzbTexture;
 import me.cortex.vulkium.vk.UploadStream;
 import net.fabricmc.fabric.api.client.rendering.v1.level.AbstractLevelRenderContext;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
@@ -28,6 +32,11 @@ public final class Renderer {
     private PrimaryTerrainPass primaryTerrain;
     private TerrainUploader terrainUploader;
     private UploadStream uploadStream;
+    private HzbBuilder hzbBuilder;
+    private HzbTexture hzbTexture;
+    private int hzbWidth;
+    private int hzbHeight;
+    private long hzbLastBuildNs;
     private boolean initFailed;
 
     /** Upload-ring section size (bytes) × count. Balances per-frame peak upload vs memory. */
@@ -106,6 +115,55 @@ public final class Renderer {
     public PrimaryTerrainPass primaryTerrain() { return primaryTerrain; }
     public TerrainUploader terrainUploader() { return terrainUploader; }
     public UploadStream uploadStream() { return uploadStream; }
+    public HzbTexture hzbTexture() { return hzbTexture; }
+    public long hzbLastBuildNs() { return hzbLastBuildNs; }
+
+    /**
+     * Tap Mojang's depth attachment into HZB mip 0 + run the downsample chain. Called from
+     * {@code FrameDriver} at AFTER_OPAQUE_TERRAIN when {@link VulkiumConfig#enableHzb} is on.
+     * Lazily (re-)allocates the HZB texture to match the current framebuffer size.
+     */
+    public void buildHzb() {
+        if (initFailed) return;
+        int w = net.minecraft.client.Minecraft.getInstance().getWindow().getWidth();
+        int h = net.minecraft.client.Minecraft.getInstance().getWindow().getHeight();
+        if (w <= 0 || h <= 0) return;
+
+        if (hzbTexture == null || w != hzbWidth || h != hzbHeight) {
+            // Size changed (or first call). Drop the old texture + rebuild.
+            if (hzbTexture != null) {
+                try { hzbTexture.close(); } catch (Throwable t) { LOGGER.warn("HzbTexture close failed", t); }
+                hzbTexture = null;
+            }
+            try {
+                hzbTexture = HzbTexture.allocate(w, h);
+                hzbWidth = w;
+                hzbHeight = h;
+                if (hzbBuilder == null) hzbBuilder = new HzbBuilder();
+                LOGGER.info("HZB (re)allocated at {}x{} ({} mips).", w, h, hzbTexture.mipLevels());
+            } catch (Throwable t) {
+                LOGGER.error("HZB allocation failed; disabling HZB path", t);
+                hzbTexture = null;
+                return;
+            }
+        }
+
+        long t0 = System.nanoTime();
+        try {
+            final HzbTexture hzb = this.hzbTexture;
+            final HzbBuilder builder = this.hzbBuilder;
+            CommandRecorder.recordAndSubmit(cmd -> {
+                if (!MojangDepthTap.copyDepthToMip0(cmd, hzb)) {
+                    // Depth not tappable this frame — skip build; mip 0 is not in the expected layout.
+                    return;
+                }
+                builder.recordBuildChain(cmd, hzb);
+            });
+        } catch (Throwable t) {
+            LOGGER.warn("HZB build failed (continuing without occlusion this frame)", t);
+        }
+        hzbLastBuildNs = System.nanoTime() - t0;
+    }
 
     private void ensureInit() {
         if (sceneUniform != null || initFailed) return;
@@ -133,6 +191,14 @@ public final class Renderer {
         // Close in reverse construction order so dependent VK handles teardown before their
         // predecessors (pipelines hold references to modules + VkDevice; uploader holds its
         // arena's DeviceBuffer; UploadStream holds a StagingBuffer).
+        if (hzbTexture != null) {
+            try { hzbTexture.close(); } catch (Throwable t) { LOGGER.warn("HzbTexture close failed", t); }
+            hzbTexture = null;
+        }
+        if (hzbBuilder != null) {
+            try { hzbBuilder.close(); } catch (Throwable t) { LOGGER.warn("HzbBuilder close failed", t); }
+            hzbBuilder = null;
+        }
         if (terrainUploader != null) {
             try { terrainUploader.close(); } catch (Throwable t) { LOGGER.warn("TerrainUploader close failed", t); }
             terrainUploader = null;

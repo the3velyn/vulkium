@@ -49,10 +49,11 @@ public class DebugScreenOverlayMixin {
         VisibilityTracker vt = Renderer.get().visibility();
         int visibleRegions = vt == null ? 0 : vt.visibleRegionCount();
         long cullUs = vt == null ? 0 : vt.lastUpdateDurationNs() / 1000;
+        long hzbUs = Renderer.get().hzbLastBuildNs() / 1000;
 
         lines.add(String.format(
-            "[\u00a7bvulkium\u00a7r] frames=%d captured=%d liveSections=%d regions=%d visible=%d cull=%dus vb=%dMB ib=%dMB",
+            "[\u00a7bvulkium\u00a7r] frames=%d captured=%d liveSections=%d regions=%d visible=%d cull=%dus hzb=%dus vb=%dMB ib=%dMB",
             FrameDriver.frameCount(), captured, sm.liveView().size(),
-            rm == null ? 0 : rm.regionCount(), visibleRegions, cullUs, vbMb, ibMb));
+            rm == null ? 0 : rm.regionCount(), visibleRegions, cullUs, hzbUs, vbMb, ibMb));
     }
 }

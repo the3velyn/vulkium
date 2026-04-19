@@ -1,6 +1,7 @@
 package me.cortex.vulkium.render;
 
 import me.cortex.vulkium.Vulkium;
+import me.cortex.vulkium.VulkiumConfig;
 import me.cortex.vulkium.managers.SectionManager;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelRenderEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.level.LevelTerrainRenderContext;
@@ -63,9 +64,20 @@ public final class FrameDriver {
 
     private static void onAfterOpaqueTerrain(LevelTerrainRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
-        // V7 target: dispatch vulkium's 6-phase mesh-shader pipeline here via
-        // VulkanCommandEncoder.allocateTransientCommandBuffer(false) + encoder.execute(cmd).
-        // Today this is a no-op — vanilla MC's terrain has already been drawn.
+        VulkiumConfig cfg = VulkiumConfig.get();
+
+        // HZB build: tap Mojang's depth attachment (now fully populated after opaque terrain) +
+        // run the downsample chain. Cheap (~100µs at 1080p) and provides the occlusion buffer
+        // for future region/section visibility tests.
+        if (cfg.enableHzb) {
+            Renderer.get().buildHzb();
+        }
+
+        // V7 target: dispatch vulkium's mesh-shader terrain draws here via SecondaryRecorder
+        // (inheriting Mojang's dynamic-rendering formats) + PrimaryTerrainPass.record. Gated
+        // behind cfg.drawTerrain (off by default until Mojang's texture atlas is plumbed into
+        // descriptor set 1).
+        // if (cfg.drawTerrain) { ... }
     }
 
     private static void onAfterTranslucentTerrain(LevelRenderContext ctx) {
