@@ -47,6 +47,11 @@ public final class FrameDriver {
         // render-thread-owned live section table + region ledger.
         int drained = SectionManager.get().drainPending(DRAIN_PER_FRAME);
 
+        // Populate scene UBO for this frame. Safe to call even when pipelines aren't wired —
+        // this just updates the host-mapped buffer; it only costs GPU bandwidth when a
+        // subsequent pipeline actually reads from it.
+        Renderer.get().prepareFrame(ctx);
+
         if (frame <= 4 || frame % LOG_EVERY == 0) {
             SectionManager sm = SectionManager.get();
             LOGGER.info("Frame {}: drained={} liveSections={} regions={}",

@@ -93,6 +93,11 @@ public final class Vulkium implements ClientModInitializer {
     private static void onClientStopping(Minecraft client) {
         // Free VK resources before Mojang's VulkanDevice teardown yanks the allocator out from
         // under us. Anything we allocated against MojangVulkanBridge.vma() must close here.
+        try {
+            me.cortex.vulkium.render.Renderer.get().shutdown();
+        } catch (Throwable t) {
+            LOGGER.warn("Renderer shutdown failed", t);
+        }
         if (regionManager != null) {
             try {
                 regionManager.close();
