@@ -74,6 +74,9 @@ dependencies {
     // enough — natives load from Mojang's own classpath. We pin 3.4.1 to match Mojang's bundle.
     compileOnly("org.lwjgl:lwjgl-vulkan:$lwjglVersion")
     compileOnly("org.lwjgl:lwjgl-vma:$lwjglVersion")
+    // shaderc for runtime GLSL→SPIR-V compile of mesh/task stages Mojang's GlslCompiler
+    // doesn't cover. lwjgl-shaderc is already on MC 26.2's runtime classpath.
+    compileOnly("org.lwjgl:lwjgl-shaderc:$lwjglVersion")
 
     // Fabric API modules — request only what we actually use.
     fun embed(name: String) {
