@@ -70,18 +70,87 @@ public final class FrameDriver {
             Renderer.get().buildHzb();
         }
 
-        // Vulkium terrain draw. Gated behind cfg.drawTerrain — default off because the
-        // fragment shader's tex_light binding has no lightmap tap yet (we bind the block
-        // atlas to both diffuse + light slots for now; result is visually wrong but
-        // structurally valid).
-        if (cfg.drawTerrain) {
-            dispatchTerrainDraw();
-        }
+        // Terrain draw moved to onEndMain — AFTER_OPAQUE_TERRAIN fires mid-world-render so
+        // sky/entities/particles render AFTER and overwrite our output. END_MAIN fires after
+        // all world drawing, before HUD — giving us a stable attachment to write into.
     }
 
     private static long lastDispatchLog = 0L;
 
     private static void dispatchTerrainDraw() {
+        // VULKIUM_DEBUG: simplest possible test — clear the main color image to bright red
+        // via vkCmdClearColorImage (no render pass, no pipeline). If red appears, our
+        // submit path works and the bug is elsewhere. If not, submit itself is broken.
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null || mc.gameRenderer == null || mc.gameRenderer.mainRenderTarget() == null) return;
+        com.mojang.blaze3d.textures.GpuTextureView gpuView = mc.gameRenderer.mainRenderTarget().getColorTextureView();
+        if (!(gpuView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkView)) return;
+        com.mojang.blaze3d.vulkan.VulkanGpuTexture vkTex = vkView.texture();
+        if (vkTex == null) return;
+        long imageHandle = vkTex.vkImage();
+        try {
+            me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
+                try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                    // Transition to TRANSFER_DST so clear is valid. Mojang typically left it in
+                    // COLOR_ATTACHMENT_OPTIMAL or SHADER_READ_ONLY. Use UNDEFINED→TRANSFER_DST
+                    // which discards prior contents but is always valid.
+                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer b1 = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
+                        .sType$Default()
+                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                        .srcAccessMask(0)
+                        .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT)
+                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
+                        .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                        .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .image(imageHandle);
+                    b1.subresourceRange()
+                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(0).levelCount(1)
+                        .baseArrayLayer(0).layerCount(1);
+                    org.lwjgl.vulkan.VkDependencyInfo dep = org.lwjgl.vulkan.VkDependencyInfo.calloc(stack)
+                        .sType$Default()
+                        .pImageMemoryBarriers(b1);
+                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep);
+
+                    org.lwjgl.vulkan.VkClearColorValue clearVal = org.lwjgl.vulkan.VkClearColorValue.calloc(stack);
+                    clearVal.float32(0, 1.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
+                    org.lwjgl.vulkan.VkImageSubresourceRange.Buffer range = org.lwjgl.vulkan.VkImageSubresourceRange.calloc(1, stack)
+                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(0).levelCount(1)
+                        .baseArrayLayer(0).layerCount(1);
+                    org.lwjgl.vulkan.VK10.vkCmdClearColorImage(cmd, imageHandle,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clearVal, range);
+
+                    // Restore to COLOR_ATTACHMENT_OPTIMAL (what Mojang typically expects next).
+                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer b2 = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
+                        .sType$Default()
+                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT)
+                        .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                        .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                        .dstAccessMask(0)
+                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                        .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                        .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .image(imageHandle);
+                    b2.subresourceRange()
+                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(0).levelCount(1)
+                        .baseArrayLayer(0).layerCount(1);
+                    org.lwjgl.vulkan.VkDependencyInfo dep2 = org.lwjgl.vulkan.VkDependencyInfo.calloc(stack)
+                        .sType$Default()
+                        .pImageMemoryBarriers(b2);
+                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep2);
+                }
+            });
+        } catch (Throwable t) {
+            LOGGER.warn("Terrain draw failed (disabling drawTerrain this session)", t);
+            VulkiumConfig.get().drawTerrain = false;
+        }
+        if (true) return;  // DIAG: skip the real pipeline path below while testing clear.
+
         Renderer r = Renderer.get();
         me.cortex.vulkium.render.PrimaryTerrainPass pass = r.primaryTerrain();
         me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
@@ -117,18 +186,25 @@ public final class FrameDriver {
         // AFTER_OPAQUE_TERRAIN fires inside Mojang's render scope, but MC 26.2's
         // ChunkSectionsToRender.renderGroup creates+closes its own render pass per call —
         // the event fires BETWEEN passes, so secondaries with RENDER_PASS_CONTINUE silently fail.
-        int colorFormat = me.cortex.vulkium.blaze3d.MojangColorFormat.get();
-        long colorView = me.cortex.vulkium.blaze3d.MojangColorFormat.imageView();
-        if (colorView == 0L || colorFormat == 0) return; // Mojang hasn't rendered terrain yet this frame.
+        // Use mainRenderTarget's color view — that's the final framebuffer that gets presented
+        // to the display. The view we captured from ChunkSectionsToRender was an intermediate
+        // terrain texture that later gets composited; writing to it after its pass closed didn't
+        // land on screen.
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc == null || mc.gameRenderer == null || mc.gameRenderer.mainRenderTarget() == null) return;
+        com.mojang.blaze3d.pipeline.RenderTarget rt = mc.gameRenderer.mainRenderTarget();
+        com.mojang.blaze3d.textures.GpuTextureView gpuView = rt.getColorTextureView();
+        if (!(gpuView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkView)) return;
+        long colorView = vkView.vkImageView();
+        int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView.texture().getFormat());
+        if (colorView == 0L) return;
 
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
         long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
         if (atlasView == 0L || atlasSampler == 0L) return;
 
-        int w0 = me.cortex.vulkium.blaze3d.MojangColorFormat.width();
-        int h0 = me.cortex.vulkium.blaze3d.MojangColorFormat.height();
-        final int fbW = w0;
-        final int fbH = h0;
+        final int fbW = rt.width;
+        final int fbH = rt.height;
         final long colorViewHandle = colorView;
 
         try {
@@ -228,6 +304,9 @@ public final class FrameDriver {
             } catch (Throwable t) {
                 LOGGER.warn("UploadStream.commitFrame failed", t);
             }
+        }
+        if (VulkiumConfig.get().drawTerrain) {
+            dispatchTerrainDraw();
         }
     }
 
