@@ -85,6 +85,17 @@ void putVertex(uint id, Vertex V) {
 //     output write. We therefore run the per-quad visibility compute for every lane
 //     first, subgroup-reduce to obtain workgroup totals, then emit.
 void main() {
+    // DIAG: emit one full-screen NDC triangle unconditionally, independent of payload.
+    SetMeshOutputsEXT(3u, 1u);
+    if (gl_LocalInvocationIndex == 0u) {
+        gl_MeshVerticesEXT[0].gl_Position = vec4(-1.0, -1.0, 0.5, 1.0);
+        gl_MeshVerticesEXT[1].gl_Position = vec4( 3.0, -1.0, 0.5, 1.0);
+        gl_MeshVerticesEXT[2].gl_Position = vec4(-1.0,  3.0, 0.5, 1.0);
+        gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
+        gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
+    }
+    return;
+    // --- real path below (dead code under DIAG) ---
     uint id = getOffset();
     bool validQuad = (id != uint(-1));
 

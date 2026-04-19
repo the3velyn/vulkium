@@ -146,6 +146,7 @@ public final class MeshPipeline implements AutoCloseable {
                 VkPipelineColorBlendStateCreateInfo blendState = VkPipelineColorBlendStateCreateInfo.calloc(stack)
                     .sType$Default()
                     .logicOpEnable(false)
+                    .attachmentCount(1)
                     .pAttachments(attach);
 
                 IntBuffer dynamicStates = stack.ints(
@@ -157,6 +158,7 @@ public final class MeshPipeline implements AutoCloseable {
 
                 VkPipelineRenderingCreateInfo rendering = VkPipelineRenderingCreateInfo.calloc(stack)
                     .sType$Default()
+                    .colorAttachmentCount(1)
                     .pColorAttachmentFormats(stack.ints(colorFormat))
                     .depthAttachmentFormat(depthFormat);
 
