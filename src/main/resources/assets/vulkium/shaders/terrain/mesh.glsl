@@ -97,7 +97,8 @@ void main() {
     bool t1draw = false;
 
     if (validQuad) {
-        transformMat = transformationArray.data[payload.transformationId];
+        // DIAG: ignore payload.transformationId — always use slot 0 (seeded identity).
+        transformMat = transformationArray.data[0];
 
         //Load the data
         V0 = terrainData.data[(id<<2)+0];
