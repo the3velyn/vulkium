@@ -101,7 +101,7 @@ public final class ComputeSmokeTest {
             final long la = layout.handle();
             final long ph = pipeline.handle();
 
-            CommandRecorder.recordAndSubmit(cmd -> {
+            CommandRecorder.recordAndFlushNow(cmd -> {
                 try (MemoryStack stack = MemoryStack.stackPush()) {
                     VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, ph);
 

@@ -62,10 +62,25 @@ public final class CommandRecorder {
         }
 
         encoder.execute(cmd);
-        // execute() just adds the cmd buffer to Mojang's submission batch — the actual
-        // vkQueueSubmit fires when Mojang calls submit() at frame boundaries. For
-        // one-shot recordings (smoke tests, startup work) callers want the command to
-        // execute immediately, so flush the batch here.
+        // NOTE: do NOT call encoder.submit() here. That would force a mid-frame
+        // vkQueueSubmit which separates our work from Mojang's, causing ordering hazards
+        // (their subsequent writes end up in a later submission that overwrites ours).
+        // For callers that need the work to complete synchronously (startup smoke tests),
+        // use {@link #recordAndFlushNow(Consumer)} instead.
+    }
+
+    /**
+     * Same as {@link #recordAndSubmit(Consumer)} but forces an immediate
+     * {@code vkQueueSubmit} via {@code encoder.submit()}. Use only for work that has to
+     * complete before we return (boot-time smoke tests, synchronous readbacks). Do NOT
+     * use for per-frame dispatches — it fractures Mojang's submission batch.
+     */
+    public static void recordAndFlushNow(Consumer<VkCommandBuffer> recorder) {
+        VulkanCommandEncoder encoder = MojangVulkanBridge.commandEncoder();
+        if (encoder == null) {
+            throw new IllegalStateException("Mojang VulkanCommandEncoder not available — Vulkan backend not active?");
+        }
+        recordAndSubmit(recorder);
         encoder.submit();
     }
 }

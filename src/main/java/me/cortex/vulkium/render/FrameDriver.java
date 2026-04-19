@@ -126,18 +126,11 @@ public final class FrameDriver {
         int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView2.texture().getFormat());
         if (colorView == 0L) return;
 
-        // Close any open Mojang render pass before we begin our own — otherwise
-        // vkCmdBeginRenderingKHR (and vkCmdClearColorImage) are invalid inside an active scope
-        // and silently no-op on NVIDIA (no validation layer loaded to catch it).
-        try {
-            com.mojang.blaze3d.vulkan.VulkanCommandEncoder mojangEnc =
-                me.cortex.vulkium.blaze3d.MojangVulkanBridge.commandEncoder();
-            if (mojangEnc != null) {
-                mojangEnc.submitRenderPass();
-            }
-        } catch (Throwable t) {
-            logDispatchThrottled("submitRenderPass threw: {}", t.toString());
-        }
+        // CommandRecorder allocates a fresh PRIMARY cmd buffer and enqueues it via
+        // encoder.execute() — Mojang bundles it into the current frame's submission batch.
+        // This gives our commands a clean state (no inherited render pass) while still
+        // ordering inside Mojang's frame. Crucially we do NOT call encoder.submit() after;
+        // that would fracture the batch and let Mojang's later writes overwrite ours.
 
         // Atlas is only needed for the real mesh draw; diag path does clears only. Allowing
         // null atlas lets the diag fire from the first frame.
@@ -152,20 +145,43 @@ public final class FrameDriver {
         final long atlasSamplerFinal = atlasSampler;
 
         try {
-            boolean ok = me.cortex.vulkium.vk.InlineRecorder.recordInPrimary(cmd -> {
+            me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
                 try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-                    // Attachment is already in COLOR_ATTACHMENT_OPTIMAL layout — Mojang's
-                    // submitRenderPass just left it that way. No barrier needed.
-                    //
-                    // LOAD_OP_LOAD preserves whatever Mojang composited into this target
-                    // (sky, clouds, particles) — our mesh draws layer on top with depth test.
+                    // Transition to COLOR_ATTACHMENT_OPTIMAL from whatever Mojang left it in.
+                    // oldLayout=UNDEFINED tells the driver we don't care about existing contents
+                    // — combined with LOAD_OP_CLEAR that's valid and cheap. Once terrain draws
+                    // are confirmed working we'll swap to LOAD_OP_LOAD with a known src layout
+                    // so sky/clouds/particles survive.
+                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer enterB = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
+                        .sType$Default()
+                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                        .srcAccessMask(0)
+                        .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)
+                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
+                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
+                        .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                        .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .image(colorImageHandle);
+                    enterB.subresourceRange()
+                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(0).levelCount(1)
+                        .baseArrayLayer(0).layerCount(1);
+                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd,
+                        org.lwjgl.vulkan.VkDependencyInfo.calloc(stack).sType$Default()
+                            .pImageMemoryBarriers(enterB));
+
+                    // LOAD_OP_CLEAR red background so any magenta mesh-draw pixels stand out.
+                    org.lwjgl.vulkan.VkClearValue.Buffer clearVal = org.lwjgl.vulkan.VkClearValue.calloc(1, stack);
+                    clearVal.color().float32(0, 1.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
                     org.lwjgl.vulkan.VkRenderingAttachmentInfo.Buffer colorAtt = org.lwjgl.vulkan.VkRenderingAttachmentInfo.calloc(1, stack)
                         .sType$Default()
                         .imageView(colorViewHandle)
                         .imageLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                         .resolveMode(0)
-                        .loadOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_LOAD)
-                        .storeOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE);
+                        .loadOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_CLEAR)
+                        .storeOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE)
+                        .clearValue(clearVal.get(0));
 
                     org.lwjgl.vulkan.VkRenderingInfo renderInfo = org.lwjgl.vulkan.VkRenderingInfo.calloc(stack)
                         .sType$Default()
@@ -202,9 +218,6 @@ public final class FrameDriver {
                     org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(cmd);
                 }
             });
-            if (!ok) {
-                logDispatchThrottled("draw: Mojang primary cmd buffer not open — skipped");
-            }
         } catch (Throwable t) {
             LOGGER.warn("Terrain draw failed (disabling drawTerrain this session)", t);
             VulkiumConfig.get().drawTerrain = false;

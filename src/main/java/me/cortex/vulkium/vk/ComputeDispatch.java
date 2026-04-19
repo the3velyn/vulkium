@@ -130,11 +130,13 @@ public final class ComputeDispatch implements AutoCloseable {
         VK10.vkCmdDispatch(cmd, groupsX, groupsY, groupsZ);
     }
 
-    /** Convenience: allocate a primary cmd buffer via {@link CommandRecorder}, record, submit. */
+    /** Convenience: allocate a primary cmd buffer via {@link CommandRecorder}, record, flush now.
+     *  Use this for boot-time / one-shot compute (tests, buffer init). In-frame compute should
+     *  record into its own cmd buffer via {@code record()} to stay in Mojang's frame batch. */
     public void dispatchOnce(ByteBuffer pushConstants,
                              Consumer<PushDescriptor> bindings,
                              int groupsX, int groupsY, int groupsZ) {
-        CommandRecorder.recordAndSubmit(cmd ->
+        CommandRecorder.recordAndFlushNow(cmd ->
             record(cmd, pushConstants, bindings, groupsX, groupsY, groupsZ));
     }
 
