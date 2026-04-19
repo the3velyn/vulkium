@@ -63,7 +63,15 @@ public final class ComputeSmokeTest {
             VmaAllocationInfo allocInfo = VmaAllocationInfo.calloc(stack);
             int r = Vma.vmaCreateBuffer(vma, bufferInfo, allocCreate, pBuffer, pAllocation, allocInfo);
             if (r != VK10.VK_SUCCESS) {
-                LOGGER.warn("smoke: vmaCreateBuffer failed: VkResult={}", r);
+                if (r == -3 /* VK_ERROR_INITIALIZATION_FAILED */) {
+                    // Classic symptom: Mojang's VkDevice wasn't created with
+                    // bufferDeviceAddressFeature.bufferDeviceAddress=true, so VMA rejects
+                    // buffers flagged VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT. Not a bug in
+                    // vulkium — just the GPU/driver/launcher combination. Skip silently.
+                    LOGGER.info("Compute smoke-test SKIPPED — Mojang's VkDevice does not have bufferDeviceAddress enabled.");
+                } else {
+                    LOGGER.warn("smoke: vmaCreateBuffer failed: VkResult={}", r);
+                }
                 return false;
             }
             bufferHandle = pBuffer.get(0);

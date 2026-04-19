@@ -70,9 +70,10 @@ public final class Vulkium implements ClientModInitializer {
 
         probe = VulkanDetect.probe();
 
-        // Run shader-translation diagnostics whenever Mojang's Vulkan backend is live, even if
-        // this GPU lacks mesh-shader support — shaderc can still validate our GLSL against the
-        // Vulkan SPIR-V target, so the sanity check is useful on any Vulkan-backed hardware.
+        // Shader sanity-check + compute smoke-test are both useful on any Vulkan-backed GPU,
+        // not just ones that pass vulkium's full mesh-shader gate. They validate shaderc's
+        // V6 translation output + the compute-pipeline plumbing independent of the
+        // mesh-shader hardware requirement.
         boolean mojangVulkanLive = probe.vulkanBackendActive();
         if (mojangVulkanLive && cfg.runShaderSanityCheck) {
             try {
@@ -81,18 +82,23 @@ public final class Vulkium implements ClientModInitializer {
                 LOGGER.error("Shader sanity-check crashed", t);
             }
         }
+        // ComputeSmokeTest exercises SHADER_DEVICE_ADDRESS_BIT via a buffer-reference push
+        // constant — only meaningful on devices where Mojang enabled bufferDeviceAddress.
+        // On other devices vmaCreateBuffer would fail with INITIALIZATION_FAILED.
+        if (mojangVulkanLive && probe.bufferDeviceAddress() && cfg.runComputeSmokeTest) {
+            try {
+                ComputeSmokeTest.run();
+            } catch (Throwable t) {
+                LOGGER.error("Compute smoke-test crashed", t);
+            }
+        } else if (mojangVulkanLive && cfg.runComputeSmokeTest) {
+            LOGGER.info("Skipping compute smoke-test: bufferDeviceAddress not enabled on this GPU.");
+        }
 
         if (probe.meetsVulkiumGate()) {
             enabled = true;
             LOGGER.info("Vulkium ENABLED. {}", probe);
             MojangVulkanBridge.logBackendInfo();
-            if (cfg.runComputeSmokeTest) {
-                try {
-                    ComputeSmokeTest.run();
-                } catch (Throwable t) {
-                    LOGGER.error("Compute smoke-test crashed (vulkium stays enabled)", t);
-                }
-            }
             try {
                 regionManager = new RegionManager(cfg.maxRegions);
                 SectionManager.get().bindRegionManager(regionManager);
