@@ -93,15 +93,18 @@ void main() {
 
     if (validQuad) {
         transformMat = mat4(1.0);
-        // DIAG: skip vertex load/decode entirely. Fixed clip-space quad per valid-quad lane,
-        // offset by gl_LocalInvocationIndex so quads don't all overlap. If magenta squares
-        // appear across screen → vertex load/decode is the bug. Still red → pipeline itself.
-        float off = float(gl_LocalInvocationIndex) * 0.01;
-        pV0 = vec4(-0.1 + off, -0.1 + off, 0.5, 1.0);
-        pV1 = vec4( 0.1 + off, -0.1 + off, 0.5, 1.0);
-        pV2 = vec4( 0.1 + off,  0.1 + off, 0.5, 1.0);
-        pV3 = vec4(-0.1 + off,  0.1 + off, 0.5, 1.0);
-        V0 = V1 = V2 = V3 = uvec4(0);
+        // DIAG: skip decodeVertexPosition — use payload.origin + fixed corner offsets as world
+        // positions. MVP * that should project quads at each section's origin. If magenta
+        // world-anchored quads appear at chunk boundaries → vertex decode is the bug.
+        V0 = terrainData.data[(id<<2)+0];
+        V1 = terrainData.data[(id<<2)+1];
+        V2 = terrainData.data[(id<<2)+2];
+        V3 = terrainData.data[(id<<2)+3];
+        vec3 p = payload.origin;
+        pV0 = MVP * vec4(p + vec3(0, 0, 0), 1.0);
+        pV1 = MVP * vec4(p + vec3(8, 0, 0), 1.0);
+        pV2 = MVP * vec4(p + vec3(8, 0, 8), 1.0);
+        pV3 = MVP * vec4(p + vec3(0, 0, 8), 1.0);
 
         //Compute the bounding pixels of the 2 triangles in the quad. note, vertex 0 and 2 are the common verticies
         vec2 ssmin = ((pV0.xy/pV0.w)+1)*screenSize;
