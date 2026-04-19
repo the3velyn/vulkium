@@ -240,9 +240,13 @@ public final class Renderer {
 
             // originArray — one uint64 per entry. Seed to zero; task shaders that unpack from it
             // get a valid (0,0,0) offset. Entries are populated later if we ever drive them.
+            // VMA-allocated device-local memory is UNDEFINED contents, not zeroed — we must
+            // explicitly fill. Otherwise unpackOriginOffsetId reads random bits and produces
+            // wildly large signed offsets → payload.origin ends up tens of thousands off →
+            // every mesh-transformed vertex clips out of view.
             originBuffer = me.cortex.vulkium.vk.DeviceBuffer.allocate(
                 (long) transformationCount * 8L);
-            // Already zeroed by VMA allocation.
+            seedFillByte(originBuffer, (byte) 0x00);
 
             // Visibility buffers: task shader gates on sectionVisibility.data[id] & 1 != 0.
             // Seed all-0xFF so every section is considered visible. Sized for max regions

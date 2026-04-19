@@ -93,18 +93,18 @@ void main() {
 
     if (validQuad) {
         transformMat = mat4(1.0);
-        // DIAG: skip decodeVertexPosition — use payload.origin + fixed corner offsets as world
-        // positions. MVP * that should project quads at each section's origin. If magenta
-        // world-anchored quads appear at chunk boundaries → vertex decode is the bug.
+
+        //Load the data
         V0 = terrainData.data[(id<<2)+0];
         V1 = terrainData.data[(id<<2)+1];
         V2 = terrainData.data[(id<<2)+2];
         V3 = terrainData.data[(id<<2)+3];
-        vec3 p = payload.origin;
-        pV0 = MVP * vec4(p + vec3(0, 0, 0), 1.0);
-        pV1 = MVP * vec4(p + vec3(8, 0, 0), 1.0);
-        pV2 = MVP * vec4(p + vec3(8, 0, 8), 1.0);
-        pV3 = MVP * vec4(p + vec3(0, 0, 8), 1.0);
+
+        //Transform the vertices
+        pV0 = transformVertex(V0);
+        pV1 = transformVertex(V1);
+        pV2 = transformVertex(V2);
+        pV3 = transformVertex(V3);
 
         //Compute the bounding pixels of the 2 triangles in the quad. note, vertex 0 and 2 are the common verticies
         vec2 ssmin = ((pV0.xy/pV0.w)+1)*screenSize;
