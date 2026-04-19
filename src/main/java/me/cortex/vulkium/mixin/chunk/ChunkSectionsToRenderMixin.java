@@ -44,9 +44,11 @@ public abstract class ChunkSectionsToRenderMixin {
                 GpuTextureView view = textureView();
                 if (view != null && view.texture() != null) {
                     int vk = VulkanConst.toVk(view.texture().getFormat());
-                    me.cortex.vulkium.blaze3d.MojangColorFormat.set(vk);
+                    int w = view.texture().getWidth(0);
+                    int h = view.texture().getHeight(0);
+                    me.cortex.vulkium.blaze3d.MojangColorFormat.set(vk, w, h);
                     LOGGER.info("Captured Mojang color attachment VkFormat={} ({}x{}, layer group={})",
-                        vk, view.texture().getWidth(0), view.texture().getHeight(0), group);
+                        vk, w, h, group);
                 }
             } catch (Throwable t) {
                 LOGGER.warn("Failed to capture Mojang color format", t);

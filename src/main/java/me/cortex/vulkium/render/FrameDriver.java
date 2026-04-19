@@ -107,10 +107,17 @@ public final class FrameDriver {
         if (atlasView == 0L || atlasSampler == 0L) return;
 
         // MeshPipeline uses DYNAMIC viewport + scissor — must set them in the secondary cmd
-        // buffer before draw. Without this the rasterization extent is uninitialized and the
-        // draw silently emits nothing.
-        int fbW = net.minecraft.client.Minecraft.getInstance().getWindow().getWidth();
-        int fbH = net.minecraft.client.Minecraft.getInstance().getWindow().getHeight();
+        // buffer before draw. Size MUST match Mojang's color-attachment extent, NOT the window
+        // (MC 26.2 renders terrain into a 2048x2048 internal texture). Use the mixin's captured
+        // values; fall back to window dims if not captured yet.
+        int w0 = me.cortex.vulkium.blaze3d.MojangColorFormat.width();
+        int h0 = me.cortex.vulkium.blaze3d.MojangColorFormat.height();
+        if (w0 == 0 || h0 == 0) {
+            w0 = net.minecraft.client.Minecraft.getInstance().getWindow().getWidth();
+            h0 = net.minecraft.client.Minecraft.getInstance().getWindow().getHeight();
+        }
+        final int fbW = w0;
+        final int fbH = h0;
 
         try {
             me.cortex.vulkium.vk.SecondaryRecorder.recordAndSubmit(spec, cmd -> {

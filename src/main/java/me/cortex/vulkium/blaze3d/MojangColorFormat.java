@@ -10,11 +10,19 @@ package me.cortex.vulkium.blaze3d;
  */
 public final class MojangColorFormat {
     private static volatile int vkFormat = 0;
+    private static volatile int attachmentWidth = 0;
+    private static volatile int attachmentHeight = 0;
 
     private MojangColorFormat() {}
 
     /** 0 until the mixin captures the real format. */
     public static int get() { return vkFormat; }
+    public static int width()  { return attachmentWidth; }
+    public static int height() { return attachmentHeight; }
 
-    public static void set(int vk) { vkFormat = vk; }
+    public static void set(int vk, int w, int h) {
+        vkFormat = vk;
+        attachmentWidth = w;
+        attachmentHeight = h;
+    }
 }
