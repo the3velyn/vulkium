@@ -78,79 +78,6 @@ public final class FrameDriver {
     private static long lastDispatchLog = 0L;
 
     private static void dispatchTerrainDraw() {
-        // VULKIUM_DEBUG: simplest possible test — clear the main color image to bright red
-        // via vkCmdClearColorImage (no render pass, no pipeline). If red appears, our
-        // submit path works and the bug is elsewhere. If not, submit itself is broken.
-        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc == null || mc.gameRenderer == null || mc.gameRenderer.mainRenderTarget() == null) return;
-        com.mojang.blaze3d.textures.GpuTextureView gpuView = mc.gameRenderer.mainRenderTarget().getColorTextureView();
-        if (!(gpuView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkView)) return;
-        com.mojang.blaze3d.vulkan.VulkanGpuTexture vkTex = vkView.texture();
-        if (vkTex == null) return;
-        long imageHandle = vkTex.vkImage();
-        try {
-            me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
-                try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-                    // Transition to TRANSFER_DST so clear is valid. Mojang typically left it in
-                    // COLOR_ATTACHMENT_OPTIMAL or SHADER_READ_ONLY. Use UNDEFINED→TRANSFER_DST
-                    // which discards prior contents but is always valid.
-                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer b1 = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
-                        .sType$Default()
-                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                        .srcAccessMask(0)
-                        .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT)
-                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
-                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
-                        .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                        .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
-                        .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
-                        .image(imageHandle);
-                    b1.subresourceRange()
-                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                        .baseMipLevel(0).levelCount(1)
-                        .baseArrayLayer(0).layerCount(1);
-                    org.lwjgl.vulkan.VkDependencyInfo dep = org.lwjgl.vulkan.VkDependencyInfo.calloc(stack)
-                        .sType$Default()
-                        .pImageMemoryBarriers(b1);
-                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep);
-
-                    org.lwjgl.vulkan.VkClearColorValue clearVal = org.lwjgl.vulkan.VkClearColorValue.calloc(stack);
-                    clearVal.float32(0, 1.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
-                    org.lwjgl.vulkan.VkImageSubresourceRange.Buffer range = org.lwjgl.vulkan.VkImageSubresourceRange.calloc(1, stack)
-                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                        .baseMipLevel(0).levelCount(1)
-                        .baseArrayLayer(0).layerCount(1);
-                    org.lwjgl.vulkan.VK10.vkCmdClearColorImage(cmd, imageHandle,
-                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, clearVal, range);
-
-                    // Restore to COLOR_ATTACHMENT_OPTIMAL (what Mojang typically expects next).
-                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer b2 = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
-                        .sType$Default()
-                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT)
-                        .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
-                        .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                        .dstAccessMask(0)
-                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
-                        .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
-                        .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
-                        .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
-                        .image(imageHandle);
-                    b2.subresourceRange()
-                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                        .baseMipLevel(0).levelCount(1)
-                        .baseArrayLayer(0).layerCount(1);
-                    org.lwjgl.vulkan.VkDependencyInfo dep2 = org.lwjgl.vulkan.VkDependencyInfo.calloc(stack)
-                        .sType$Default()
-                        .pImageMemoryBarriers(b2);
-                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep2);
-                }
-            });
-        } catch (Throwable t) {
-            LOGGER.warn("Terrain draw failed (disabling drawTerrain this session)", t);
-            VulkiumConfig.get().drawTerrain = false;
-        }
-        if (true) return;  // DIAG: skip the real pipeline path below while testing clear.
-
         Renderer r = Renderer.get();
         me.cortex.vulkium.render.PrimaryTerrainPass pass = r.primaryTerrain();
         me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
@@ -206,28 +133,35 @@ public final class FrameDriver {
         final int fbW = rt.width;
         final int fbH = rt.height;
         final long colorViewHandle = colorView;
+        final long colorImageHandle = vkView2.texture().vkImage();
 
         try {
             me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
                 try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-                    // 1) Transition Mojang's color attachment to COLOR_ATTACHMENT_OPTIMAL.
-                    //    Mojang left it in SHADER_READ_ONLY_OPTIMAL after closing its render pass.
-                    //    We'll flip it back at the end.
+                    // 1) Barrier: transition color image from whatever Mojang left it in to
+                    //    COLOR_ATTACHMENT_OPTIMAL so vkCmdBeginRenderingKHR can use it. Without
+                    //    this transition, the attachment's actual layout doesn't match what we
+                    //    declare in VkRenderingAttachmentInfo.imageLayout and the render pass
+                    //    silently fails.
                     org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer enterB = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
                         .sType$Default()
-                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)
-                        .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
+                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                        .srcAccessMask(0)
                         .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)
-                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
-                            | org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT)
+                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
                         .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
                         .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                         .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
                         .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
-                        .image(0);  // Filled below; needs the VkImage, not the view.
-                    // Actually — barriers need VkImage, not VkImageView. Without the image handle
-                    // we can't barrier. Skip barrier for now; many drivers accept LOAD_OP_LOAD
-                    // with undefined prior layout if rendering-info flags are right.
+                        .image(colorImageHandle);
+                    enterB.subresourceRange()
+                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(0).levelCount(1)
+                        .baseArrayLayer(0).layerCount(1);
+                    org.lwjgl.vulkan.VkDependencyInfo enterDep = org.lwjgl.vulkan.VkDependencyInfo.calloc(stack)
+                        .sType$Default()
+                        .pImageMemoryBarriers(enterB);
+                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, enterDep);
 
                     // 2) vkCmdBeginRendering with just the color attachment.
                     // VULKIUM_DEBUG: CLEAR to bright red. If we see red anywhere in the frame,
