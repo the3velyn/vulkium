@@ -20,15 +20,6 @@ bool shouldRenderVisible(uint sectionId) {
 #include <vulkium:terrain/task_common.glsl>
 
 void main() {
-    // DIAG: unconditionally emit one mesh workgroup per task workgroup so we can tell whether
-    // the whole mesh pipeline is rasterizing. Revert once the real path is producing pixels.
-    if (gl_WorkGroupID.x == 0u) {
-        EmitMeshTasksEXT(1, 1, 1);
-    } else {
-        EmitMeshTasksEXT(0, 1, 1);
-    }
-    return;
-    // --- real path below (dead code under DIAG) ---
     uint sectionId = gl_WorkGroupID.x;
 
     if (!shouldRenderVisible(sectionId)) {
