@@ -70,6 +70,20 @@ public final class VulkiumConfig {
         return INSTANCE;
     }
 
+    /** Persist current values to {@code config/vulkium.json}. Called by the options screen on close. */
+    public void save() {
+        Path path = FabricLoader.getInstance().getConfigDir().resolve(FILENAME);
+        try {
+            Files.createDirectories(path.getParent());
+            try (var writer = Files.newBufferedWriter(path)) {
+                GSON.toJson(this, writer);
+            }
+            LOGGER.info("Saved config to {}", path);
+        } catch (IOException e) {
+            LOGGER.warn("Failed to save config to {}: {}", path, e.getMessage());
+        }
+    }
+
     private static VulkiumConfig load() {
         Path path = FabricLoader.getInstance().getConfigDir().resolve(FILENAME);
         VulkiumConfig cfg;

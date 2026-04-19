@@ -9,7 +9,8 @@
     "chunk.CompiledSectionMeshMixin",
     "chunk.CompileTaskMixin",
     "chunk.RenderSectionMixin",
-    "chunk.ChunkSectionsToRenderMixin"
+    "chunk.ChunkSectionsToRenderMixin",
+    "gui.VideoSettingsScreenMixin"
   ],
   "injectors": {
     "defaultRequire": 1
