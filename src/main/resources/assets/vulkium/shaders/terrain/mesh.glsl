@@ -85,6 +85,24 @@ void putVertex(uint id, Vertex V) {
 //     output write. We therefore run the per-quad visibility compute for every lane
 //     first, subgroup-reduce to obtain workgroup totals, then emit.
 void main() {
+    // DIAG: emit a triangle per mesh workgroup at payload.origin (chunk-local 0..16) transformed
+    // by MVP only — no terrainData, no transformationArray. If pixels cluster where terrain
+    // blocks should be, MVP + origin + clip pipeline are sane; the bug is in terrainData or
+    // transformationArray. If still red, MVP/origin is broken.
+    SetMeshOutputsEXT(3u, 1u);
+    if (gl_LocalInvocationIndex == 0u) {
+        // A single 2m-tall magenta triangle at the section's world origin.
+        vec3 origin = payload.origin;
+        vec4 p0 = MVP * vec4(origin + vec3( 0.0, 0.0, 0.0), 1.0);
+        vec4 p1 = MVP * vec4(origin + vec3(16.0, 0.0, 0.0), 1.0);
+        vec4 p2 = MVP * vec4(origin + vec3( 0.0, 16.0, 0.0), 1.0);
+        gl_MeshVerticesEXT[0].gl_Position = p0;
+        gl_MeshVerticesEXT[1].gl_Position = p1;
+        gl_MeshVerticesEXT[2].gl_Position = p2;
+        gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
+        gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
+    }
+    return;
     uint id = getOffset();
     bool validQuad = (id != uint(-1));
 
