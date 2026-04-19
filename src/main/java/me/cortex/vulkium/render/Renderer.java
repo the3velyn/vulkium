@@ -147,7 +147,13 @@ public final class Renderer {
             .transformationArrPtr(transformationBuffer != null ? transformationBuffer.deviceAddress() : 0L)
             .originArrPtr(originBuffer != null ? originBuffer.deviceAddress() : 0L)
             .statisticsPtr(0L)
-            .screenSize(1f, 1f)
+            // nvidium convention: screenSize is HALF the framebuffer resolution in pixels.
+            // Mesh shader bbox cull does `((pos.xy/pos.w)+1) * screenSize` → NDC [-1..1] +1 = [0..2]
+            // then × (W/2, H/2) = [0..W, 0..H] pixel coords. With (1,1) every quad lands in
+            // sub-pixel coords and gets culled as degenerate.
+            .screenSize(
+                me.cortex.vulkium.blaze3d.MojangColorFormat.width()  * 0.5f,
+                me.cortex.vulkium.blaze3d.MojangColorFormat.height() * 0.5f)
             .fog(0f, 1f, false)
             .regionCount(regionCount)
             .frameId((int) (FrameDriver.frameCount() & 0xFF));
