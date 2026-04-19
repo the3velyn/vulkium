@@ -1,0 +1,25 @@
+#version 460 core
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+#extension GL_EXT_buffer_reference : require
+#extension GL_EXT_buffer_reference2 : require
+
+// Minimal compute smoke test. Writes thread_id*thread_id into a u32 array via a
+// buffer-reference pointer supplied as a push constant. No scene UBO, no extra descriptors —
+// isolates compute-pipeline / push-descriptor / dispatch plumbing from the full scene model.
+
+layout(local_size_x = 64) in;
+
+layout(buffer_reference, std430, buffer_reference_align=4) writeonly restrict buffer OutputPtr {
+    uint32_t data[];
+};
+
+layout(push_constant) uniform PC {
+    OutputPtr output_buffer;
+    uint32_t count;
+};
+
+void main() {
+    uint32_t id = gl_GlobalInvocationID.x;
+    if (id >= count) return;
+    output_buffer.data[id] = id * id;
+}

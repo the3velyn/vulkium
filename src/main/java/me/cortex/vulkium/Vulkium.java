@@ -5,6 +5,7 @@ import me.cortex.vulkium.blaze3d.VulkanDetect;
 import me.cortex.vulkium.managers.RegionManager;
 import me.cortex.vulkium.managers.SectionManager;
 import me.cortex.vulkium.render.FrameDriver;
+import me.cortex.vulkium.vk.ComputeSmokeTest;
 import me.cortex.vulkium.vk.ShaderSanityCheck;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -70,6 +71,13 @@ public final class Vulkium implements ClientModInitializer {
                 ShaderSanityCheck.runAll();
             } catch (Throwable t) {
                 LOGGER.error("Shader sanity-check crashed (vulkium stays enabled)", t);
+            }
+            // End-to-end compute-pipeline smoke test. If this passes we know
+            // shaderc → VkPipeline → dispatch → readback all work on this machine.
+            try {
+                ComputeSmokeTest.run();
+            } catch (Throwable t) {
+                LOGGER.error("Compute smoke-test crashed (vulkium stays enabled)", t);
             }
             // Allocate the region ledger and wire the section-ingest path. Cheap (~8MB
             // device-local meta slab); keeping it lazy would move allocation onto the first
