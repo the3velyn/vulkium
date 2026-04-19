@@ -73,6 +73,11 @@ public final class Vulkium implements ClientModInitializer {
         // handlers early-out on isEnabled() when the probe hasn't yet concluded.
         FrameDriver.register();
         VulkiumKeys.register();
+        try {
+            me.cortex.vulkium.render.VulkiumHudOverlay.register();
+        } catch (Throwable t) {
+            LOGGER.warn("VulkiumHudOverlay.register failed (F3 overlay won't show stats)", t);
+        }
     }
 
     private static void onClientStarted(Minecraft client) {
