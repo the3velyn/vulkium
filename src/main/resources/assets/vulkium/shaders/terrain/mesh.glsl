@@ -91,24 +91,13 @@ void main() {
     // regressed in the pipeline.
     SetMeshOutputsEXT(3u, 1u);
     if (gl_LocalInvocationIndex == 0u) {
-        // DIAG: MVP × payload.origin+subchunkOffset correction, small 4m triangle per section.
-        // If triangles appear scattered in the world where sections should be, the full
-        // transform chain works and the remaining bug is in terrainData / transformationArray.
-        // If screen stays red, the combined transform produces degenerate clip positions.
-        vec3 origin = payload.origin - subchunkOffset.xyz;
-        vec4 c = MVP * vec4(origin + vec3(8.0, 8.0, 8.0), 1.0);
-        if (c.w > 0.0) {
-            vec3 ndc = c.xyz / c.w;
-            // 4-pixel-ish triangle in clip space centered on projected origin.
-            gl_MeshVerticesEXT[0].gl_Position = vec4((ndc.x - 0.03) * c.w, (ndc.y - 0.03) * c.w, ndc.z * c.w, c.w);
-            gl_MeshVerticesEXT[1].gl_Position = vec4((ndc.x + 0.03) * c.w, (ndc.y - 0.03) * c.w, ndc.z * c.w, c.w);
-            gl_MeshVerticesEXT[2].gl_Position = vec4((ndc.x)        * c.w, (ndc.y + 0.03) * c.w, ndc.z * c.w, c.w);
-        } else {
-            // Behind camera — emit a degenerate zero-sized triangle.
-            gl_MeshVerticesEXT[0].gl_Position = vec4(0, 0, 2, 1);
-            gl_MeshVerticesEXT[1].gl_Position = vec4(0, 0, 2, 1);
-            gl_MeshVerticesEXT[2].gl_Position = vec4(0, 0, 2, 1);
-        }
+        // DIAG: project section origin through MVP, emit a fixed-screen-size triangle there.
+        // Triangles should cluster in the rendered world where visible sections are.
+        vec4 c = MVP * vec4(payload.origin + vec3(8.0, 8.0, 8.0), 1.0);
+        float s = max(abs(c.w), 0.1) * 0.05;
+        gl_MeshVerticesEXT[0].gl_Position = c + vec4(-s, -s, 0, 0);
+        gl_MeshVerticesEXT[1].gl_Position = c + vec4( s, -s, 0, 0);
+        gl_MeshVerticesEXT[2].gl_Position = c + vec4( 0,  s, 0, 0);
         gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
         gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
     }
