@@ -8,7 +8,8 @@
     "blaze3d.VulkanDeviceMixin",
     "chunk.CompiledSectionMeshMixin",
     "chunk.CompileTaskMixin",
-    "chunk.RenderSectionMixin"
+    "chunk.RenderSectionMixin",
+    "chunk.ChunkSectionsToRenderMixin"
   ],
   "injectors": {
     "defaultRequire": 1
