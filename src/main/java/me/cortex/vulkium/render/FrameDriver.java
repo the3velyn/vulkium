@@ -126,11 +126,18 @@ public final class FrameDriver {
         int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView2.texture().getFormat());
         if (colorView == 0L) return;
 
-        // CommandRecorder allocates a fresh PRIMARY cmd buffer and enqueues it via
-        // encoder.execute() — Mojang bundles it into the current frame's submission batch.
-        // This gives our commands a clean state (no inherited render pass) while still
-        // ordering inside Mojang's frame. Crucially we do NOT call encoder.submit() after;
-        // that would fracture the batch and let Mojang's later writes overwrite ours.
+        // DIAG: clearColorTexture(BLUE) first. If user sees BLUE, Mojang's clear landed but
+        // our CommandRecorder block below is lost. If user sees RED (our LOAD_OP_CLEAR
+        // target), CommandRecorder writes overrode the blue — the whole path works.
+        try {
+            com.mojang.blaze3d.vulkan.VulkanCommandEncoder mojangEnc2 =
+                me.cortex.vulkium.blaze3d.MojangVulkanBridge.commandEncoder();
+            if (mojangEnc2 != null) {
+                mojangEnc2.clearColorTexture(rt.getColorTexture(), 0xFF0000FF);
+            }
+        } catch (Throwable t) {
+            logDispatchThrottled("preamble clearColorTexture threw: {}", t.toString());
+        }
 
         // Atlas is only needed for the real mesh draw; diag path does clears only. Allowing
         // null atlas lets the diag fire from the first frame.
