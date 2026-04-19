@@ -34,6 +34,11 @@ public final class Renderer {
     private UploadStream uploadStream;
     private HzbBuilder hzbBuilder;
     private HzbTexture hzbTexture;
+    /** Small device buffer holding {@link RegionManager#MAX_TRANSFORMATION_COUNT} mat4 entries;
+     *  index 0 seeded with identity so sections with transformationId=0 transform as no-op. */
+    private me.cortex.vulkium.vk.DeviceBuffer transformationBuffer;
+    /** Device buffer for originArray (packed origin offsets per id). Seeded to zero. */
+    private me.cortex.vulkium.vk.DeviceBuffer originBuffer;
     private int hzbWidth;
     private int hzbHeight;
     private long hzbLastBuildNs;
@@ -129,8 +134,8 @@ public final class Renderer {
             .translucencyCmdPtr(0L)
             .sortingRegionListPtr(sortListPtr)
             .terrainDataPtr(terrainPtr)
-            .transformationArrPtr(0L)
-            .originArrPtr(0L)
+            .transformationArrPtr(transformationBuffer != null ? transformationBuffer.deviceAddress() : 0L)
+            .originArrPtr(originBuffer != null ? originBuffer.deviceAddress() : 0L)
             .statisticsPtr(0L)
             .screenSize(1f, 1f)
             .fog(0f, 1f, false)
@@ -207,9 +212,26 @@ public final class Renderer {
             regionSorter = new RegionSorter();
             primaryTerrain = new PrimaryTerrainPass();
             terrainUploader = new TerrainUploader();
+
+            // Seed transformationArray[0] with an identity mat4 so sections whose
+            // transformationId=0 transform as identity (no-op). Without this, the mesh shader
+            // reads zeros → transformMat is zero matrix → every vertex collapses to origin →
+            // no visible geometry.
+            int transformationCount = me.cortex.vulkium.managers.RegionManager.MAX_TRANSFORMATION_COUNT;
+            transformationBuffer = me.cortex.vulkium.vk.DeviceBuffer.allocate(
+                (long) transformationCount * 64L /* sizeof(mat4) */);
+            seedIdentityTransformation(transformationBuffer);
+
+            // originArray — one uint64 per entry. Seed to zero; task shaders that unpack from it
+            // get a valid (0,0,0) offset. Entries are populated later if we ever drive them.
+            originBuffer = me.cortex.vulkium.vk.DeviceBuffer.allocate(
+                (long) transformationCount * 8L);
+            // Already zeroed by VMA allocation.
+
             LOGGER.info(
                 "Renderer initialized: SceneUniform({}B) + VisibilityTracker + UploadStream({}MB×{}) + "
-                    + "RegionSorter + PrimaryTerrainPass + TerrainUploader(128MB arena).",
+                    + "RegionSorter + PrimaryTerrainPass + TerrainUploader(128MB arena) + "
+                    + "transformationBuffer(identity) + originBuffer.",
                 SceneUniform.SCENE_UBO_SIZE, UPLOAD_SECTION_BYTES / (1024 * 1024), UPLOAD_SECTION_COUNT);
         } catch (Throwable t) {
             LOGGER.error("Renderer init failed (marking as failed, vulkium rendering paths will no-op)", t);
@@ -228,6 +250,14 @@ public final class Renderer {
         if (hzbBuilder != null) {
             try { hzbBuilder.close(); } catch (Throwable t) { LOGGER.warn("HzbBuilder close failed", t); }
             hzbBuilder = null;
+        }
+        if (transformationBuffer != null) {
+            try { transformationBuffer.close(); } catch (Throwable t) { LOGGER.warn("transformationBuffer close failed", t); }
+            transformationBuffer = null;
+        }
+        if (originBuffer != null) {
+            try { originBuffer.close(); } catch (Throwable t) { LOGGER.warn("originBuffer close failed", t); }
+            originBuffer = null;
         }
         if (terrainUploader != null) {
             try { terrainUploader.close(); } catch (Throwable t) { LOGGER.warn("TerrainUploader close failed", t); }
@@ -249,5 +279,20 @@ public final class Renderer {
             try { sceneUniform.close(); } catch (Throwable t) { LOGGER.warn("SceneUniform close failed", t); }
             sceneUniform = null;
         }
+    }
+
+    /**
+     * Stage an identity mat4 at index 0 of {@code transformationBuffer} through the upload
+     * stream; commit immediately so it's resident by the first frame. Identity = (1,0,0,0 /
+     * 0,1,0,0 / 0,0,1,0 / 0,0,0,1) column-major.
+     */
+    private void seedIdentityTransformation(me.cortex.vulkium.vk.DeviceBuffer buf) {
+        long dst = uploadStream.upload(buf, 0L, 64);
+        org.lwjgl.system.MemoryUtil.memSet(dst, 0, 64);
+        org.lwjgl.system.MemoryUtil.memPutFloat(dst,       1.0f);
+        org.lwjgl.system.MemoryUtil.memPutFloat(dst + 20,  1.0f);
+        org.lwjgl.system.MemoryUtil.memPutFloat(dst + 40,  1.0f);
+        org.lwjgl.system.MemoryUtil.memPutFloat(dst + 60,  1.0f);
+        uploadStream.commitFrame();
     }
 }
