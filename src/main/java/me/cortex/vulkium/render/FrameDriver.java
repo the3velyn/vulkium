@@ -70,11 +70,56 @@ public final class FrameDriver {
             Renderer.get().buildHzb();
         }
 
-        // V7 target: dispatch vulkium's mesh-shader terrain draws here via SecondaryRecorder
-        // (inheriting Mojang's dynamic-rendering formats) + PrimaryTerrainPass.record. Gated
-        // behind cfg.drawTerrain (off by default until Mojang's texture atlas is plumbed into
-        // descriptor set 1).
-        // if (cfg.drawTerrain) { ... }
+        // Vulkium terrain draw. Gated behind cfg.drawTerrain — default off because the
+        // fragment shader's tex_light binding has no lightmap tap yet (we bind the block
+        // atlas to both diffuse + light slots for now; result is visually wrong but
+        // structurally valid).
+        if (cfg.drawTerrain) {
+            dispatchTerrainDraw();
+        }
+    }
+
+    private static void dispatchTerrainDraw() {
+        Renderer r = Renderer.get();
+        me.cortex.vulkium.render.PrimaryTerrainPass pass = r.primaryTerrain();
+        me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
+        VisibilityTracker vis = r.visibility();
+        if (pass == null || scene == null || vis == null) return;
+        int visibleRegionCount = vis.visibleRegionCount();
+        if (visibleRegionCount == 0) return;
+
+        // Inheritance must match what Mojang's current vkCmdBeginRendering set up. MC 26.2's
+        // main world pass uses R8G8B8A8_UNORM color + D32_SFLOAT depth (matches vulkium's
+        // PrimaryTerrainPass defaults). Driver format-mismatch would fail the execute —
+        // swapping to a query once we have a Mojang-internal state tap.
+        me.cortex.vulkium.vk.SecondaryRecorder.InheritanceSpec spec =
+            new me.cortex.vulkium.vk.SecondaryRecorder.InheritanceSpec(
+                new int[] { me.cortex.vulkium.render.PrimaryTerrainPass.COLOR_FORMAT },
+                me.cortex.vulkium.render.PrimaryTerrainPass.DEPTH_FORMAT,
+                org.lwjgl.vulkan.VK10.VK_FORMAT_UNDEFINED,
+                org.lwjgl.vulkan.VK10.VK_SAMPLE_COUNT_1_BIT);
+
+        long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
+        long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
+        if (atlasView == 0L || atlasSampler == 0L) return;
+
+        try {
+            me.cortex.vulkium.vk.SecondaryRecorder.recordAndSubmit(spec, cmd -> {
+                me.cortex.vulkium.vk.PushDescriptor.builder(
+                        pass.pipelineLayout().handle(),
+                        org.lwjgl.vulkan.VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                        1 /* set=1 textures */)
+                    .combinedImageSampler(0, atlasView, atlasSampler,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .combinedImageSampler(1, atlasView, atlasSampler,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .push(cmd);
+                pass.record(cmd, scene, visibleRegionCount, false /* renderFog */);
+            });
+        } catch (Throwable t) {
+            LOGGER.warn("Terrain draw failed (disabling drawTerrain this session)", t);
+            VulkiumConfig.get().drawTerrain = false;
+        }
     }
 
     private static void onAfterTranslucentTerrain(LevelRenderContext ctx) {
