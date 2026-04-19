@@ -64,6 +64,10 @@ public final class Renderer {
         long regionPtr = rm != null ? rm.regionBufferAddress() : 0L;
         long sectionPtr = rm != null ? rm.sectionBufferAddress() : 0L;
         int regionCount = rm != null ? rm.regionCount() : 0;
+        long terrainPtr = terrainUploader != null ? terrainUploader.arenaBuffer().deviceAddress() : 0L;
+        long sortListPtr = regionSorter != null && uploadStream != null
+            ? regionSorter.uploadVisibleList(uploadStream, visibility)
+            : 0L;
 
         // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
         if (cam.cullFrustum != null && rm != null) {
@@ -84,8 +88,8 @@ public final class Renderer {
             .sectionVisibilityPtr(0L)
             .terrainCmdPtr(0L)
             .translucencyCmdPtr(0L)
-            .sortingRegionListPtr(0L)
-            .terrainDataPtr(0L)
+            .sortingRegionListPtr(sortListPtr)
+            .terrainDataPtr(terrainPtr)
             .transformationArrPtr(0L)
             .originArrPtr(0L)
             .statisticsPtr(0L)

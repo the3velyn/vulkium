@@ -36,7 +36,8 @@ public final class FrameDriver {
         LevelRenderEvents.START_MAIN.register(FrameDriver::onStartMain);
         LevelRenderEvents.AFTER_OPAQUE_TERRAIN.register(FrameDriver::onAfterOpaqueTerrain);
         LevelRenderEvents.AFTER_TRANSLUCENT_TERRAIN.register(FrameDriver::onAfterTranslucentTerrain);
-        LOGGER.info("FrameDriver hooks registered (START_MAIN, AFTER_OPAQUE_TERRAIN, AFTER_TRANSLUCENT_TERRAIN).");
+        LevelRenderEvents.END_MAIN.register(FrameDriver::onEndMain);
+        LOGGER.info("FrameDriver hooks registered (START_MAIN, AFTER_OPAQUE_TERRAIN, AFTER_TRANSLUCENT_TERRAIN, END_MAIN).");
     }
 
     private static void onStartMain(LevelTerrainRenderContext ctx) {
@@ -70,6 +71,21 @@ public final class FrameDriver {
     private static void onAfterTranslucentTerrain(LevelRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
         // V7 target: translucent mesh-shader pass goes here.
+    }
+
+    private static void onEndMain(LevelRenderContext ctx) {
+        if (!Vulkium.isEnabled()) return;
+        // Flush this frame's pending host → device copies into an actual command-buffer submit
+        // so the GPU sees the terrain arena writes + any scene-UBO-adjacent uploads before the
+        // next frame's draws consume them.
+        me.cortex.vulkium.vk.UploadStream stream = Renderer.get().uploadStream();
+        if (stream != null) {
+            try {
+                stream.commitFrame();
+            } catch (Throwable t) {
+                LOGGER.warn("UploadStream.commitFrame failed", t);
+            }
+        }
     }
 
     public static long frameCount() { return FRAMES.get(); }

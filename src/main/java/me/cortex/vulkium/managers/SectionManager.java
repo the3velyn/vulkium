@@ -130,8 +130,29 @@ public final class SectionManager {
             sectionToRegionRef.put(p.key, ref);
         }
         drained++;
-        // TODO(V7): upload p.entry's vertex/index bytes into VK arenas here.
-        // For now, we just free them so we don't leak. Remove this when V7 takes ownership.
+
+        // Hand vertex bytes off to the terrain arena. Buffers are freed unconditionally after
+        // staging — UploadStream has already memCopy'd the bytes into its mapped ring, so the
+        // source ByteBuffers are no longer needed. On arena-full (SIZE_LIMIT) the upload silently
+        // skips; eviction of far-away sections (V4 RenderSectionMixin) makes room over time.
+        me.cortex.vulkium.render.Renderer renderer = me.cortex.vulkium.render.Renderer.get();
+        me.cortex.vulkium.render.TerrainUploader uploader = renderer.terrainUploader();
+        me.cortex.vulkium.vk.UploadStream stream = renderer.uploadStream();
+        if (uploader != null && stream != null && p.key != SectionCapture.UNKNOWN_SECTION) {
+            try {
+                int addr = uploader.uploadSection(p.key, p.entry, stream);
+                if (addr == me.cortex.vulkium.managers.util.SegmentedManager.SIZE_LIMIT) {
+                    if (drained <= 8 || drained % 4096 == 0) {
+                        LOGGER.warn("Terrain arena full — upload skipped for section 0x{} (drained={})",
+                            Long.toHexString(p.key), drained);
+                    }
+                }
+            } catch (RuntimeException e) {
+                LOGGER.warn("Terrain upload failed for section 0x{} (continuing): {}",
+                    Long.toHexString(p.key), e.getMessage());
+            }
+        }
+
         freeEntry(p.entry);
         droppedBytes += sizeOf(p.entry);
     }
@@ -166,6 +187,11 @@ public final class SectionManager {
                 // over — the region+section refcounting still has edge cases (initial pass).
                 LOGGER.debug("evict({}): RegionManager.removeSection threw", Long.toHexString(key), e);
             }
+        }
+        me.cortex.vulkium.render.TerrainUploader uploader =
+            me.cortex.vulkium.render.Renderer.get().terrainUploader();
+        if (uploader != null) {
+            uploader.releaseSection(key);
         }
     }
 
