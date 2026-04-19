@@ -24,7 +24,7 @@ layout(location = 1) in Interpolants {
 #endif
 
 
-layout(binding = 1) uniform sampler2D tex_light;
+layout(set = 1, binding = 1) uniform sampler2D tex_light;
 
 vec4 sampleLight(vec2 uv) {
     //Its divided by 16 to match sodium/vanilla (it can never be 1 which is funny)
@@ -56,7 +56,7 @@ void applyFog(inout vec3 colour) {
 #endif
 
 
-layout(binding = 0) uniform sampler2D tex_diffuse;
+layout(set = 1, binding = 0) uniform sampler2D tex_diffuse;
 void main() {
     // VULKIUM_DEBUG: hardcoded magenta output — if we see pink pixels where terrain should be,
     // the pipeline executes correctly and the bug is in the data path (vertex decode, MVP, etc.).
