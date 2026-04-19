@@ -6,7 +6,8 @@
   "client": [
     "blaze3d.VulkanDeviceMixin",
     "chunk.CompiledSectionMeshMixin",
-    "chunk.CompileTaskMixin"
+    "chunk.CompileTaskMixin",
+    "debug.DebugScreenOverlayMixin"
   ],
   "injectors": {
     "defaultRequire": 1
