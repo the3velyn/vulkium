@@ -89,8 +89,20 @@ public final class MojangVulkanBridge {
     /** @return Mojang's pre-existing VMA allocator handle. Vulkium piggy-backs on it. */
     public static long vma() { return require().vma(); }
 
-    public static VulkanCommandEncoder newCommandEncoder() {
+    /**
+     * Mojang's shared per-device command encoder — despite the {@code create} name this
+     * returns the same encoder instance each call, backed by the single field on
+     * {@code VulkanDevice}. Use it to record command buffers that must land in the same
+     * queue submission as Mojang's own frame commands.
+     */
+    public static VulkanCommandEncoder commandEncoder() {
         return require().createCommandEncoder();
+    }
+
+    /** @deprecated misleading name; use {@link #commandEncoder()} — the encoder is shared. */
+    @Deprecated
+    public static VulkanCommandEncoder newCommandEncoder() {
+        return commandEncoder();
     }
 
     public static void logBackendInfo() {
