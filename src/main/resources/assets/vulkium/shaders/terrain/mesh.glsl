@@ -91,9 +91,10 @@ void main() {
     // regressed in the pipeline.
     SetMeshOutputsEXT(3u, 1u);
     if (gl_LocalInvocationIndex == 0u) {
-        // DIAG: project section origin through MVP, emit a fixed-screen-size triangle there.
-        // Triangles should cluster in the rendered world where visible sections are.
-        vec4 c = MVP * vec4(payload.origin + vec3(8.0, 8.0, 8.0), 1.0);
+        // DIAG: try vec * MVP (row-major transpose) in case joml/std140 mismatch.
+        // Also try close-to-camera positions so any w mis-scaling stays bounded.
+        vec4 world = vec4(payload.origin + vec3(8.0, 8.0, 8.0), 1.0);
+        vec4 c = world * MVP;   // transpose variant
         float s = max(abs(c.w), 0.1) * 0.05;
         gl_MeshVerticesEXT[0].gl_Position = c + vec4(-s, -s, 0, 0);
         gl_MeshVerticesEXT[1].gl_Position = c + vec4( s, -s, 0, 0);
