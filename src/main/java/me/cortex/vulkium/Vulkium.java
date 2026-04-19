@@ -2,6 +2,7 @@ package me.cortex.vulkium;
 
 import me.cortex.vulkium.blaze3d.MojangVulkanBridge;
 import me.cortex.vulkium.blaze3d.VulkanDetect;
+import me.cortex.vulkium.vk.ShaderSanityCheck;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
 import net.minecraft.client.Minecraft;
@@ -48,6 +49,13 @@ public final class Vulkium implements ClientModInitializer {
             enabled = true;
             LOGGER.info("Vulkium ENABLED. {}", probe);
             MojangVulkanBridge.logBackendInfo();
+            // Compile every shader once up-front. A translation error or missing include
+            // surfaces as a log line here instead of a first-draw crash deep in V7.
+            try {
+                ShaderSanityCheck.runAll();
+            } catch (Throwable t) {
+                LOGGER.error("Shader sanity-check crashed (vulkium stays enabled)", t);
+            }
         } else {
             enabled = false;
             LOGGER.warn("Vulkium DISABLED. Reason: {}", probe.reason());
