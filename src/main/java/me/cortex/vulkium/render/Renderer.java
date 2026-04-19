@@ -2,6 +2,7 @@ package me.cortex.vulkium.render;
 
 import me.cortex.vulkium.Vulkium;
 import me.cortex.vulkium.managers.RegionManager;
+import me.cortex.vulkium.vk.UploadStream;
 import net.fabricmc.fabric.api.client.rendering.v1.level.AbstractLevelRenderContext;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import net.minecraft.client.renderer.state.level.LevelRenderState;
@@ -24,7 +25,14 @@ public final class Renderer {
     private SceneUniform sceneUniform;
     private VisibilityTracker visibility;
     private RegionSorter regionSorter;
+    private PrimaryTerrainPass primaryTerrain;
+    private TerrainUploader terrainUploader;
+    private UploadStream uploadStream;
     private boolean initFailed;
+
+    /** Upload-ring section size (bytes) × count. Balances per-frame peak upload vs memory. */
+    private static final long UPLOAD_SECTION_BYTES = 16L * 1024 * 1024;   // 16 MB / frame peak
+    private static final int  UPLOAD_SECTION_COUNT = 3;                   // triple-buffered
 
     private Renderer() {}
 
@@ -91,19 +99,26 @@ public final class Renderer {
     public SceneUniform sceneUniform() { return sceneUniform; }
     public VisibilityTracker visibility() { return visibility; }
     public RegionSorter regionSorter() { return regionSorter; }
+    public PrimaryTerrainPass primaryTerrain() { return primaryTerrain; }
+    public TerrainUploader terrainUploader() { return terrainUploader; }
+    public UploadStream uploadStream() { return uploadStream; }
 
     private void ensureInit() {
         if (sceneUniform != null || initFailed) return;
         try {
             sceneUniform = new SceneUniform();
             visibility = new VisibilityTracker();
-            // Eager shader compile — if shaderc rejects region_section_sorter.comp on this GPU
-            // we want the crash here, not at first draw. Construct-failures disable the Renderer
-            // outright (leaves vulkium enabled but rendering paths no-op).
+            uploadStream = UploadStream.create(UPLOAD_SECTION_BYTES, UPLOAD_SECTION_COUNT);
+            // Eager shader compile: any shaderc / pipeline failure surfaces here, not on a
+            // first-draw crash mid-frame. Construct failure disables the whole Renderer
+            // (leaves vulkium flag enabled but render paths no-op so the game still runs).
             regionSorter = new RegionSorter();
+            primaryTerrain = new PrimaryTerrainPass();
+            terrainUploader = new TerrainUploader();
             LOGGER.info(
-                "Renderer initialized (SceneUniform {} bytes; VisibilityTracker; RegionSorter pipeline compiled).",
-                SceneUniform.SCENE_UBO_SIZE);
+                "Renderer initialized: SceneUniform({}B) + VisibilityTracker + UploadStream({}MB×{}) + "
+                    + "RegionSorter + PrimaryTerrainPass + TerrainUploader(128MB arena).",
+                SceneUniform.SCENE_UBO_SIZE, UPLOAD_SECTION_BYTES / (1024 * 1024), UPLOAD_SECTION_COUNT);
         } catch (Throwable t) {
             LOGGER.error("Renderer init failed (marking as failed, vulkium rendering paths will no-op)", t);
             initFailed = true;
@@ -112,10 +127,23 @@ public final class Renderer {
 
     public void shutdown() {
         // Close in reverse construction order so dependent VK handles teardown before their
-        // predecessors.
+        // predecessors (pipelines hold references to modules + VkDevice; uploader holds its
+        // arena's DeviceBuffer; UploadStream holds a StagingBuffer).
+        if (terrainUploader != null) {
+            try { terrainUploader.close(); } catch (Throwable t) { LOGGER.warn("TerrainUploader close failed", t); }
+            terrainUploader = null;
+        }
+        if (primaryTerrain != null) {
+            try { primaryTerrain.close(); } catch (Throwable t) { LOGGER.warn("PrimaryTerrainPass close failed", t); }
+            primaryTerrain = null;
+        }
         if (regionSorter != null) {
             try { regionSorter.close(); } catch (Throwable t) { LOGGER.warn("RegionSorter close failed", t); }
             regionSorter = null;
+        }
+        if (uploadStream != null) {
+            try { uploadStream.close(); } catch (Throwable t) { LOGGER.warn("UploadStream close failed", t); }
+            uploadStream = null;
         }
         if (sceneUniform != null) {
             try { sceneUniform.close(); } catch (Throwable t) { LOGGER.warn("SceneUniform close failed", t); }
