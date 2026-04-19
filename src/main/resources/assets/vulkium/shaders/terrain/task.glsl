@@ -20,34 +20,12 @@ bool shouldRenderVisible(uint sectionId) {
 #include <vulkium:terrain/task_common.glsl>
 
 void main() {
-    uint sectionId = gl_WorkGroupID.x;
-
-    if (!shouldRenderVisible(sectionId)) {
+    // DIAG: unconditionally emit exactly one mesh workgroup per task dispatch so the mesh
+    // stage always gets to run. Real task-shader logic restored once mesh pipeline is
+    // proven visible.
+    if (gl_WorkGroupID.x == 0u) {
+        EmitMeshTasksEXT(1, 1, 1);
+    } else {
         EmitMeshTasksEXT(0, 1, 1);
-        return;
     }
-
-    #ifdef STATISTICS_SECTIONS
-    atomicAdd(statistics_buffer.data[1], 1);
-    #endif
-
-    ivec4 header = sectionData.data[sectionId].header;
-    ivec3 chunk = ivec3(header.xyz) >> 8;
-    chunk.y &= 0x1ff;
-    chunk.y <<= 32 - 9;
-    chunk.y >>= 32 - 9;
-    chunk -= chunkPosition.xyz;
-    payload.transformationId = unpackRegionTransformId(regionData.data[sectionId >> 8]);
-    chunk -= unpackOriginOffsetId(payload.transformationId);
-
-    payload.origin = vec3(chunk << 4);
-    payload.baseOffset = uint(header.w);
-
-    uint taskCount = populateTasks(chunk, uvec4(sectionData.data[sectionId].renderRanges));
-
-    #ifdef STATISTICS_QUADS
-    atomicAdd(statistics_buffer.data[2], payload.quadCount);
-    #endif
-
-    EmitMeshTasksEXT(taskCount, 1, 1);
 }
