@@ -123,6 +123,11 @@ public final class Vulkium implements ClientModInitializer {
         } catch (Throwable t) {
             LOGGER.warn("Renderer shutdown failed", t);
         }
+        try {
+            me.cortex.vulkium.blaze3d.MojangAtlasTap.shutdown();
+        } catch (Throwable t) {
+            LOGGER.warn("MojangAtlasTap shutdown failed", t);
+        }
         if (regionManager != null) {
             try {
                 regionManager.close();
