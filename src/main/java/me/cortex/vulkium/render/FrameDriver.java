@@ -209,22 +209,6 @@ public final class FrameDriver {
                     sc.extent().set(fbW, fbH);
                     org.lwjgl.vulkan.VK10.vkCmdSetScissor(cmd, 0, sc);
 
-                    // DIAG: vkCmdClearAttachments MAGENTA inside the active render pass.
-                    // LOAD_OP_CLEAR red is a render-pass-begin effect; this is a mid-render-pass
-                    // operation. If we see magenta, mid-render-pass writes land — which means
-                    // the mesh draw's failure to produce pixels is specific to the draw path
-                    // (shader/pipeline), not the render-scope itself.
-                    org.lwjgl.vulkan.VkClearAttachment.Buffer midClear = org.lwjgl.vulkan.VkClearAttachment.calloc(1, stack)
-                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                        .colorAttachment(0);
-                    midClear.clearValue().color()
-                        .float32(0, 1.0f).float32(1, 0.0f).float32(2, 1.0f).float32(3, 1.0f);
-                    org.lwjgl.vulkan.VkClearRect.Buffer midRect = org.lwjgl.vulkan.VkClearRect.calloc(1, stack)
-                        .baseArrayLayer(0).layerCount(1);
-                    midRect.rect().offset().set(0, 0);
-                    midRect.rect().extent().set(fbW, fbH);
-                    org.lwjgl.vulkan.VK10.vkCmdClearAttachments(cmd, midClear, midRect);
-
                     if (atlasViewFinal != 0L && atlasSamplerFinal != 0L) {
                         me.cortex.vulkium.vk.PushDescriptor.builder(
                                 pass.pipelineLayout().handle(),
