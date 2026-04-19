@@ -127,7 +127,9 @@ public final class ComputeSmokeTest {
                     VkDependencyInfo dep = VkDependencyInfo.calloc(stack)
                         .sType$Default()
                         .pBufferMemoryBarriers(barrier);
-                    org.lwjgl.vulkan.VK13.vkCmdPipelineBarrier2(cmd, dep);
+                    // Use KHR entrypoint — Mojang enables VK_KHR_synchronization2 (VK 1.2 path),
+                    // not VK 1.3 core. The non-KHR function pointer would be null.
+                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep);
                 }
             });
 

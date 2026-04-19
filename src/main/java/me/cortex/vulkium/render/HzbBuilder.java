@@ -120,7 +120,7 @@ public final class HzbBuilder implements AutoCloseable {
             VkDependencyInfo setupDep = VkDependencyInfo.calloc(stack)
                 .sType$Default()
                 .pImageMemoryBarriers(setup);
-            VK13.vkCmdPipelineBarrier2(cmd, setupDep);
+            org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, setupDep);
 
             // Bind the compute pipeline once for the whole chain.
             VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_COMPUTE, pipelineHandle);
@@ -216,7 +216,7 @@ public final class HzbBuilder implements AutoCloseable {
                     VkDependencyInfo dep = VkDependencyInfo.calloc(stack)
                         .sType$Default()
                         .pImageMemoryBarriers(writeToRead);
-                    VK13.vkCmdPipelineBarrier2(cmd, dep);
+                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep);
                 }
             }
         }

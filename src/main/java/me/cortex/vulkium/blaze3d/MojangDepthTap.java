@@ -203,7 +203,7 @@ public final class MojangDepthTap {
             VkDependencyInfo preDep = VkDependencyInfo.calloc(stack)
                 .sType$Default()
                 .pImageMemoryBarriers(pre);
-            VK13.vkCmdPipelineBarrier2(cmd, preDep);
+            org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, preDep);
 
             // 7. vkCmdCopyImage — DEPTH → COLOR aspect reinterpretation, mip 0 → mip 0.
             VkImageCopy.Buffer region = VkImageCopy.calloc(1, stack);
@@ -253,7 +253,7 @@ public final class MojangDepthTap {
             VkDependencyInfo postDep = VkDependencyInfo.calloc(stack)
                 .sType$Default()
                 .pImageMemoryBarriers(post);
-            VK13.vkCmdPipelineBarrier2(cmd, postDep);
+            org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, postDep);
         }
 
         return true;

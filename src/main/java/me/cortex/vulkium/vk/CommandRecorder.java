@@ -62,5 +62,10 @@ public final class CommandRecorder {
         }
 
         encoder.execute(cmd);
+        // execute() just adds the cmd buffer to Mojang's submission batch — the actual
+        // vkQueueSubmit fires when Mojang calls submit() at frame boundaries. For
+        // one-shot recordings (smoke tests, startup work) callers want the command to
+        // execute immediately, so flush the batch here.
+        encoder.submit();
     }
 }
