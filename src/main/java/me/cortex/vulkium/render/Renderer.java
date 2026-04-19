@@ -132,7 +132,10 @@ public final class Renderer {
             // `ivec3(header.xyz) >> 8` (which is (chunkX, chunkZ, chunkY) per scene.glsl's
             // Section struct comment).
             .chunkPosition(cx, cz, cy, 0)
-            .subchunkOffset(fx, fy, fz, 0.0f)
+            // nvidium convention: payload.origin + decodeVertexPosition give positions in
+            // (X, Z, Y) order. subchunkOffset must also be in that order so the subtraction in
+            // transformVertex stays axis-consistent before the Y/Z swap at MVP multiplication.
+            .subchunkOffset(fx, fz, fy, 0.0f)
             .fogColour(0, 0, 0, 0)
             // Buffer-reference pointers populated as each subsystem lands its buffers.
             .regionIndicesPtr(0L)

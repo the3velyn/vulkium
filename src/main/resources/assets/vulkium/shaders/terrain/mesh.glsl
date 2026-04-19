@@ -55,12 +55,13 @@ uint getOffset() {
 mat4 transformMat;
 
 vec4 transformVertex(Vertex V) {
-    // payload.origin is chunk-granular relative to the camera's chunk; subchunkOffset fills in
-    // the fractional camera position so geometry tracks smoothly as the camera moves within a
-    // chunk (without this, everything snaps to 16-block multiples).
-    vec3 pos = decodeVertexPosition(V) + payload.origin - subchunkOffset.xyz;
-    // nvidium stores coords as (X, Z, Y) — MC's MVP expects (X, Y, Z) with Y up.
-    return MVP*(transformMat * vec4(pos.x, pos.z, pos.y, 1.0));
+    // decodeVertexPosition returns section-local coords in MC order (X, Y, Z) because the
+    // CPU repacker pulls MC vertex positions (px, py, pz) straight through. payload.origin
+    // and subchunkOffset are in nvidium (X, Z, Y) order. Swap decoded vertex into nvidium
+    // order so the addition is consistent, then swap back at MVP time for MC's Y-up projection.
+    vec3 decoded = decodeVertexPosition(V);
+    vec3 posNv = vec3(decoded.x, decoded.z, decoded.y) + payload.origin - subchunkOffset.xyz;
+    return MVP*(transformMat * vec4(posNv.x, posNv.z, posNv.y, 1.0));
 }
 
 Vertex V0;
