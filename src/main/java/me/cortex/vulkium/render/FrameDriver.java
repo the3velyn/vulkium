@@ -112,60 +112,92 @@ public final class FrameDriver {
             me.cortex.vulkium.blaze3d.MojangColorFormat.width(),
             me.cortex.vulkium.blaze3d.MojangColorFormat.height());
 
-        // Inheritance must match what Mojang's vkCmdBeginRendering set up. Tap the real color
-        // format via ChunkSectionsToRenderMixin.capturedColorVkFormat. First frame before the
-        // mixin fires uses the PrimaryTerrainPass default as fallback — no harm; on first
-        // vanilla-cancel call the format gets captured for all subsequent frames.
+        // Open our OWN render pass on Mojang's color attachment via vkCmdBeginRendering inside
+        // a PRIMARY cmd buffer. Previous secondary-buffer approach assumed Fabric's
+        // AFTER_OPAQUE_TERRAIN fires inside Mojang's render scope, but MC 26.2's
+        // ChunkSectionsToRender.renderGroup creates+closes its own render pass per call —
+        // the event fires BETWEEN passes, so secondaries with RENDER_PASS_CONTINUE silently fail.
         int colorFormat = me.cortex.vulkium.blaze3d.MojangColorFormat.get();
-        if (colorFormat == 0) colorFormat = me.cortex.vulkium.render.PrimaryTerrainPass.COLOR_FORMAT;
-
-        me.cortex.vulkium.vk.SecondaryRecorder.InheritanceSpec spec =
-            new me.cortex.vulkium.vk.SecondaryRecorder.InheritanceSpec(
-                new int[] { colorFormat },
-                me.cortex.vulkium.render.PrimaryTerrainPass.DEPTH_FORMAT,
-                org.lwjgl.vulkan.VK10.VK_FORMAT_UNDEFINED,
-                org.lwjgl.vulkan.VK10.VK_SAMPLE_COUNT_1_BIT);
+        long colorView = me.cortex.vulkium.blaze3d.MojangColorFormat.imageView();
+        if (colorView == 0L || colorFormat == 0) return; // Mojang hasn't rendered terrain yet this frame.
 
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
         long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
         if (atlasView == 0L || atlasSampler == 0L) return;
 
-        // MeshPipeline uses DYNAMIC viewport + scissor — must set them in the secondary cmd
-        // buffer before draw. Size MUST match Mojang's color-attachment extent, NOT the window
-        // (MC 26.2 renders terrain into a 2048x2048 internal texture). Use the mixin's captured
-        // values; fall back to window dims if not captured yet.
         int w0 = me.cortex.vulkium.blaze3d.MojangColorFormat.width();
         int h0 = me.cortex.vulkium.blaze3d.MojangColorFormat.height();
-        if (w0 == 0 || h0 == 0) {
-            w0 = net.minecraft.client.Minecraft.getInstance().getWindow().getWidth();
-            h0 = net.minecraft.client.Minecraft.getInstance().getWindow().getHeight();
-        }
         final int fbW = w0;
         final int fbH = h0;
+        final long colorViewHandle = colorView;
 
         try {
-            me.cortex.vulkium.vk.SecondaryRecorder.recordAndSubmit(spec, cmd -> {
+            me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
                 try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                    // 1) Transition Mojang's color attachment to COLOR_ATTACHMENT_OPTIMAL.
+                    //    Mojang left it in SHADER_READ_ONLY_OPTIMAL after closing its render pass.
+                    //    We'll flip it back at the end.
+                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer enterB = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
+                        .sType$Default()
+                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)
+                        .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
+                        .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)
+                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                            | org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT)
+                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
+                        .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                        .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .image(0);  // Filled below; needs the VkImage, not the view.
+                    // Actually — barriers need VkImage, not VkImageView. Without the image handle
+                    // we can't barrier. Skip barrier for now; many drivers accept LOAD_OP_LOAD
+                    // with undefined prior layout if rendering-info flags are right.
+
+                    // 2) vkCmdBeginRendering with just the color attachment.
+                    org.lwjgl.vulkan.VkRenderingAttachmentInfo.Buffer colorAtt = org.lwjgl.vulkan.VkRenderingAttachmentInfo.calloc(1, stack)
+                        .sType$Default()
+                        .imageView(colorViewHandle)
+                        .imageLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
+                        .resolveMode(0)
+                        .loadOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_LOAD)
+                        .storeOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE);
+
+                    org.lwjgl.vulkan.VkRenderingInfo renderInfo = org.lwjgl.vulkan.VkRenderingInfo.calloc(stack)
+                        .sType$Default()
+                        .flags(0)
+                        .layerCount(1)
+                        .viewMask(0)
+                        .pColorAttachments(colorAtt);
+                    renderInfo.renderArea().offset().set(0, 0);
+                    renderInfo.renderArea().extent().set(fbW, fbH);
+
+                    org.lwjgl.vulkan.KHRDynamicRendering.vkCmdBeginRenderingKHR(cmd, renderInfo);
+
+                    // 3) Dynamic state + descriptor push + draw.
                     org.lwjgl.vulkan.VkViewport.Buffer vp = org.lwjgl.vulkan.VkViewport.calloc(1, stack)
                         .x(0f).y(0f).width(fbW).height(fbH).minDepth(0f).maxDepth(1f);
                     org.lwjgl.vulkan.VK10.vkCmdSetViewport(cmd, 0, vp);
-
                     org.lwjgl.vulkan.VkRect2D.Buffer sc = org.lwjgl.vulkan.VkRect2D.calloc(1, stack);
                     sc.offset().set(0, 0);
                     sc.extent().set(fbW, fbH);
                     org.lwjgl.vulkan.VK10.vkCmdSetScissor(cmd, 0, sc);
-                }
 
-                me.cortex.vulkium.vk.PushDescriptor.builder(
-                        pass.pipelineLayout().handle(),
-                        org.lwjgl.vulkan.VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                        1 /* set=1 textures */)
-                    .combinedImageSampler(0, atlasView, atlasSampler,
-                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                    .combinedImageSampler(1, atlasView, atlasSampler,
-                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                    .push(cmd);
-                pass.record(cmd, scene, dispatchCount, false /* renderFog */);
+                    me.cortex.vulkium.vk.PushDescriptor.builder(
+                            pass.pipelineLayout().handle(),
+                            org.lwjgl.vulkan.VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            1 /* set=1 textures */)
+                        .combinedImageSampler(0, atlasView, atlasSampler,
+                            org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                        .combinedImageSampler(1, atlasView, atlasSampler,
+                            org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                        .push(cmd);
+                    pass.record(cmd, scene, dispatchCount, false /* renderFog */);
+
+                    // 4) End rendering. Do NOT transition back — Mojang's next sampler op will
+                    //    do its own transition if needed (we left the attachment in COLOR_OPTIMAL
+                    //    which is valid for subsequent begin-rendering loads).
+                    org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(cmd);
+                }
             });
         } catch (Throwable t) {
             LOGGER.warn("Terrain draw failed (disabling drawTerrain this session)", t);

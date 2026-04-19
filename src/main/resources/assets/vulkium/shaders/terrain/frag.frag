@@ -58,26 +58,9 @@ void applyFog(inout vec3 colour) {
 
 layout(binding = 0) uniform sampler2D tex_diffuse;
 void main() {
-    uint quadId = uint(gl_PrimitiveID)>>4;
-    bool triangle0 = uint((gl_PrimitiveID>>3)&1)==0;
-    uvec3 TRI_INDICIES = triangle0?uvec3(0,1,2):uvec3(2,3,0);
-    V0 = terrainData.data[(quadId<<2)+TRI_INDICIES.x];
-    Vp = terrainData.data[(quadId<<2)+TRI_INDICIES.y];
-    V2 = terrainData.data[(quadId<<2)+TRI_INDICIES.z];
-
-
-    #ifdef TRANSLUCENT_PASS
-    colour = texture(tex_diffuse, uv, 0);
-    colour.rgb *= v_colour;
-    #else
-    vec2 uv = gl_BaryCoordEXT.x*decodeVertexUV(V0) + gl_BaryCoordEXT.y*decodeVertexUV(Vp) + gl_BaryCoordEXT.z*decodeVertexUV(V2);
-    colour = texture(tex_diffuse, uv, ((gl_PrimitiveID>>2)&1)*-8.0f);
-    if (colour.a < getVertexAlphaCutoff(uint(gl_PrimitiveID&3))) discard;
-    colour.a = 1;
-    computeOutputColour(colour.rgb);
-    #endif
-
-    #ifdef RENDER_FOG
-    applyFog(colour.rgb);
-    #endif
+    // VULKIUM_DEBUG: hardcoded magenta output — if we see pink pixels where terrain should be,
+    // the pipeline executes correctly and the bug is in the data path (vertex decode, MVP, etc.).
+    // If we see nothing, the bug is upstream (mesh shader not emitting, depth/cull rejecting,
+    // pipeline not bound). Revert to the real textured path once pixels appear.
+    colour = vec4(1.0, 0.0, 1.0, 1.0);
 }

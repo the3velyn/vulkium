@@ -12,6 +12,7 @@ public final class MojangColorFormat {
     private static volatile int vkFormat = 0;
     private static volatile int attachmentWidth = 0;
     private static volatile int attachmentHeight = 0;
+    private static volatile long vkImageView = 0L;
 
     private MojangColorFormat() {}
 
@@ -19,10 +20,13 @@ public final class MojangColorFormat {
     public static int get() { return vkFormat; }
     public static int width()  { return attachmentWidth; }
     public static int height() { return attachmentHeight; }
+    /** 0 until the mixin captures Mojang's color VkImageView handle. */
+    public static long imageView() { return vkImageView; }
 
-    public static void set(int vk, int w, int h) {
+    public static void set(int vk, int w, int h, long view) {
         vkFormat = vk;
         attachmentWidth = w;
         attachmentHeight = h;
+        vkImageView = view;
     }
 }
