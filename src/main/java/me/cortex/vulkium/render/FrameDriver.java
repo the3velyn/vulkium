@@ -209,6 +209,8 @@ public final class FrameDriver {
                     sc.extent().set(fbW, fbH);
                     org.lwjgl.vulkan.VK10.vkCmdSetScissor(cmd, 0, sc);
 
+                    // DIAG: force the mesh draw regardless of atlas readiness — our diag
+                    // fragment shader outputs a hardcoded color and never samples textures.
                     if (atlasViewFinal != 0L && atlasSamplerFinal != 0L) {
                         me.cortex.vulkium.vk.PushDescriptor.builder(
                                 pass.pipelineLayout().handle(),
@@ -219,8 +221,10 @@ public final class FrameDriver {
                             .combinedImageSampler(1, atlasViewFinal, atlasSamplerFinal,
                                 org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                             .push(cmd);
-                        pass.record(cmd, scene, dispatchCount, false /* renderFog */);
                     }
+                    pass.record(cmd, scene, dispatchCount, false /* renderFog */);
+                    logDispatchThrottled("draw: pass.record() issued pipeline={} dispatchCount={}",
+                        Long.toHexString(pass.pipelineLayout().handle()), dispatchCount);
 
                     org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(cmd);
                 }
