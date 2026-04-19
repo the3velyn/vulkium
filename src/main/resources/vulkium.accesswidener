@@ -1,0 +1,4 @@
+accessWidener v1 official
+
+# Access the GpuDevice.backend field so we can cast to VulkanDevice without mixing in.
+accessible field com/mojang/blaze3d/systems/GpuDevice backend Lcom/mojang/blaze3d/systems/GpuDeviceBackend;
