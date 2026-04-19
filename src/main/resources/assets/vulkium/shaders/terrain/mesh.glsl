@@ -92,7 +92,9 @@ void main() {
     bool t1draw = false;
 
     if (validQuad) {
-        transformMat = transformationArray.data[payload.transformationId];
+        // DIAG: force identity matrix instead of reading from transformationArray. If terrain
+        // shows magenta, transformationArray data is bad. If still red, issue is elsewhere.
+        transformMat = mat4(1.0);
 
         //Load the data
         V0 = terrainData.data[(id<<2)+0];
