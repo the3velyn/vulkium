@@ -88,6 +88,23 @@ void main() {
     uint id = getOffset();
     bool validQuad = (id != uint(-1));
 
+    // DIAG: if ANY lane has a valid quad, emit a huge marker triangle. Proves whether the
+    // bin/payload data reaches mesh workgroups with non-terminal values. If visible → data
+    // flows but vertex transform/bbox-cull path rejects; if not → bins are all zeros.
+    if (subgroupAny(validQuad)) {
+        SetMeshOutputsEXT(3u, 1u);
+        if (gl_LocalInvocationIndex == 0u) {
+            gl_MeshVerticesEXT[0].gl_Position = vec4(-0.8, -0.8, 0.5, 1.0);
+            gl_MeshVerticesEXT[1].gl_Position = vec4( 0.8, -0.8, 0.5, 1.0);
+            gl_MeshVerticesEXT[2].gl_Position = vec4(-0.8,  0.8, 0.5, 1.0);
+            gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
+            gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
+        }
+        return;
+    }
+    SetMeshOutputsEXT(0u, 0u);
+    return;
+
     bool t0draw = false;
     bool t1draw = false;
 
