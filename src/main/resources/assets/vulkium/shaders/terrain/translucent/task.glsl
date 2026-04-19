@@ -29,7 +29,7 @@ taskNV out Task {
 
 bool shouldRender(uint sectionId) {
     //Check visibility
-    return (sectionVisibility[sectionId]&uint8_t(1)) != uint8_t(0);
+    return (sectionVisibility.data[sectionId]&uint8_t(1)) != uint8_t(0);
 }
 
 void main() {
@@ -37,7 +37,7 @@ void main() {
     #ifdef TRANSLUCENCY_SORTING_SECTIONS
     //Compute indirection for translucency sorting
     {
-        ivec4 header = sectionData[sectionId].header;
+        ivec4 header = sectionData.data[sectionId].header;
         //If the section is empty, we dont care about it at all, so ignore it and return
         if (sectionEmpty(header)) {
             return;
@@ -55,7 +55,7 @@ void main() {
         return;
     }
 
-    ivec4 header = sectionData[sectionId].header;
+    ivec4 header = sectionData.data[sectionId].header;
     uint baseDataOffset = (uint)header.w;
     ivec3 chunk = ivec3(header.xyz)>>8;
     chunk.y &= 0x1ff;
@@ -64,7 +64,7 @@ void main() {
     originAndBaseData.xyz = vec3((chunk - chunkPosition.xyz)<<4);
 
 
-    quadCount = ((sectionData[sectionId].renderRanges.w>>16)&0xFFFF);
+    quadCount = ((sectionData.data[sectionId].renderRanges.w>>16)&0xFFFF);
     #ifdef TRANSLUCENCY_SORTING_QUADS
     jiggle = uint8_t(min(quadCount>>1,(uint(frameId)&1)));//Jiggle by 1 quads (either 0 or 1)//*15
     //jiggle = uint8_t(0);

@@ -109,13 +109,13 @@ void main() {
     if (id == uint(-1)) {
         return;
     }
-    transformMat = transformationArray[transformationId];
+    transformMat = transformationArray.data[transformationId];
 
     //Load the data
-    V0 = terrainData[(id<<2)+0];
-    V1 = terrainData[(id<<2)+1];
-    V2 = terrainData[(id<<2)+2];
-    V3 = terrainData[(id<<2)+3];
+    V0 = terrainData.data[(id<<2)+0];
+    V1 = terrainData.data[(id<<2)+1];
+    V2 = terrainData.data[(id<<2)+2];
+    V3 = terrainData.data[(id<<2)+3];
 
     //Transform the vertices
     pV0 = transformVertex(V0);

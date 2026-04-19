@@ -60,7 +60,7 @@ void emitQuadIndicies() {
 }
 
 void emitVertex(uint vertexBaseId, uint innerId) {
-    Vertex V = terrainData[vertexBaseId + innerId];
+    Vertex V = terrainData.data[vertexBaseId + innerId];
     uint outId = (gl_LocalInvocationID.x<<2)+innerId;
     vec3 pos = decodeVertexPosition(V)+originAndBaseData.xyz;
     gl_MeshVerticesNV[outId].gl_Position = MVP*vec4(pos,1.0);
@@ -91,25 +91,25 @@ void swapQuads(uint idxA, uint idxB) {
         return;
     }
 
-    Vertex A0 = terrainData[(idxA<<2)+0];
-    Vertex A1 = terrainData[(idxA<<2)+1];
-    Vertex A2 = terrainData[(idxA<<2)+2];
-    Vertex A3 = terrainData[(idxA<<2)+3];
-    Vertex B0 = terrainData[(idxB<<2)+0];
-    Vertex B1 = terrainData[(idxB<<2)+1];
-    Vertex B2 = terrainData[(idxB<<2)+2];
-    Vertex B3 = terrainData[(idxB<<2)+3];
+    Vertex A0 = terrainData.data[(idxA<<2)+0];
+    Vertex A1 = terrainData.data[(idxA<<2)+1];
+    Vertex A2 = terrainData.data[(idxA<<2)+2];
+    Vertex A3 = terrainData.data[(idxA<<2)+3];
+    Vertex B0 = terrainData.data[(idxB<<2)+0];
+    Vertex B1 = terrainData.data[(idxB<<2)+1];
+    Vertex B2 = terrainData.data[(idxB<<2)+2];
+    Vertex B3 = terrainData.data[(idxB<<2)+3];
     //groupMemoryBarrier();
     //memoryBarrier();
     //barrier();
-    terrainData[(idxA<<2)+0] = B0;
-    terrainData[(idxA<<2)+1] = B1;
-    terrainData[(idxA<<2)+2] = B2;
-    terrainData[(idxA<<2)+3] = B3;
-    terrainData[(idxB<<2)+0] = A0;
-    terrainData[(idxB<<2)+1] = A1;
-    terrainData[(idxB<<2)+2] = A2;
-    terrainData[(idxB<<2)+3] = A3;
+    terrainData.data[(idxA<<2)+0] = B0;
+    terrainData.data[(idxA<<2)+1] = B1;
+    terrainData.data[(idxA<<2)+2] = B2;
+    terrainData.data[(idxA<<2)+3] = B3;
+    terrainData.data[(idxB<<2)+0] = A0;
+    terrainData.data[(idxB<<2)+1] = A1;
+    terrainData.data[(idxB<<2)+2] = A2;
+    terrainData.data[(idxB<<2)+3] = A3;
     //groupMemoryBarrier();
     //memoryBarrier();
     //barrier();

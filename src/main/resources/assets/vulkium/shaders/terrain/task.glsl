@@ -1,24 +1,19 @@
 #version 460
 
-#extension GL_ARB_shading_language_include : enable
-#pragma optionNV(unroll all)
-#define UNROLL_LOOP
-#extension GL_NV_mesh_shader : require
-#extension GL_NV_gpu_shader5 : require
-#extension GL_NV_bindless_texture : require
+// Primary terrain task shader — VK_EXT_mesh_shader port from nvidium's NV_mesh_shader.
+// See ../SHADERS_TODO.md for the translation recipe.
 
+#extension GL_EXT_mesh_shader : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_vote : require
 
 #import <vulkium:occlusion/scene.glsl>
 
-
-//This is 1 since each task shader workgroup -> multiple meshlets. its not each globalInvocation (afaik)
 layout(local_size_x=1) in;
 
 bool shouldRenderVisible(uint sectionId) {
-    return (sectionVisibility[sectionId]&uint8_t(1)) != uint8_t(0);
+    return (sectionVisibility.data[sectionId] & uint8_t(1)) != uint8_t(0);
 }
 
 #import <vulkium:terrain/task_common.glsl>
@@ -27,31 +22,31 @@ void main() {
     uint sectionId = gl_WorkGroupID.x;
 
     if (!shouldRenderVisible(sectionId)) {
-        //Early exit if the section isnt visible
-        gl_TaskCountNV = 0;
+        EmitMeshTasksEXT(0, 1, 1);
         return;
     }
 
     #ifdef STATISTICS_SECTIONS
-    atomicAdd(statistics_buffer+1, 1);
+    atomicAdd(statistics_buffer.data[1], 1);
     #endif
 
-    ivec4 header = sectionData[sectionId].header;
-    ivec3 chunk = ivec3(header.xyz)>>8;
+    ivec4 header = sectionData.data[sectionId].header;
+    ivec3 chunk = ivec3(header.xyz) >> 8;
     chunk.y &= 0x1ff;
-    chunk.y <<= 32-9;
-    chunk.y >>= 32-9;
+    chunk.y <<= 32 - 9;
+    chunk.y >>= 32 - 9;
     chunk -= chunkPosition.xyz;
-    transformationId = unpackRegionTransformId(regionData[sectionId>>8]);
-    chunk -= unpackOriginOffsetId(transformationId);
+    payload.transformationId = unpackRegionTransformId(regionData.data[sectionId >> 8]);
+    chunk -= unpackOriginOffsetId(payload.transformationId);
 
-    origin = vec3(chunk<<4);
-    baseOffset = (uint)header.w;
+    payload.origin = vec3(chunk << 4);
+    payload.baseOffset = uint(header.w);
 
-    populateTasks(chunk, uvec4(sectionData[sectionId].renderRanges));
-
+    uint taskCount = populateTasks(chunk, uvec4(sectionData.data[sectionId].renderRanges));
 
     #ifdef STATISTICS_QUADS
-    atomicAdd(statistics_buffer+2, quadCount);
+    atomicAdd(statistics_buffer.data[2], payload.quadCount);
     #endif
+
+    EmitMeshTasksEXT(taskCount, 1, 1);
 }

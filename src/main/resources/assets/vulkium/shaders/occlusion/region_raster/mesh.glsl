@@ -39,12 +39,12 @@ void emitParital(int visIndex) {
 void main() {
     //FIXME: It might actually be more efficent to just upload the region data straight into the ubo
     // this remove an entire level of indirection and also puts region data in the very fast path
-    Region data = regionData[regionIndicies[gl_WorkGroupID.x]];//fetch the region data
+    Region data = regionData.data[regionIndicies.data[gl_WorkGroupID.x]];//fetch the region data
 
     int visibilityIndex = (int)gl_WorkGroupID.x;
     //If the region metadata was empty, return
     if (data.a == uint64_t(-1)) {
-        regionVisibility[visibilityIndex] = uint8_t(0);
+        regionVisibility.data[visibilityIndex] = uint8_t(0);
         gl_PrimitiveCountNV = 0;
         return;
     }
@@ -73,7 +73,7 @@ void main() {
 
         if (gl_LocalInvocationID.x == 0) {
             bool cameraInRegion = all(lessThan(start*16+subchunkOffset.xyz, vec3(ADD_SIZE*16))) && all(lessThan(vec3(-ADD_SIZE*16), end*16+subchunkOffset.xyz));
-            regionVisibility[visibilityIndex] = cameraInRegion?uint8_t(1):uint8_t(0);
+            regionVisibility.data[visibilityIndex] = cameraInRegion?uint8_t(1):uint8_t(0);
         }
     }
 }

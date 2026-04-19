@@ -75,9 +75,9 @@ void main() {
     uint quadId = uint(gl_PrimitiveID)>>4;
     bool triangle0 = uint((gl_PrimitiveID>>3)&1)==0;
     uvec3 TRI_INDICIES = triangle0?uvec3(0,1,2):uvec3(2,3,0);
-    V0 = terrainData[(quadId<<2)+TRI_INDICIES.x];
-    Vp = terrainData[(quadId<<2)+TRI_INDICIES.y];
-    V2 = terrainData[(quadId<<2)+TRI_INDICIES.z];
+    V0 = terrainData.data[(quadId<<2)+TRI_INDICIES.x];
+    Vp = terrainData.data[(quadId<<2)+TRI_INDICIES.y];
+    V2 = terrainData.data[(quadId<<2)+TRI_INDICIES.z];
 
 
     #ifdef TRANSLUCENT_PASS

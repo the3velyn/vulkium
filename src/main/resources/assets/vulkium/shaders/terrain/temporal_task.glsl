@@ -21,7 +21,7 @@ layout(local_size_x=1) in;
 
 
 bool shouldRenderVisible(uint sectionId) {
-    uint8_t data = sectionVisibility[sectionId];
+    uint8_t data = sectionVisibility.data[sectionId];
     return (data&uint8_t(3)) == uint8_t(1);//If the section was not visible last frame but is visible this frame, render it
 }
 
@@ -36,20 +36,20 @@ void main() {
         return;
     }
 
-    ivec4 header = sectionData[sectionId].header;
+    ivec4 header = sectionData.data[sectionId].header;
     ivec3 chunk = ivec3(header.xyz)>>8;
     chunk.y &= 0x1ff;
     chunk.y <<= 32-9;
     chunk.y >>= 32-9;
     chunk -= chunkPosition.xyz;
 
-    transformationId = unpackRegionTransformId(regionData[sectionId>>8]);
+    transformationId = unpackRegionTransformId(regionData.data[sectionId>>8]);
     chunk -= unpackOriginOffsetId(transformationId);
 
     origin = vec3(chunk<<4);
     baseOffset = (uint)header.w;
 
-    populateTasks(chunk, uvec4(sectionData[sectionId].renderRanges));
+    populateTasks(chunk, uvec4(sectionData.data[sectionId].renderRanges));
 
     #ifdef STATISTICS_QUADS
     atomicAdd(statistics_buffer+2, quadCount);

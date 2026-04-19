@@ -39,7 +39,7 @@ void emitParital(int visIndex) {
 void main() {
     //FIXME: It might actually be more efficent to just upload the region data straight into the ubo
     // this remove an entire level of indirection and also puts region data in the very fast path
-    Region data = regionData[regionIndicies[gl_WorkGroupID.x]];//fetch the region data
+    Region data = regionData.data[regionIndicies.data[gl_WorkGroupID.x]];//fetch the region data
 
     ivec3 pos = unpackRegionPosition(data);
     pos -= chunkPosition.xyz;
@@ -59,7 +59,7 @@ void main() {
 
     int visibilityIndex = (int)gl_WorkGroupID.x;
 
-    regionVisibility[visibilityIndex] = uint8_t(0);
+    regionVisibility.data[visibilityIndex] = uint8_t(0);
 
     emitIndicies(visibilityIndex);
     if (gl_LocalInvocationID.x < 4) {

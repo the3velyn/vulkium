@@ -35,9 +35,9 @@ void main() {
     uint transCmdIdx = (uint(regionCount) - gl_WorkGroupID.x) - 1;
 
     //Early exit if the region wasnt visible
-    if (regionVisibility[gl_WorkGroupID.x] == uint8_t(0)) {
-        terrainCommandBuffer[cmdIdx] = uvec2(0);
-        translucencyCommandBuffer[transCmdIdx] = uvec2(0);
+    if (regionVisibility.data[gl_WorkGroupID.x] == uint8_t(0)) {
+        terrainCommandBuffer.data[cmdIdx] = uvec2(0);
+        translucencyCommandBuffer.data[transCmdIdx] = uvec2(0);
         gl_TaskCountNV = 0;
         return;
     }
@@ -47,8 +47,8 @@ void main() {
     #endif
 
     //FIXME: It might actually be more efficent to just upload the region data straight into the ubo
-    uint32_t offset = regionIndicies[gl_WorkGroupID.x];
-    Region data = regionData[offset];
+    uint32_t offset = regionIndicies.data[gl_WorkGroupID.x];
+    Region data = regionData.data[offset];
     int count = unpackRegionCount(data)+1;
 
     //Write in order
@@ -60,8 +60,8 @@ void main() {
 
     gl_TaskCountNV = count;
 
-    terrainCommandBuffer[cmdIdx] = uvec2(uint32_t(count), _visOutBase);
+    terrainCommandBuffer.data[cmdIdx] = uvec2(uint32_t(count), _visOutBase);
     //TODO: add a bit to the region header to determine whether or not a region has any translucent
     // sections, if it doesnt, write 0 to the command buffer
-    translucencyCommandBuffer[transCmdIdx] = uvec2(uint32_t(count), _visOutBase);
+    translucencyCommandBuffer.data[transCmdIdx] = uvec2(uint32_t(count), _visOutBase);
 }

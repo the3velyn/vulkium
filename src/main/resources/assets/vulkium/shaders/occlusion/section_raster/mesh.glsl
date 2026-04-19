@@ -47,11 +47,11 @@ void emitParital(int visIndex) {
 void main() {
     int visibilityIndex = (int)(_visOutBase|gl_WorkGroupID.x);
 
-    uint8_t lastData = sectionVisibility[visibilityIndex];
+    uint8_t lastData = sectionVisibility.data[visibilityIndex];
     // this is almost 100% guarenteed not needed afaik
     //barrier();
 
-    ivec4 header = sectionData[_offset|gl_WorkGroupID.x].header;
+    ivec4 header = sectionData.data[_offset|gl_WorkGroupID.x].header;
     //If the section header was empty or the hide section bit is set, return
 
     //NOTE: technically this has the infinitly small probability of not rendering a block if the block is located at
@@ -59,7 +59,7 @@ void main() {
     // to fix, also check that the ranges are null
     if (sectionEmpty(header) || (header.y&(1<<17)) != 0) {
         if (gl_LocalInvocationID.x == 0) {
-            sectionVisibility[visibilityIndex] = uint8_t(0);
+            sectionVisibility.data[visibilityIndex] = uint8_t(0);
             gl_PrimitiveCountNV = 0;
         }
         return;
@@ -93,8 +93,8 @@ void main() {
         bool isInSection = all(lessThan(minPos, vec3(ADD_SIZE))) && all(lessThan(vec3(-ADD_SIZE), maxPos));
 
         //Shift and set, this gives us a bonus of having the last 8 frames as visibility history
-        sectionVisibility[visibilityIndex] = uint8_t(lastData<<1) | uint8_t(isInSection?1:0);//Inject visibility aswell
-        //sectionVisibility[visibilityIndex] = uint8_t(lastData<<1) | uint8_t(0);
+        sectionVisibility.data[visibilityIndex] = uint8_t(lastData<<1) | uint8_t(isInSection?1:0);//Inject visibility aswell
+        //sectionVisibility.data[visibilityIndex] = uint8_t(lastData<<1) | uint8_t(0);
 
         gl_PrimitiveCountNV = 12;
     }
