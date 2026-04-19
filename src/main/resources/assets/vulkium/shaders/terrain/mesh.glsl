@@ -91,10 +91,10 @@ void main() {
     // regressed in the pipeline.
     SetMeshOutputsEXT(3u, 1u);
     if (gl_LocalInvocationIndex == 0u) {
-        // DIAG: position encodes payload.origin.x only (no MVP). If we see a line of dots
-        // spanning X, payload is readable. If nothing, payload reading is the problem.
-        float px = clamp(payload.origin.x * 0.01, -0.9, 0.9);
-        float py = clamp(payload.origin.z * 0.01, -0.9, 0.9);
+        // DIAG: position encodes MVP values (no payload, no UBO pointers other than MVP).
+        // If we see triangles, MVP is valid. If red only, reading MVP kills the shader.
+        float px = clamp(MVP[0][0] * 0.5, -0.9, 0.9);
+        float py = clamp(MVP[1][1] * 0.5, -0.9, 0.9);
         gl_MeshVerticesEXT[0].gl_Position = vec4(px - 0.01, py - 0.01, 0.5, 1.0);
         gl_MeshVerticesEXT[1].gl_Position = vec4(px + 0.01, py - 0.01, 0.5, 1.0);
         gl_MeshVerticesEXT[2].gl_Position = vec4(px,        py + 0.01, 0.5, 1.0);
