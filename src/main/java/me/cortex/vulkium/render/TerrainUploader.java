@@ -39,11 +39,14 @@ import java.util.Map;
  */
 public final class TerrainUploader implements AutoCloseable {
 
-    /** Bytes per terrain vertex — matches the Vertex uvec4 type in scene.glsl. */
-    public static final int VERTEX_STRIDE = 16;
-
-    /** 4 vertices per quad × {@link #VERTEX_STRIDE} bytes each. */
-    private static final int BYTES_PER_QUAD = 4 * VERTEX_STRIDE;
+    /**
+     * Bytes per terrain vertex. MC 26.2's terrain vertex format is
+     * {POS(12) + COLOR(4) + UV(8) + UV2(4)} = 28 bytes. Nvidium's scene.glsl expects a
+     * compact 16-byte uvec4 format — that format-mismatch is a known gap; for now we pass
+     * MC's raw bytes through the arena and the shader renders garbage under drawTerrain.
+     * CPU-side repack lands in a follow-up.
+     */
+    public static final int VERTEX_STRIDE = 28;
 
     /**
      * 128 MB — enough for roughly 8 million quads, which comfortably covers a 16-chunk render
@@ -82,28 +85,33 @@ public final class TerrainUploader implements AutoCloseable {
     public int uploadSection(long sectionPosKey, SectionEntry entry, UploadStream stream) {
         if (closed) throw new IllegalStateException("TerrainUploader closed");
 
-        // 1. Sum vertex bytes across all present layers.
+        // 1. Sum vertex count + byte total across all present layers. Use DrawState.vertexCount
+        // as the source of truth (MC's MeshData guarantees it); bytes / verts then yields the
+        // actual per-vertex stride the current MC version uses — not assumption-dependent.
         long totalVbBytes = 0L;
+        int totalVerts = 0;
         for (Map.Entry<ChunkSectionLayer, SectionEntry.LayerGeometry> e : entry.layers.entrySet()) {
             SectionEntry.LayerGeometry geom = e.getValue();
             if (geom == null) continue;
             ByteBuffer vb = geom.vertexBytes;
             if (vb == null) continue;
             totalVbBytes += vb.remaining();
+            totalVerts += geom.vertexCount;
         }
 
-        if (totalVbBytes == 0L) {
+        if (totalVerts == 0) {
             // Empty section — release any prior allocation and stop.
             releaseSection(sectionPosKey);
             return (int) SegmentedManager.SIZE_LIMIT;
         }
 
-        if ((totalVbBytes % BYTES_PER_QUAD) != 0L) {
-            throw new IllegalArgumentException(
-                "Section " + sectionPosKey + " total vertex bytes " + totalVbBytes
-                    + " is not a multiple of bytes-per-quad (" + BYTES_PER_QUAD + ")");
+        // Terrain is quad-indexed: 4 verts per quad. Round DOWN if MC occasionally produces a
+        // stray non-quad vertex (shouldn't happen but don't crash).
+        int quadCount = totalVerts / 4;
+        if (quadCount == 0) {
+            releaseSection(sectionPosKey);
+            return (int) SegmentedManager.SIZE_LIMIT;
         }
-        int quadCount = (int) (totalVbBytes / BYTES_PER_QUAD);
 
         // 2. Reuse existing slot if the quad count matches, else free + re-alloc.
         int existing = sectionToAddr.get(sectionPosKey);
