@@ -126,17 +126,20 @@ public final class FrameDriver {
         int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView2.texture().getFormat());
         if (colorView == 0L) return;
 
+        // Atlas is only needed for the real mesh draw; diag path does clears only. Allowing
+        // null atlas lets the diag fire from the first frame.
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
         long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
-        if (atlasView == 0L || atlasSampler == 0L) return;
 
         final int fbW = rt.width;
         final int fbH = rt.height;
         final long colorViewHandle = colorView;
         final long colorImageHandle = vkView2.texture().vkImage();
+        final long atlasViewFinal = atlasView;
+        final long atlasSamplerFinal = atlasSampler;
 
         try {
-            me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
+            boolean ok = me.cortex.vulkium.vk.InlineRecorder.recordInPrimary(cmd -> {
                 try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
                     // DIAG 1: direct vkCmdClearColorImage blue — this worked last time.
                     org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer bToDst = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
@@ -226,14 +229,14 @@ public final class FrameDriver {
                     // DIAG: skip mesh-shader dispatch, leaving just the LOAD_OP_CLEAR red.
                     // If red appears → render pass works, issue is in pipeline/draw itself.
                     // If no red → the render-pass + barrier combination is still broken somehow.
-                    if (false) {
+                    if (false && atlasViewFinal != 0L && atlasSamplerFinal != 0L) {
                         me.cortex.vulkium.vk.PushDescriptor.builder(
                                 pass.pipelineLayout().handle(),
                                 org.lwjgl.vulkan.VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
                                 1 /* set=1 textures */)
-                            .combinedImageSampler(0, atlasView, atlasSampler,
+                            .combinedImageSampler(0, atlasViewFinal, atlasSamplerFinal,
                                 org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                            .combinedImageSampler(1, atlasView, atlasSampler,
+                            .combinedImageSampler(1, atlasViewFinal, atlasSamplerFinal,
                                 org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                             .push(cmd);
                         pass.record(cmd, scene, dispatchCount, false /* renderFog */);
@@ -245,6 +248,9 @@ public final class FrameDriver {
                     org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(cmd);
                 }
             });
+            if (!ok) {
+                logDispatchThrottled("draw: Mojang primary cmd buffer not open — skipped");
+            }
         } catch (Throwable t) {
             LOGGER.warn("Terrain draw failed (disabling drawTerrain this session)", t);
             VulkiumConfig.get().drawTerrain = false;
