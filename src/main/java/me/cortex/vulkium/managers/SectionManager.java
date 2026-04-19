@@ -146,6 +146,40 @@ public final class SectionManager {
                         LOGGER.warn("Terrain arena full — upload skipped for section 0x{} (drained={})",
                             Long.toHexString(p.key), drained);
                     }
+                } else if (regionManager != null) {
+                    // Populate the section's 32-byte meta slab in RegionManager's sectionBuffer
+                    // so the task + mesh shaders can locate this section's quads. Layout from
+                    // scene.glsl's Section struct:
+                    //   header.x: offsetx(0-3) sizex(4-7) chunkX(8-31, 24-bit signed)
+                    //   header.y: offsetz(0-3) sizez(4-7) chunkZ(8-31) + post-sort local id (18-25)
+                    //   header.z: offsety(0-3) sizey(4-7) chunkY(8-15) + hide-bit(17)
+                    //   header.w: quad offset (= TerrainUploader's returned addr)
+                    //   renderRanges.xyz: per-face packed (offset,delta); zero → no face culling
+                    //   renderRanges.w:   low 16 bits = total unsigned quad count (task shader
+                    //                     emits one bin covering the whole range)
+                    int sx = SectionPos.x(p.key);
+                    int sy = SectionPos.y(p.key);
+                    int sz = SectionPos.z(p.key);
+                    int ref = sectionToRegionRef.get(p.key);
+                    if (ref != -1) {
+                        int quadCount = 0;
+                        for (SectionEntry.LayerGeometry g : p.entry.layers.values()) {
+                            quadCount += g.vertexCount / 4;
+                        }
+                        long ptr = regionManager.setSectionData(ref);
+                        // Full-section AABB (offsets=0, sizes=15 = covers 0..15). Per-face tight
+                        // bounds are a V7 polish pass — conservative AABB is correct, just skips
+                        // a GPU occlusion win.
+                        MemoryUtil.memPutInt(ptr,      (sx << 8) | 0xF0);
+                        MemoryUtil.memPutInt(ptr +  4, (sz << 8) | 0xF0);
+                        MemoryUtil.memPutInt(ptr +  8, (sy << 8) | 0xF0);
+                        MemoryUtil.memPutInt(ptr + 12, addr);
+                        // renderRanges — all quads in one "unsigned" bin in .w low 16 bits.
+                        MemoryUtil.memPutInt(ptr + 16, 0);
+                        MemoryUtil.memPutInt(ptr + 20, 0);
+                        MemoryUtil.memPutInt(ptr + 24, 0);
+                        MemoryUtil.memPutInt(ptr + 28, Math.min(quadCount, 0xFFFF));
+                    }
                 }
             } catch (RuntimeException e) {
                 LOGGER.warn("Terrain upload failed for section 0x{} (continuing): {}",

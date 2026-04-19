@@ -84,6 +84,36 @@ public final class Renderer {
             visibility.update(cam.cullFrustum, cx, cy, cz, rd);
         }
 
+        // Drain dirty regions into the GPU-side regionBuffer + sectionBuffer. SectionManager
+        // marks regions dirty whenever it populates a section header — without this upload
+        // step our CPU-side writes never reach shader visibility.
+        if (rm != null && uploadStream != null) {
+            final var target = rm;
+            rm.drainDirty((regionId, removed, metaSrc, sectionSrc) -> {
+                long metaDst = uploadStream.upload(
+                    target.regionBuffer(),
+                    (long) regionId * RegionManager.META_SIZE,
+                    RegionManager.META_SIZE);
+                org.lwjgl.system.MemoryUtil.memCopy(metaSrc, metaDst, RegionManager.META_SIZE);
+                if (!removed) {
+                    long sectionDst = uploadStream.upload(
+                        target.sectionBuffer(),
+                        (long) regionId * RegionManager.TOTAL_SECTION_META_SIZE,
+                        RegionManager.TOTAL_SECTION_META_SIZE);
+                    org.lwjgl.system.MemoryUtil.memCopy(sectionSrc, sectionDst,
+                        RegionManager.TOTAL_SECTION_META_SIZE);
+                } else {
+                    // Removed region → zero the slab so the GPU can't read stale data.
+                    long sectionDst = uploadStream.upload(
+                        target.sectionBuffer(),
+                        (long) regionId * RegionManager.TOTAL_SECTION_META_SIZE,
+                        RegionManager.TOTAL_SECTION_META_SIZE);
+                    org.lwjgl.system.MemoryUtil.memSet(sectionDst, 0,
+                        RegionManager.TOTAL_SECTION_META_SIZE);
+                }
+            });
+        }
+
         sceneUniform
             .mvp(mvp)
             .chunkPosition(cx, cy, cz, 0)
