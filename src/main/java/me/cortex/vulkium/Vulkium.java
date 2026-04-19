@@ -61,33 +61,37 @@ public final class Vulkium implements ClientModInitializer {
     }
 
     private static void onClientStarted(Minecraft client) {
+        VulkiumConfig cfg = VulkiumConfig.get();
+        if (cfg.forceDisable) {
+            enabled = false;
+            LOGGER.warn("Vulkium DISABLED by config (forceDisable=true).");
+            return;
+        }
+
         probe = VulkanDetect.probe();
         if (probe.meetsVulkiumGate()) {
             enabled = true;
             LOGGER.info("Vulkium ENABLED. {}", probe);
             MojangVulkanBridge.logBackendInfo();
-            // Compile every shader once up-front. A translation error or missing include
-            // surfaces as a log line here instead of a first-draw crash deep in V7.
-            try {
-                ShaderSanityCheck.runAll();
-            } catch (Throwable t) {
-                LOGGER.error("Shader sanity-check crashed (vulkium stays enabled)", t);
+            if (cfg.runShaderSanityCheck) {
+                try {
+                    ShaderSanityCheck.runAll();
+                } catch (Throwable t) {
+                    LOGGER.error("Shader sanity-check crashed (vulkium stays enabled)", t);
+                }
             }
-            // End-to-end compute-pipeline smoke test. If this passes we know
-            // shaderc → VkPipeline → dispatch → readback all work on this machine.
-            try {
-                ComputeSmokeTest.run();
-            } catch (Throwable t) {
-                LOGGER.error("Compute smoke-test crashed (vulkium stays enabled)", t);
+            if (cfg.runComputeSmokeTest) {
+                try {
+                    ComputeSmokeTest.run();
+                } catch (Throwable t) {
+                    LOGGER.error("Compute smoke-test crashed (vulkium stays enabled)", t);
+                }
             }
-            // Allocate the region ledger and wire the section-ingest path. Cheap (~8MB
-            // device-local meta slab); keeping it lazy would move allocation onto the first
-            // render frame which is uglier.
             try {
-                regionManager = new RegionManager(MAX_REGIONS);
+                regionManager = new RegionManager(cfg.maxRegions);
                 SectionManager.get().bindRegionManager(regionManager);
                 LOGGER.info("RegionManager bound ({} regions × {} sections/region).",
-                    MAX_REGIONS, RegionManager.SECTIONS_PER_REGION);
+                    cfg.maxRegions, RegionManager.SECTIONS_PER_REGION);
             } catch (Throwable t) {
                 LOGGER.error("RegionManager init failed (disabling vulkium)", t);
                 enabled = false;
