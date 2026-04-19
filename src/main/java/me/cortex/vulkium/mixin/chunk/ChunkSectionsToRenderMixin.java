@@ -1,14 +1,19 @@
 package me.cortex.vulkium.mixin.chunk;
 
 import com.mojang.blaze3d.textures.GpuSampler;
+import com.mojang.blaze3d.textures.GpuTextureView;
+import com.mojang.blaze3d.vulkan.VulkanConst;
 import me.cortex.vulkium.Vulkium;
 import me.cortex.vulkium.VulkiumConfig;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayerGroup;
 import net.minecraft.client.renderer.chunk.ChunkSectionsToRender;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * When vulkium is actively drawing terrain (config.drawTerrain=true and the mod is enabled),
@@ -21,12 +26,35 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  */
 @Mixin(ChunkSectionsToRender.class)
 public abstract class ChunkSectionsToRenderMixin {
+    private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/chunk-tap");
+
+    @Shadow public abstract GpuTextureView textureView();
+
+    /** Captured on first invocation: Mojang's main color attachment VkFormat. */
+    public static volatile int capturedColorVkFormat = 0;
 
     @Inject(method = "renderGroup",
             at = @At("HEAD"),
             cancellable = true)
     private void vulkium$suppressVanillaTerrain(ChunkSectionLayerGroup group, GpuSampler sampler,
                                                 CallbackInfo ci) {
+        // Tap Mojang's color-attachment format on first call so FrameDriver can build the
+        // SecondaryRecorder.InheritanceSpec with the real format (not a guess). Failure to match
+        // silently makes our secondary's draws produce nothing.
+        if (capturedColorVkFormat == 0) {
+            try {
+                GpuTextureView view = textureView();
+                if (view != null && view.texture() != null) {
+                    int vk = VulkanConst.toVk(view.texture().getFormat());
+                    capturedColorVkFormat = vk;
+                    LOGGER.info("Captured Mojang color attachment VkFormat={} ({}x{}, layer group={})",
+                        vk, view.texture().getWidth(0), view.texture().getHeight(0), group);
+                }
+            } catch (Throwable t) {
+                LOGGER.warn("Failed to capture Mojang color format", t);
+            }
+        }
+
         if (Vulkium.isEnabled() && VulkiumConfig.get().drawTerrain) {
             ci.cancel();
         }

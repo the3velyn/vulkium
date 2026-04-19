@@ -88,13 +88,16 @@ public final class FrameDriver {
         int visibleRegionCount = vis.visibleRegionCount();
         if (visibleRegionCount == 0) return;
 
-        // Inheritance must match what Mojang's current vkCmdBeginRendering set up. MC 26.2's
-        // main world pass uses R8G8B8A8_UNORM color + D32_SFLOAT depth (matches vulkium's
-        // PrimaryTerrainPass defaults). Driver format-mismatch would fail the execute —
-        // swapping to a query once we have a Mojang-internal state tap.
+        // Inheritance must match what Mojang's vkCmdBeginRendering set up. Tap the real color
+        // format via ChunkSectionsToRenderMixin.capturedColorVkFormat. First frame before the
+        // mixin fires uses the PrimaryTerrainPass default as fallback — no harm; on first
+        // vanilla-cancel call the format gets captured for all subsequent frames.
+        int colorFormat = me.cortex.vulkium.mixin.chunk.ChunkSectionsToRenderMixin.capturedColorVkFormat;
+        if (colorFormat == 0) colorFormat = me.cortex.vulkium.render.PrimaryTerrainPass.COLOR_FORMAT;
+
         me.cortex.vulkium.vk.SecondaryRecorder.InheritanceSpec spec =
             new me.cortex.vulkium.vk.SecondaryRecorder.InheritanceSpec(
-                new int[] { me.cortex.vulkium.render.PrimaryTerrainPass.COLOR_FORMAT },
+                new int[] { colorFormat },
                 me.cortex.vulkium.render.PrimaryTerrainPass.DEPTH_FORMAT,
                 org.lwjgl.vulkan.VK10.VK_FORMAT_UNDEFINED,
                 org.lwjgl.vulkan.VK10.VK_SAMPLE_COUNT_1_BIT);
