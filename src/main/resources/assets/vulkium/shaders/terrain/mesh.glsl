@@ -91,13 +91,24 @@ void main() {
     // regressed in the pipeline.
     SetMeshOutputsEXT(3u, 1u);
     if (gl_LocalInvocationIndex == 0u) {
-        // DIAG: position encodes MVP values (no payload, no UBO pointers other than MVP).
-        // If we see triangles, MVP is valid. If red only, reading MVP kills the shader.
-        float px = clamp(MVP[0][0] * 0.5, -0.9, 0.9);
-        float py = clamp(MVP[1][1] * 0.5, -0.9, 0.9);
-        gl_MeshVerticesEXT[0].gl_Position = vec4(px - 0.08, py - 0.08, 0.5, 1.0);
-        gl_MeshVerticesEXT[1].gl_Position = vec4(px + 0.08, py - 0.08, 0.5, 1.0);
-        gl_MeshVerticesEXT[2].gl_Position = vec4(px,        py + 0.08, 0.5, 1.0);
+        // DIAG: MVP × payload.origin+subchunkOffset correction, small 4m triangle per section.
+        // If triangles appear scattered in the world where sections should be, the full
+        // transform chain works and the remaining bug is in terrainData / transformationArray.
+        // If screen stays red, the combined transform produces degenerate clip positions.
+        vec3 origin = payload.origin - subchunkOffset.xyz;
+        vec4 c = MVP * vec4(origin + vec3(8.0, 8.0, 8.0), 1.0);
+        if (c.w > 0.0) {
+            vec3 ndc = c.xyz / c.w;
+            // 4-pixel-ish triangle in clip space centered on projected origin.
+            gl_MeshVerticesEXT[0].gl_Position = vec4((ndc.x - 0.03) * c.w, (ndc.y - 0.03) * c.w, ndc.z * c.w, c.w);
+            gl_MeshVerticesEXT[1].gl_Position = vec4((ndc.x + 0.03) * c.w, (ndc.y - 0.03) * c.w, ndc.z * c.w, c.w);
+            gl_MeshVerticesEXT[2].gl_Position = vec4((ndc.x)        * c.w, (ndc.y + 0.03) * c.w, ndc.z * c.w, c.w);
+        } else {
+            // Behind camera — emit a degenerate zero-sized triangle.
+            gl_MeshVerticesEXT[0].gl_Position = vec4(0, 0, 2, 1);
+            gl_MeshVerticesEXT[1].gl_Position = vec4(0, 0, 2, 1);
+            gl_MeshVerticesEXT[2].gl_Position = vec4(0, 0, 2, 1);
+        }
         gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
         gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
     }
