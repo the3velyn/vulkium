@@ -40,13 +40,17 @@ public final class SectionCapture {
     /**
      * Called from {@code CompiledSectionMeshMixin} at section-mesh construction.
      *
+     * @param sectionPosKey packed {@code SectionPos.asLong}, or 0 if unknown at this site.
      * @param results the result object MC's {@link SectionCompiler} just produced.
      */
-    public static void onSectionMeshCompiled(SectionCompiler.Results results) {
+    public static void onSectionMeshCompiled(long sectionPosKey, SectionCompiler.Results results) {
         Map<ChunkSectionLayer, MeshData> layers = results.renderedLayers;
         if (layers.isEmpty()) {
             return;
         }
+        // Hand off to the SectionManager. It copies the raw bytes so MC can recycle its own
+        // ByteBufferBuilder.Result memory safely.
+        SectionManager.get().offerFromCompile(sectionPosKey, results);
         long vbTotal = 0L;
         long ibTotal = 0L;
         for (Map.Entry<ChunkSectionLayer, MeshData> entry : layers.entrySet()) {

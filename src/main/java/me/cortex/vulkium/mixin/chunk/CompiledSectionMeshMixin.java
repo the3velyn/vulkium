@@ -25,6 +25,9 @@ public class CompiledSectionMeshMixin {
             at = @At("TAIL"))
     private void vulkium$captureMesh(TranslucencyPointOfView pov, SectionCompiler.Results results, CallbackInfo ci) {
         if (!Vulkium.isEnabled()) return;
-        SectionCapture.onSectionMeshCompiled(results);
+        // The CompiledSectionMesh ctor doesn't receive a SectionPos directly. 0 is a sentinel
+        // for "unknown"; SectionManager uses it as a key for now. We'll plumb a real key from
+        // SectionRenderDispatcher$RenderSection when V4 finishes indexing.
+        SectionCapture.onSectionMeshCompiled(0L, results);
     }
 }
