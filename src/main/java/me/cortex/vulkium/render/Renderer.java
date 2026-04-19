@@ -39,6 +39,12 @@ public final class Renderer {
     private me.cortex.vulkium.vk.DeviceBuffer transformationBuffer;
     /** Device buffer for originArray (packed origin offsets per id). Seeded to zero. */
     private me.cortex.vulkium.vk.DeviceBuffer originBuffer;
+    /** section/region visibility buffers — task shader gates all emissions on these being non-zero.
+     *  Seeded all-0xFF = "everything visible" so the task shader's `shouldRenderVisible` returns true
+     *  without depending on the GPU-side culling pipeline. Replaced by the real occlusion results
+     *  once V8 HZB-based section culling lands. */
+    private me.cortex.vulkium.vk.DeviceBuffer sectionVisibilityBuffer;
+    private me.cortex.vulkium.vk.DeviceBuffer regionVisibilityBuffer;
     private int hzbWidth;
     private int hzbHeight;
     private long hzbLastBuildNs;
@@ -128,8 +134,8 @@ public final class Renderer {
             .regionIndicesPtr(0L)
             .regionDataPtr(regionPtr)
             .sectionDataPtr(sectionPtr)
-            .regionVisibilityPtr(0L)
-            .sectionVisibilityPtr(0L)
+            .regionVisibilityPtr(regionVisibilityBuffer != null ? regionVisibilityBuffer.deviceAddress() : 0L)
+            .sectionVisibilityPtr(sectionVisibilityBuffer != null ? sectionVisibilityBuffer.deviceAddress() : 0L)
             .terrainCmdPtr(0L)
             .translucencyCmdPtr(0L)
             .sortingRegionListPtr(sortListPtr)
@@ -228,6 +234,16 @@ public final class Renderer {
                 (long) transformationCount * 8L);
             // Already zeroed by VMA allocation.
 
+            // Visibility buffers: task shader gates on sectionVisibility.data[id] & 1 != 0.
+            // Seed all-0xFF so every section is considered visible. Sized for max regions
+            // (1024 * 256 = 262,144 bytes of section bits; 1024 bytes for region bits).
+            int maxRegions = me.cortex.vulkium.VulkiumConfig.get().maxRegions;
+            sectionVisibilityBuffer = me.cortex.vulkium.vk.DeviceBuffer.allocate(
+                (long) maxRegions * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION);
+            regionVisibilityBuffer = me.cortex.vulkium.vk.DeviceBuffer.allocate((long) maxRegions);
+            seedFillByte(sectionVisibilityBuffer, (byte) 0xFF);
+            seedFillByte(regionVisibilityBuffer,  (byte) 0xFF);
+
             LOGGER.info(
                 "Renderer initialized: SceneUniform({}B) + VisibilityTracker + UploadStream({}MB×{}) + "
                     + "RegionSorter + PrimaryTerrainPass + TerrainUploader(128MB arena) + "
@@ -258,6 +274,14 @@ public final class Renderer {
         if (originBuffer != null) {
             try { originBuffer.close(); } catch (Throwable t) { LOGGER.warn("originBuffer close failed", t); }
             originBuffer = null;
+        }
+        if (sectionVisibilityBuffer != null) {
+            try { sectionVisibilityBuffer.close(); } catch (Throwable t) { LOGGER.warn("sectionVisibilityBuffer close failed", t); }
+            sectionVisibilityBuffer = null;
+        }
+        if (regionVisibilityBuffer != null) {
+            try { regionVisibilityBuffer.close(); } catch (Throwable t) { LOGGER.warn("regionVisibilityBuffer close failed", t); }
+            regionVisibilityBuffer = null;
         }
         if (terrainUploader != null) {
             try { terrainUploader.close(); } catch (Throwable t) { LOGGER.warn("TerrainUploader close failed", t); }
@@ -293,6 +317,15 @@ public final class Renderer {
         org.lwjgl.system.MemoryUtil.memPutFloat(dst + 20,  1.0f);
         org.lwjgl.system.MemoryUtil.memPutFloat(dst + 40,  1.0f);
         org.lwjgl.system.MemoryUtil.memPutFloat(dst + 60,  1.0f);
+        uploadStream.commitFrame();
+    }
+
+    private void seedFillByte(me.cortex.vulkium.vk.DeviceBuffer buf, byte value) {
+        long size = buf.size();
+        // Chunk to the upload stream's section size (16 MB) so a big section buffer doesn't
+        // overflow a single staging slice. For now both buffers are small (≤ 256 KB).
+        long dst = uploadStream.upload(buf, 0L, (int) size);
+        org.lwjgl.system.MemoryUtil.memSet(dst, value & 0xFF, size);
         uploadStream.commitFrame();
     }
 }
