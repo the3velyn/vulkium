@@ -126,6 +126,22 @@ public final class FrameDriver {
         int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView2.texture().getFormat());
         if (colorView == 0L) return;
 
+        // DIAG HIGH-LEVEL: use Mojang's own clearColorTexture on mainRenderTarget's color. This
+        // goes through their command encoder which handles all synchronization, layout
+        // transitions, and timing correctly. If we STILL don't see the color, the problem isn't
+        // our Vulkan calls — it's that mainRenderTarget's color isn't what gets presented, or
+        // post-fx overwrites it. 0xFF00FF00 = opaque green.
+        try {
+            com.mojang.blaze3d.vulkan.VulkanCommandEncoder mojangEnc =
+                me.cortex.vulkium.blaze3d.MojangVulkanBridge.commandEncoder();
+            if (mojangEnc != null) {
+                mojangEnc.clearColorTexture(rt.getColorTexture(), 0xFF00FF00);
+                logDispatchThrottled("diag: Mojang.clearColorTexture(GREEN) on mainRenderTarget");
+            }
+        } catch (Throwable t) {
+            logDispatchThrottled("diag: Mojang clearColorTexture threw: {}", t.toString());
+        }
+
         // Atlas is only needed for the real mesh draw; diag path does clears only. Allowing
         // null atlas lets the diag fire from the first frame.
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
