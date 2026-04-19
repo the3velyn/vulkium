@@ -4,6 +4,7 @@ import me.cortex.vulkium.blaze3d.MojangVulkanBridge;
 import me.cortex.vulkium.blaze3d.VulkanDetect;
 import me.cortex.vulkium.managers.RegionManager;
 import me.cortex.vulkium.managers.SectionManager;
+import me.cortex.vulkium.render.FrameDriver;
 import me.cortex.vulkium.vk.ShaderSanityCheck;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientLifecycleEvents;
@@ -50,6 +51,11 @@ public final class Vulkium implements ClientModInitializer {
         // com.mojang.blaze3d.systems.RenderSystem.initRenderer).
         ClientLifecycleEvents.CLIENT_STARTED.register(Vulkium::onClientStarted);
         ClientLifecycleEvents.CLIENT_STOPPING.register(Vulkium::onClientStopping);
+
+        // Frame hooks must be registered at init (not CLIENT_STARTED) — the events fire from
+        // world render which can start before CLIENT_STARTED under some launch paths. The
+        // handlers early-out on isEnabled() when the probe hasn't yet concluded.
+        FrameDriver.register();
     }
 
     private static void onClientStarted(Minecraft client) {
