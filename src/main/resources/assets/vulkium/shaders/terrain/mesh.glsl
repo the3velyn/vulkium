@@ -85,18 +85,6 @@ void putVertex(uint id, Vertex V) {
 //     output write. We therefore run the per-quad visibility compute for every lane
 //     first, subgroup-reduce to obtain workgroup totals, then emit.
 void main() {
-    // DIAG: emit a hardcoded full-screen triangle. If any mesh workgroup runs (i.e., the real
-    // task shader emitted > 0), we'll see magenta. Red means the task shader's populateTasks
-    // is returning 0 for every section — data-upload bug.
-    SetMeshOutputsEXT(3u, 1u);
-    if (gl_LocalInvocationIndex == 0u) {
-        gl_MeshVerticesEXT[0].gl_Position = vec4(-1.0, -1.0, 0.5, 1.0);
-        gl_MeshVerticesEXT[1].gl_Position = vec4( 3.0, -1.0, 0.5, 1.0);
-        gl_MeshVerticesEXT[2].gl_Position = vec4(-1.0,  3.0, 0.5, 1.0);
-        gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
-        gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
-    }
-    return;
     uint id = getOffset();
     bool validQuad = (id != uint(-1));
 
