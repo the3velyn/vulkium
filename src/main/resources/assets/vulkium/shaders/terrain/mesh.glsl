@@ -85,18 +85,18 @@ void putVertex(uint id, Vertex V) {
 //     output write. We therefore run the per-quad visibility compute for every lane
 //     first, subgroup-reduce to obtain workgroup totals, then emit.
 void main() {
-    // DIAG: put the first MVP column into a tiny screen-space triangle. If MVP has sensible
-    // values (first column x is typically near projectionMatrix[0][0] which is nonzero), we'll
-    // see small color-varying triangles. If MVP is zero we see nothing beyond red.
+    // DIAG: scatter a tiny magenta triangle per mesh workgroup purely via gl_WorkGroupID.
+    // No UBO, no payload reads. If we see dots, mesh pipeline is healthy and the earlier
+    // MVP/payload test failure was caused by reading those values. If red only, something
+    // regressed in the pipeline.
     SetMeshOutputsEXT(3u, 1u);
     if (gl_LocalInvocationIndex == 0u) {
-        // MVP[0].x acts as a sentinel. Pull it down to a reasonable screen-offset scale.
-        float m = clamp(MVP[0].x, -1.0, 1.0);
-        float o = clamp(payload.origin.x / 256.0, -1.0, 1.0);
-        // Tiny triangle centered at (m, o) in clip-space.
-        gl_MeshVerticesEXT[0].gl_Position = vec4(m - 0.02, o - 0.02, 0.5, 1.0);
-        gl_MeshVerticesEXT[1].gl_Position = vec4(m + 0.02, o - 0.02, 0.5, 1.0);
-        gl_MeshVerticesEXT[2].gl_Position = vec4(m,        o + 0.02, 0.5, 1.0);
+        uint id = gl_WorkGroupID.x;
+        float x = mod(float(id), 64.0) / 64.0 * 2.0 - 1.0;
+        float y = floor(float(id) / 64.0) / 64.0 * 2.0 - 1.0;
+        gl_MeshVerticesEXT[0].gl_Position = vec4(x - 0.005, y - 0.005, 0.5, 1.0);
+        gl_MeshVerticesEXT[1].gl_Position = vec4(x + 0.005, y - 0.005, 0.5, 1.0);
+        gl_MeshVerticesEXT[2].gl_Position = vec4(x,         y + 0.005, 0.5, 1.0);
         gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
         gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
     }
