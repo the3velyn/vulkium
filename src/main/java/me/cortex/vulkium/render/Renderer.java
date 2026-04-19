@@ -22,6 +22,7 @@ public final class Renderer {
     private static final Renderer INSTANCE = new Renderer();
 
     private SceneUniform sceneUniform;
+    private VisibilityTracker visibility;
     private boolean initFailed;
 
     private Renderer() {}
@@ -55,6 +56,12 @@ public final class Renderer {
         long sectionPtr = rm != null ? rm.sectionBufferAddress() : 0L;
         int regionCount = rm != null ? rm.regionCount() : 0;
 
+        // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
+        if (cam.cullFrustum != null && rm != null) {
+            int rd = net.minecraft.client.Minecraft.getInstance().options.renderDistance().get();
+            visibility.update(cam.cullFrustum, cx, cy, cz, rd);
+        }
+
         sceneUniform
             .mvp(mvp)
             .chunkPosition(cx, cy, cz, 0)
@@ -81,12 +88,15 @@ public final class Renderer {
     }
 
     public SceneUniform sceneUniform() { return sceneUniform; }
+    public VisibilityTracker visibility() { return visibility; }
 
     private void ensureInit() {
         if (sceneUniform != null || initFailed) return;
         try {
             sceneUniform = new SceneUniform();
-            LOGGER.info("Renderer initialized (SceneUniform allocated, {} bytes).", SceneUniform.SCENE_UBO_SIZE);
+            visibility = new VisibilityTracker();
+            LOGGER.info("Renderer initialized (SceneUniform allocated, {} bytes; VisibilityTracker ready).",
+                SceneUniform.SCENE_UBO_SIZE);
         } catch (Throwable t) {
             LOGGER.error("Renderer init failed (marking as failed, vulkium rendering paths will no-op)", t);
             initFailed = true;

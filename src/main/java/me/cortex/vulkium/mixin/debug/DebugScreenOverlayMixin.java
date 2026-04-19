@@ -5,6 +5,8 @@ import me.cortex.vulkium.managers.RegionManager;
 import me.cortex.vulkium.managers.SectionCapture;
 import me.cortex.vulkium.managers.SectionManager;
 import me.cortex.vulkium.render.FrameDriver;
+import me.cortex.vulkium.render.Renderer;
+import me.cortex.vulkium.render.VisibilityTracker;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.components.DebugScreenOverlay;
 import org.spongepowered.asm.mixin.Mixin;
@@ -44,9 +46,13 @@ public class DebugScreenOverlayMixin {
         long vbMb = SectionCapture.vertexBytesTotal() / (1024 * 1024);
         long ibMb = SectionCapture.indexBytesTotal() / (1024 * 1024);
 
+        VisibilityTracker vt = Renderer.get().visibility();
+        int visibleRegions = vt == null ? 0 : vt.visibleRegionCount();
+        long cullUs = vt == null ? 0 : vt.lastUpdateDurationNs() / 1000;
+
         lines.add(String.format(
-            "[\u00a7bvulkium\u00a7r] frames=%d captured=%d liveSections=%d regions=%d vb=%dMB ib=%dMB",
+            "[\u00a7bvulkium\u00a7r] frames=%d captured=%d liveSections=%d regions=%d visible=%d cull=%dus vb=%dMB ib=%dMB",
             FrameDriver.frameCount(), captured, sm.liveView().size(),
-            rm == null ? 0 : rm.regionCount(), vbMb, ibMb));
+            rm == null ? 0 : rm.regionCount(), visibleRegions, cullUs, vbMb, ibMb));
     }
 }

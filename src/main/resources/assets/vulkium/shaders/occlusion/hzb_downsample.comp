@@ -1,0 +1,41 @@
+#version 460 core
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+// Hierarchical-Z downsample pass. Builds one mip level by reducing a 2×2 block of the
+// previous level via max() (conservative — keeps the farthest depth so nothing visible is
+// incorrectly culled). One workgroup per 8×8 output tile; one invocation per output pixel.
+//
+// Replaces nvidium's reliance on GL_NV_representative_fragment_test. Callers sample this
+// texture at the mip level whose texel covers the screen-space AABB of a region/section to
+// cheaply decide occlusion before issuing mesh-shader draws.
+//
+// Binding layout:
+//   set=0, binding=0: input sampler (previous mip, COMBINED_IMAGE_SAMPLER)
+//   set=0, binding=1: output storage image (current mip, STORAGE_IMAGE, r32f)
+// Push constants:
+//   ivec2 outSize - dimensions of the output mip level
+
+layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
+
+layout(set = 0, binding = 0) uniform sampler2D u_input;
+layout(set = 0, binding = 1, r32f) uniform writeonly image2D u_output;
+
+layout(push_constant) uniform PC {
+    ivec2 outSize;
+};
+
+void main() {
+    ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
+    if (dst.x >= outSize.x || dst.y >= outSize.y) return;
+
+    // Gather the 2x2 depth values from the input mip and take the max (farthest).
+    // Use textureGather for a single fetch of four neighboring texels.
+    vec2 uv = (vec2(dst) + 0.5) / vec2(outSize);
+    vec4 d = textureGather(u_input, uv, 0);
+    float maxD = max(max(d.x, d.y), max(d.z, d.w));
+
+    // If the source mip had odd dimensions, one of the gathered texels may be a clamped
+    // repeat. That's still conservative (max of the 4 samples is >= max of the real 2 or 3).
+
+    imageStore(u_output, dst, vec4(maxD, 0, 0, 0));
+}
