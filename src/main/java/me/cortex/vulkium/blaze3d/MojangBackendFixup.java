@@ -81,6 +81,12 @@ public final class MojangBackendFixup {
             VkPhysicalDeviceMeshShaderFeaturesEXT.MESHSHADER));
         injectFeature(new VulkanFeature(meshStruct, "meshShaderQueries",
             VkPhysicalDeviceMeshShaderFeaturesEXT.MESHSHADERQUERIES));
+        // taskShader — without this feature bit enabled at device creation, EmitMeshTasksEXT
+        // in the task stage silently emits nothing, so no mesh workgroups get dispatched even
+        // though vkCmdDrawMeshTasksEXT looks like it succeeded. Our terrain pipeline has a
+        // task stage so this is required for anything to actually draw.
+        injectFeature(new VulkanFeature(meshStruct, "taskShader",
+            VkPhysicalDeviceMeshShaderFeaturesEXT.TASKSHADER));
 
         // bufferDeviceAddress — vulkium needs it for buffer-reference shader access. Reuse
         // Mojang's existing VK12_FEATURES_STRUCT so we share the same pNext-chain entry Mojang
@@ -90,7 +96,7 @@ public final class MojangBackendFixup {
         injectFeature(new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT, "bufferDeviceAddress",
             VkPhysicalDeviceVulkan12Features.BUFFERDEVICEADDRESS));
 
-        LOGGER.info("Injected VK_EXT_mesh_shader + meshShader + meshShaderQueries + bufferDeviceAddress into Mojang's VulkanBackend required-set.");
+        LOGGER.info("Injected VK_EXT_mesh_shader + meshShader + taskShader + meshShaderQueries + bufferDeviceAddress into Mojang's VulkanBackend required-set.");
     }
 
     private static void injectExtension(String name) {
