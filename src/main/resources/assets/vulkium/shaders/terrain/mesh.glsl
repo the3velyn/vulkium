@@ -1,6 +1,5 @@
 #version 460
 
-#extension GL_ARB_shading_language_include : enable
 #define UNROLL_LOOP
 #extension GL_EXT_mesh_shader : require
 
@@ -9,10 +8,10 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_vote : require
 
-#import <vulkium:occlusion/scene.glsl>
-#import <vulkium:terrain/fog.glsl>
-#import <vulkium:terrain/vertex_format.glsl>
-#import <vulkium:terrain/task_common.glsl>
+#include <vulkium:occlusion/scene.glsl>
+#include <vulkium:terrain/fog.glsl>
+#include <vulkium:terrain/vertex_format.glsl>
+#include <vulkium:terrain/task_common.glsl>
 
 
 //It seems like for terrain at least, the sweet spot is ~16 quads per mesh invocation (even if the local size is not 32 )

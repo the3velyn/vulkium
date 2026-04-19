@@ -9,7 +9,8 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_vote : require
 
-#import <vulkium:occlusion/scene.glsl>
+#define VULKIUM_TASK_STAGE 1
+#include <vulkium:occlusion/scene.glsl>
 
 
 //This is 1 since each task shader workgroup -> multiple meshlets. its not each globalInvocation (afaik)
@@ -23,7 +24,7 @@ bool shouldRenderVisible(uint sectionId) {
     return (data&uint8_t(3)) == uint8_t(1);//If the section was not visible last frame but is visible this frame, render it
 }
 
-#import <vulkium:terrain/task_common.glsl>
+#include <vulkium:terrain/task_common.glsl>
 
 void main() {
     uint sectionId = gl_WorkGroupID.x;

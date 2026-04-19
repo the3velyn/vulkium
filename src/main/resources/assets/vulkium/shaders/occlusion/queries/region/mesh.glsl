@@ -1,10 +1,9 @@
 #version 460
-#extension GL_ARB_shading_language_include : enable
 #define UNROLL_LOOP
 #extension GL_EXT_mesh_shader : require
 
 
-#import <vulkium:occlusion/scene.glsl>
+#include <vulkium:occlusion/scene.glsl>
 
 #define ADD_SIZE (0.1f/16)
 

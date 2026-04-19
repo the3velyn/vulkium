@@ -1,6 +1,5 @@
 #version 460
 
-#extension GL_ARB_shading_language_include : enable
 #define UNROLL_LOOP
 #extension GL_EXT_mesh_shader : require
 
@@ -9,9 +8,9 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_vote : require
 
-#import <vulkium:occlusion/scene.glsl>
-#import <vulkium:terrain/fog.glsl>
-#import <vulkium:terrain/vertex_format.glsl>
+#include <vulkium:occlusion/scene.glsl>
+#include <vulkium:terrain/fog.glsl>
+#include <vulkium:terrain/vertex_format.glsl>
 
 
 #ifdef TRANSLUCENCY_SORTING_QUADS
@@ -23,7 +22,7 @@ layout(local_size_x = 32) in;
 layout(triangles, max_vertices=128, max_primitives=64) out;
 
 //originAndBaseData.w is in quad count space, so is endIdx
-#import <vulkium:terrain/translucent/task_common.glsl>
+#include <vulkium:terrain/translucent/task_common.glsl>
 
 layout(location=1) out Interpolants {
 #ifdef RENDER_FOG

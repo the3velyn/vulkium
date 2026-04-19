@@ -1,12 +1,11 @@
 #version 460
-#extension GL_ARB_shading_language_include : enable
 #define UNROLL_LOOP
 
 #extension GL_EXT_fragment_shader_barycentric : require
 
 
-#import <vulkium:occlusion/scene.glsl>
-#import <vulkium:terrain/vertex_format.glsl>
+#include <vulkium:occlusion/scene.glsl>
+#include <vulkium:terrain/vertex_format.glsl>
 
 
 

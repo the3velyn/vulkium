@@ -1,6 +1,5 @@
 #version 460
 
-#extension GL_ARB_shading_language_include : enable
 #define UNROLL_LOOP
 #extension GL_EXT_mesh_shader : require
 
@@ -8,13 +7,13 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_vote : require
 
-#import <vulkium:occlusion/scene.glsl>
+#include <vulkium:occlusion/scene.glsl>
 
 #define ADD_SIZE (0.1f)
 layout(local_size_x = 8) in;
 layout(triangles, max_vertices=8, max_primitives=12) out;
 
-#import <vulkium:occlusion/section_raster/task_common.glsl>
+#include <vulkium:occlusion/section_raster/task_common.glsl>
 
 // EXT version: NV used 4 per-lane PILUT writes over a flat index array
 // (36 indices = 12 triangles). EXT requires one `uvec3` per triangle, so we

@@ -69,17 +69,23 @@ public final class Vulkium implements ClientModInitializer {
         }
 
         probe = VulkanDetect.probe();
+
+        // Run shader-translation diagnostics whenever Mojang's Vulkan backend is live, even if
+        // this GPU lacks mesh-shader support — shaderc can still validate our GLSL against the
+        // Vulkan SPIR-V target, so the sanity check is useful on any Vulkan-backed hardware.
+        boolean mojangVulkanLive = probe.vulkanBackendActive();
+        if (mojangVulkanLive && cfg.runShaderSanityCheck) {
+            try {
+                ShaderSanityCheck.runAll();
+            } catch (Throwable t) {
+                LOGGER.error("Shader sanity-check crashed", t);
+            }
+        }
+
         if (probe.meetsVulkiumGate()) {
             enabled = true;
             LOGGER.info("Vulkium ENABLED. {}", probe);
             MojangVulkanBridge.logBackendInfo();
-            if (cfg.runShaderSanityCheck) {
-                try {
-                    ShaderSanityCheck.runAll();
-                } catch (Throwable t) {
-                    LOGGER.error("Shader sanity-check crashed (vulkium stays enabled)", t);
-                }
-            }
             if (cfg.runComputeSmokeTest) {
                 try {
                     ComputeSmokeTest.run();

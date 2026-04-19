@@ -27,6 +27,12 @@ struct TaskPayload {
 
 taskPayloadSharedEXT TaskPayload payload;
 
+// Write helpers — only valid in task shaders. Mesh shaders receive the payload
+// read-only, so including this block when compiling a mesh stage is a compile error.
+// Guarded by VULKIUM_TASK_STAGE which task.glsl / temporal_task.glsl / translucent/task.glsl
+// define before including us.
+#ifdef VULKIUM_TASK_STAGE
+
 void putBinData(inout uint idx, inout uint lastIndex, uint offset, uint nextOffset) {
     uint len = nextOffset - offset;
     uint id = idx++;
@@ -97,3 +103,5 @@ uint populateTasks(ivec3 relChunkPos, uvec4 ranges) {
     // Caller does: EmitMeshTasksEXT(result, 1, 1);
     return (lastIndex + MESH_WORKLOAD_PER_INVOCATION - 1) / MESH_WORKLOAD_PER_INVOCATION;
 }
+
+#endif // VULKIUM_TASK_STAGE

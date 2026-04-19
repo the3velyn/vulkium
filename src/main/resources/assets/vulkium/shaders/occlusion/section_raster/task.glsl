@@ -1,6 +1,5 @@
 #version 460
 
-#extension GL_ARB_shading_language_include : enable
 #define UNROLL_LOOP
 #extension GL_EXT_mesh_shader : require
 
@@ -8,12 +7,13 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_vote : require
 
-#import <vulkium:occlusion/scene.glsl>
+#define VULKIUM_TASK_STAGE 1
+#include <vulkium:occlusion/scene.glsl>
 
 //This is 1 since each task shader workgroup -> multiple meshlets. its not each globalInvocation (afaik)
 layout(local_size_x=1) in;
 
-#import <vulkium:occlusion/section_raster/task_common.glsl>
+#include <vulkium:occlusion/section_raster/task_common.glsl>
 
 void main() {
     //TODO: see whats faster, atomicAdd (for mdic) or dispatching alot of empty calls (mdi)

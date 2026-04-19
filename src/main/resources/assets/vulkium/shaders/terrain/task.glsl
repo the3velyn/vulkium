@@ -8,7 +8,8 @@
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_vote : require
 
-#import <vulkium:occlusion/scene.glsl>
+#define VULKIUM_TASK_STAGE 1
+#include <vulkium:occlusion/scene.glsl>
 
 layout(local_size_x=1) in;
 
@@ -16,7 +17,7 @@ bool shouldRenderVisible(uint sectionId) {
     return (sectionVisibility.data[sectionId] & uint8_t(1)) != uint8_t(0);
 }
 
-#import <vulkium:terrain/task_common.glsl>
+#include <vulkium:terrain/task_common.glsl>
 
 void main() {
     uint sectionId = gl_WorkGroupID.x;

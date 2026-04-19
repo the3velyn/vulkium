@@ -3,6 +3,12 @@
 
 #define COLOR_SCALE        1.0 / 255.0
 
+// Matches nvidium's NvidiumCompactChunkVertex.TEXTURE_MAX_VALUE. Overridable via preprocessor
+// define if a future vertex format ships with a different scale.
+#ifndef TEXTURE_MAX_SCALE
+#define TEXTURE_MAX_SCALE 32768.0
+#endif
+
 vec3 decodeVertexPosition(Vertex v) {
     uvec3 packed_position = uvec3(
         (v.x >>  0) & 0xFFFFu,
@@ -19,7 +25,7 @@ vec4 decodeVertexColour(Vertex v) {
 }
 
 vec2 decodeVertexUV(Vertex v) {
-    return vec2(v.w&0xffff,v.w>>16)*(1f/(TEXTURE_MAX_SCALE));
+    return vec2(v.w&0xffff,v.w>>16)*(1.0f/(TEXTURE_MAX_SCALE));
 }
 
 bool hasMipping(Vertex v) {
