@@ -22,10 +22,12 @@ bool shouldRenderVisible(uint sectionId) {
 void main() {
     uint sectionId = gl_WorkGroupID.x;
 
-    if (!shouldRenderVisible(sectionId)) {
-        EmitMeshTasksEXT(0, 1, 1);
-        return;
-    }
+    // DIAG: skip the shouldRenderVisible gate — if BDA to sectionVisibility is wrong,
+    // every section appears invisible and no mesh workgroups get emitted.
+    // if (!shouldRenderVisible(sectionId)) {
+    //     EmitMeshTasksEXT(0, 1, 1);
+    //     return;
+    // }
 
     #ifdef STATISTICS_SECTIONS
     atomicAdd(statistics_buffer.data[1], 1);
