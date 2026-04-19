@@ -91,11 +91,12 @@ void main() {
     // regressed in the pipeline.
     SetMeshOutputsEXT(3u, 1u);
     if (gl_LocalInvocationIndex == 0u) {
-        // DIAG: try vec * MVP (row-major transpose) in case joml/std140 mismatch.
-        // Also try close-to-camera positions so any w mis-scaling stays bounded.
-        vec4 world = vec4(payload.origin + vec3(8.0, 8.0, 8.0), 1.0);
-        vec4 c = world * MVP;   // transpose variant
-        float s = max(abs(c.w), 0.1) * 0.05;
+        // DIAG: project world origin (0,0,0) — ignore payload entirely. If visible, MVP is fine
+        // and payload.origin values are junk (uninitialized origin buffer). If invisible,
+        // MVP itself is wrong despite earlier sentinel test.
+        vec4 world = vec4(0.0, 0.0, 0.0, 1.0);
+        vec4 c = MVP * world;
+        float s = max(abs(c.w), 0.1) * 0.1;
         gl_MeshVerticesEXT[0].gl_Position = c + vec4(-s, -s, 0, 0);
         gl_MeshVerticesEXT[1].gl_Position = c + vec4( s, -s, 0, 0);
         gl_MeshVerticesEXT[2].gl_Position = c + vec4( 0,  s, 0, 0);
