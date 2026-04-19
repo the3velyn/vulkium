@@ -138,18 +138,43 @@ public final class FrameDriver {
         try {
             me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
                 try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-                    // 1) Barrier: transition color image from whatever Mojang left it in to
-                    //    COLOR_ATTACHMENT_OPTIMAL so vkCmdBeginRenderingKHR can use it. Without
-                    //    this transition, the attachment's actual layout doesn't match what we
-                    //    declare in VkRenderingAttachmentInfo.imageLayout and the render pass
-                    //    silently fails.
-                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer enterB = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
+                    // DIAG 1: direct vkCmdClearColorImage blue — this worked last time.
+                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer bToDst = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
                         .sType$Default()
                         .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
                         .srcAccessMask(0)
+                        .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT)
+                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
+                        .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
+                        .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                        .image(colorImageHandle);
+                    bToDst.subresourceRange()
+                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd,
+                        org.lwjgl.vulkan.VkDependencyInfo.calloc(stack).sType$Default()
+                            .pImageMemoryBarriers(bToDst));
+
+                    org.lwjgl.vulkan.VkClearColorValue blueClear = org.lwjgl.vulkan.VkClearColorValue.calloc(stack);
+                    blueClear.float32(0, 0.0f).float32(1, 0.0f).float32(2, 1.0f).float32(3, 1.0f);
+                    org.lwjgl.vulkan.VkImageSubresourceRange.Buffer blueRange = org.lwjgl.vulkan.VkImageSubresourceRange.calloc(1, stack)
+                        .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
+                        .baseMipLevel(0).levelCount(1).baseArrayLayer(0).layerCount(1);
+                    org.lwjgl.vulkan.VK10.vkCmdClearColorImage(cmd, colorImageHandle,
+                        org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, blueClear, blueRange);
+
+                    // DIAG 2: transition to COLOR_ATTACHMENT_OPTIMAL + try render-pass with
+                    // LOAD_OP_CLEAR red. If we see red over the blue → render pass works.
+                    // If we see blue → render-pass clear didn't land.
+                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer enterB = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
+                        .sType$Default()
+                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT)
+                        .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
                         .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)
                         .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
-                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
+                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL)
                         .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                         .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
                         .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
