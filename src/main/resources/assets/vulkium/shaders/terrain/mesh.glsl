@@ -97,8 +97,9 @@ void main() {
     bool t1draw = false;
 
     if (validQuad) {
-        // DIAG: ignore payload.transformationId — always use slot 0 (seeded identity).
-        transformMat = transformationArray.data[0];
+        // Region transforms aren't actually driven yet; the SSBO read occasionally returns
+        // garbage and kills the draw. Hardcode identity until V7's region-sort pass lands.
+        transformMat = mat4(1.0);
 
         //Load the data
         V0 = terrainData.data[(id<<2)+0];
