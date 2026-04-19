@@ -59,10 +59,12 @@ public final class SectionCapture {
         COMPILING_SECTION.set(Long.MIN_VALUE);
     }
 
+    /** Sentinel returned when no {@link #beginSectionCompile} is active on this thread. */
+    public static final long UNKNOWN_SECTION = Long.MIN_VALUE;
+
     /** Read by the {@code CompiledSectionMesh} ctor mixin when it fires on the compile thread. */
     public static long currentCompilingSectionKey() {
-        long v = COMPILING_SECTION.get();
-        return v == Long.MIN_VALUE ? 0L : v;
+        return COMPILING_SECTION.get();
     }
 
     /**

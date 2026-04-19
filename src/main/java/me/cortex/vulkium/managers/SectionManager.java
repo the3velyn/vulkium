@@ -36,15 +36,31 @@ public final class SectionManager {
     /** sectionPos (long from SectionPos.asLong) → live section. */
     private final Long2ObjectOpenHashMap<SectionEntry> live = new Long2ObjectOpenHashMap<>();
 
+    /** sectionPos (long) → RegionManager's packed (regionId << 8) | posInRegion id. */
+    private final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap sectionToRegionRef =
+        new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
+
     /** Worker → render hand-off. Unbounded; trimmed per frame by drainPending(). */
     private final ConcurrentLinkedQueue<PendingIngest> ingestQueue = new ConcurrentLinkedQueue<>();
+
+    /** Lazy-initialized on the render thread the first time we drain. */
+    private RegionManager regionManager;
 
     private long drained = 0L;
     private long droppedBytes = 0L;
 
-    private SectionManager() {}
+    private SectionManager() {
+        sectionToRegionRef.defaultReturnValue(-1);
+    }
 
     public static SectionManager get() { return INSTANCE; }
+
+    /** Called from the render thread during init. Binds the region ledger. */
+    public void bindRegionManager(RegionManager manager) {
+        this.regionManager = manager;
+    }
+
+    public RegionManager regionManager() { return regionManager; }
 
     /**
      * Called from the worker thread that compiled a section. Copies MC's vertex/index bytes
@@ -96,16 +112,29 @@ public final class SectionManager {
     }
 
     private void ingest(PendingIngest p) {
+        // Replace (or insert) in the live table. On replace, free the prior entry's buffers.
         SectionEntry prev = live.put(p.key, p.entry);
         if (prev != null) {
-            // Replacing an existing section — free the prior entry's buffers.
             freeEntry(prev);
+        } else if (regionManager != null && p.key != SectionCapture.UNKNOWN_SECTION) {
+            // First time we've seen this section — allocate a slot in the region ledger so the
+            // section is addressable (regionId << 8) | posInRegion for later draw dispatch.
+            int sx = SectionPos.x(p.key);
+            int sy = SectionPos.y(p.key);
+            int sz = SectionPos.z(p.key);
+            int ref = regionManager.allocateSection(sx, sy, sz);
+            sectionToRegionRef.put(p.key, ref);
         }
         drained++;
         // TODO(V7): upload p.entry's vertex/index bytes into VK arenas here.
         // For now, we just free them so we don't leak. Remove this when V7 takes ownership.
         freeEntry(p.entry);
         droppedBytes += sizeOf(p.entry);
+    }
+
+    /** Packed {@code (regionId << 8) | posInRegion} for a live section, or -1 if unknown. */
+    public int getRegionRef(long sectionPosKey) {
+        return sectionToRegionRef.get(sectionPosKey);
     }
 
     /** For future V7 consumers — the current snapshot of live sections. */
