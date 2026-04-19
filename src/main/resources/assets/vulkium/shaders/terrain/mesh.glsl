@@ -97,7 +97,7 @@ void main() {
     bool t1draw = false;
 
     if (validQuad) {
-        transformMat = mat4(1.0);
+        transformMat = transformationArray.data[payload.transformationId];
 
         //Load the data
         V0 = terrainData.data[(id<<2)+0];
@@ -128,10 +128,8 @@ void main() {
         vec2 t1max = max(ssmax, point);
 
         //Possibly cull the triangles if they dont cover the center of a pixel on the screen (degen)
-        // DIAG: bypass bbox cull unconditionally. If terrain appears → screenSize/bbox-cull still
-        // broken. If still red, vertex data itself is bad.
-        t0draw = true;
-        t1draw = true;
+        t0draw = all(notEqual(round(t0min),round(t0max)));
+        t1draw = all(notEqual(round(t1min),round(t1max)));
     }
 
     uint triCnt = uint(t0draw) + uint(t1draw);

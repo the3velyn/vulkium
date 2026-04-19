@@ -57,10 +57,22 @@ void applyFog(inout vec3 colour) {
 
 
 layout(set = 1, binding = 0) uniform sampler2D tex_diffuse;
+
 void main() {
-    // VULKIUM_DEBUG: hardcoded magenta output — if we see pink pixels where terrain should be,
-    // the pipeline executes correctly and the bug is in the data path (vertex decode, MVP, etc.).
-    // If we see nothing, the bug is upstream (mesh shader not emitting, depth/cull rejecting,
-    // pipeline not bound). Revert to the real textured path once pixels appear.
-    colour = vec4(1.0, 0.0, 1.0, 1.0);
+    // Sample the block atlas using barycentric-interpolated UVs from the primitive's 3 vertices.
+    // gl_PrimitiveID encodes (quad_id << 4) | tri_bit<<3 | alpha_cutoff<<0..1. Quad id indexes
+    // terrainData at (id<<2) + {0, 1 or 3, 2}.
+    uint quadId = uint(gl_PrimitiveID) >> 4;
+    uint triSel = (uint(gl_PrimitiveID) >> 3) & 1u;
+    Vertex Vq0 = terrainData.data[(quadId<<2)+0];
+    Vertex Vq2 = terrainData.data[(quadId<<2)+2];
+    Vertex VqP = terrainData.data[(quadId<<2) + (triSel == 0u ? 1u : 3u)];
+    vec2 uv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
+            + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
+            + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
+    vec4 albedo = texture(tex_diffuse, uv);
+    uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
+    float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
+    if (albedo.a <= cut) discard;
+    colour = albedo;
 }
