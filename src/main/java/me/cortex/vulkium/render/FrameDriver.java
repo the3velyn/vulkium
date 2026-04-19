@@ -79,14 +79,26 @@ public final class FrameDriver {
         }
     }
 
+    private static long lastDispatchLog = 0L;
+
     private static void dispatchTerrainDraw() {
         Renderer r = Renderer.get();
         me.cortex.vulkium.render.PrimaryTerrainPass pass = r.primaryTerrain();
         me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
         VisibilityTracker vis = r.visibility();
-        if (pass == null || scene == null || vis == null) return;
+        if (pass == null || scene == null || vis == null) {
+            logDispatchThrottled("draw: null subsystem pass={} scene={} vis={}", pass, scene, vis);
+            return;
+        }
         int visibleRegionCount = vis.visibleRegionCount();
-        if (visibleRegionCount == 0) return;
+        if (visibleRegionCount == 0) {
+            logDispatchThrottled("draw: visibleRegionCount=0 (cull rejected every region)");
+            return;
+        }
+        logDispatchThrottled("draw: visibleRegionCount={} fbW={} fbH={}",
+            visibleRegionCount,
+            me.cortex.vulkium.blaze3d.MojangColorFormat.width(),
+            me.cortex.vulkium.blaze3d.MojangColorFormat.height());
 
         // Inheritance must match what Mojang's vkCmdBeginRendering set up. Tap the real color
         // format via ChunkSectionsToRenderMixin.capturedColorVkFormat. First frame before the
@@ -170,4 +182,12 @@ public final class FrameDriver {
     }
 
     public static long frameCount() { return FRAMES.get(); }
+
+    /** Log at most once every ~1s during drawTerrain diagnostics. */
+    private static void logDispatchThrottled(String fmt, Object... args) {
+        long now = System.nanoTime();
+        if (now - lastDispatchLog < 1_000_000_000L) return;
+        lastDispatchLog = now;
+        LOGGER.info(fmt, args);
+    }
 }
