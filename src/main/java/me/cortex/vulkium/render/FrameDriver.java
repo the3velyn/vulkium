@@ -103,8 +103,25 @@ public final class FrameDriver {
         long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
         if (atlasView == 0L || atlasSampler == 0L) return;
 
+        // MeshPipeline uses DYNAMIC viewport + scissor — must set them in the secondary cmd
+        // buffer before draw. Without this the rasterization extent is uninitialized and the
+        // draw silently emits nothing.
+        int fbW = net.minecraft.client.Minecraft.getInstance().getWindow().getWidth();
+        int fbH = net.minecraft.client.Minecraft.getInstance().getWindow().getHeight();
+
         try {
             me.cortex.vulkium.vk.SecondaryRecorder.recordAndSubmit(spec, cmd -> {
+                try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                    org.lwjgl.vulkan.VkViewport.Buffer vp = org.lwjgl.vulkan.VkViewport.calloc(1, stack)
+                        .x(0f).y(0f).width(fbW).height(fbH).minDepth(0f).maxDepth(1f);
+                    org.lwjgl.vulkan.VK10.vkCmdSetViewport(cmd, 0, vp);
+
+                    org.lwjgl.vulkan.VkRect2D.Buffer sc = org.lwjgl.vulkan.VkRect2D.calloc(1, stack);
+                    sc.offset().set(0, 0);
+                    sc.extent().set(fbW, fbH);
+                    org.lwjgl.vulkan.VK10.vkCmdSetScissor(cmd, 0, sc);
+                }
+
                 me.cortex.vulkium.vk.PushDescriptor.builder(
                         pass.pipelineLayout().handle(),
                         org.lwjgl.vulkan.VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
