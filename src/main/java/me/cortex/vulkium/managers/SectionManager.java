@@ -105,7 +105,11 @@ public final class SectionManager {
         while (n < limit) {
             PendingIngest p = ingestQueue.poll();
             if (p == null) break;
-            ingest(p);
+            if (p.entry == null) {
+                evictLive(p.key);
+            } else {
+                ingest(p);
+            }
             n++;
         }
         return n;
@@ -137,6 +141,34 @@ public final class SectionManager {
         return sectionToRegionRef.get(sectionPosKey);
     }
 
+    /**
+     * Drop a section from vulkium's live table + region ledger. Called from
+     * {@code RenderSectionMixin} when MC moves or resets a RenderSection — the old section's
+     * geometry is no longer valid and vulkium shouldn't keep addressing it.
+     *
+     * <p>May be called from any thread; internally posts the eviction to the render thread
+     * for processing next frame, to avoid touching RegionManager / live from workers.
+     */
+    public void evict(long sectionPosKey) {
+        if (sectionPosKey == SectionCapture.UNKNOWN_SECTION) return;
+        ingestQueue.offer(PendingIngest.eviction(sectionPosKey));
+    }
+
+    private void evictLive(long key) {
+        SectionEntry prev = live.remove(key);
+        if (prev != null) freeEntry(prev);
+        int ref = sectionToRegionRef.remove(key);
+        if (ref != -1 && regionManager != null) {
+            try {
+                regionManager.removeSection(ref);
+            } catch (RuntimeException e) {
+                // RegionManager throws on some invariant failures that we'd rather not crash
+                // over — the region+section refcounting still has edge cases (initial pass).
+                LOGGER.debug("evict({}): RegionManager.removeSection threw", Long.toHexString(key), e);
+            }
+        }
+    }
+
     /** For future V7 consumers — the current snapshot of live sections. */
     public Long2ObjectOpenHashMap<SectionEntry> liveView() { return live; }
 
@@ -160,5 +192,8 @@ public final class SectionManager {
         return n;
     }
 
-    private record PendingIngest(long key, SectionEntry entry) {}
+    private record PendingIngest(long key, SectionEntry entry) {
+        /** Sentinel: entry=null means "drop this section from the live table". */
+        static PendingIngest eviction(long key) { return new PendingIngest(key, null); }
+    }
 }

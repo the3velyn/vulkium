@@ -7,6 +7,7 @@
     "blaze3d.VulkanDeviceMixin",
     "chunk.CompiledSectionMeshMixin",
     "chunk.CompileTaskMixin",
+    "chunk.RenderSectionMixin",
     "debug.DebugScreenOverlayMixin"
   ],
   "injectors": {
