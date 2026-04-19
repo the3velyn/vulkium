@@ -1,12 +1,10 @@
 #version 460
 
 #extension GL_ARB_shading_language_include : enable
-#pragma optionNV(unroll all)
 #define UNROLL_LOOP
-#extension GL_NV_mesh_shader : require
-#extension GL_NV_gpu_shader5 : require
-#extension GL_NV_bindless_texture : require
+#extension GL_EXT_mesh_shader : require
 
+#extension GL_KHR_shader_subgroup_arithmetic : require
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
 #extension GL_KHR_shader_subgroup_vote : require
@@ -25,13 +23,7 @@ layout(local_size_x = 32) in;
 layout(triangles, max_vertices=128, max_primitives=64) out;
 
 //originAndBaseData.w is in quad count space, so is endIdx
-taskNV in Task {
-    vec4 originAndBaseData;
-    uint quadCount;
-    #ifdef TRANSLUCENCY_SORTING_QUADS
-    uint8_t jiggle;
-    #endif
-};
+#import <vulkium:terrain/translucent/task_common.glsl>
 
 layout(location=1) out Interpolants {
 #ifdef RENDER_FOG
@@ -48,22 +40,16 @@ vec4 sampleLight(vec2 uv) {
     return vec4(texture(tex_light, uv).rgb, 1);
 }
 
-void emitQuadIndicies() {
-    uint primBase = gl_LocalInvocationID.x * 6;
-    uint vertexBase = gl_LocalInvocationID.x<<2;
-    gl_PrimitiveIndicesNV[primBase+0] = vertexBase+0;
-    gl_PrimitiveIndicesNV[primBase+1] = vertexBase+1;
-    gl_PrimitiveIndicesNV[primBase+2] = vertexBase+2;
-    gl_PrimitiveIndicesNV[primBase+3] = vertexBase+2;
-    gl_PrimitiveIndicesNV[primBase+4] = vertexBase+3;
-    gl_PrimitiveIndicesNV[primBase+5] = vertexBase+0;
+void emitQuadIndicies(uint primBase, uint vertexBase) {
+    // EXT: one write per triangle (uvec3) instead of 6 per-index writes.
+    gl_PrimitiveTriangleIndicesEXT[primBase+0] = uvec3(vertexBase+0, vertexBase+1, vertexBase+2);
+    gl_PrimitiveTriangleIndicesEXT[primBase+1] = uvec3(vertexBase+2, vertexBase+3, vertexBase+0);
 }
 
-void emitVertex(uint vertexBaseId, uint innerId) {
+void emitVertex(uint outId, uint vertexBaseId, uint innerId) {
     Vertex V = terrainData.data[vertexBaseId + innerId];
-    uint outId = (gl_LocalInvocationID.x<<2)+innerId;
-    vec3 pos = decodeVertexPosition(V)+originAndBaseData.xyz;
-    gl_MeshVerticesNV[outId].gl_Position = MVP*vec4(pos,1.0);
+    vec3 pos = decodeVertexPosition(V)+payload.originAndBaseData.xyz;
+    gl_MeshVerticesEXT[outId].gl_Position = MVP*vec4(pos,1.0);
 
 
     vec3 exactPos = pos+subchunkOffset.xyz;
@@ -116,12 +102,12 @@ void swapQuads(uint idxA, uint idxB) {
 }
 
 void performTranslucencySort() {
-    uint baseQuadPtr = floatBitsToUint(originAndBaseData.w) + (gl_WorkGroupID.x<<5);
+    uint baseQuadPtr = floatBitsToUint(payload.originAndBaseData.w) + (gl_WorkGroupID.x<<5);
 
     float depth = dot(depthPos, depthPos) * ((1/4f)*(1/4f));
     depthBuffers[gl_LocalInvocationID.x] = depth;
 
-    if (gl_GlobalInvocationID.x < jiggle) {
+    if (gl_GlobalInvocationID.x < payload.jiggle) {
         //If we are in the jiggle index dont attempt to swap else we start rendering garbage data
         depthBuffers[gl_LocalInvocationID.x] = -9999f;
     }
@@ -145,51 +131,73 @@ void performTranslucencySort() {
 }
 #endif
 
-//TODO: extra per quad culling
+// EXT mesh-shader translation:
+//   NV let us set gl_PrimitiveCountNV at any time with a dynamic per-workgroup
+//   tail value. EXT requires a single SetMeshOutputsEXT before any output
+//   writes. Since every active lane emits exactly 4 verts + 2 tris (invalid
+//   lanes emit nothing), we compute the count on lane 0 from quadCount and
+//   workgroup id, then barrier before writes.
 void main() {
     #ifdef TRANSLUCENCY_SORTING_QUADS
     depthBuffers[gl_LocalInvocationID.x] = -99999999f;
     #endif
-    if ((gl_GlobalInvocationID.x)>=quadCount) { //If its over the quad count, dont render
+
+    bool validQuad = (gl_GlobalInvocationID.x < payload.quadCount);
+
+    // Remaining quads in this workgroup: min(quadCount - workgroup_base, 32).
+    // That's also the count of valid lanes.
+    uint activeQuads = min(uint(max(int(payload.quadCount) - int(gl_WorkGroupID.x<<5), 0)), 32u);
+    uint totalVerts = activeQuads << 2;
+    uint totalPrims = activeQuads << 1;
+
+    if (gl_LocalInvocationIndex == 0) {
+        SetMeshOutputsEXT(totalVerts, totalPrims);
+    }
+    barrier();
+
+    if (!validQuad) {
+        #ifdef TRANSLUCENCY_SORTING_QUADS
+        // We still participate in the sort barrier below; fall through.
+        #else
         return;
+        #endif
     }
 
-    emitQuadIndicies();
+    uint primBase = gl_LocalInvocationID.x * 2;
+    uint vertexBase = gl_LocalInvocationID.x<<2;
 
     //Each pair of meshlet invokations emits 4 vertices each and 2 primative each
-    uint id = (floatBitsToUint(originAndBaseData.w) + gl_GlobalInvocationID.x)<<2;
+    uint id = (floatBitsToUint(payload.originAndBaseData.w) + gl_GlobalInvocationID.x)<<2;
 
     #ifdef TRANSLUCENCY_SORTING_QUADS
     //If we are at the start, dont want to render as it contains garbled data (out of bounds)
-    if (gl_GlobalInvocationID.x < jiggle) {
-        gl_MeshVerticesNV[(gl_LocalInvocationID.x<<2)+0].gl_Position = vec4(1,1,1,-1);
-        gl_MeshVerticesNV[(gl_LocalInvocationID.x<<2)+1].gl_Position = vec4(1,1,1,-1);
-        gl_MeshVerticesNV[(gl_LocalInvocationID.x<<2)+2].gl_Position = vec4(1,1,1,-1);
-        gl_MeshVerticesNV[(gl_LocalInvocationID.x<<2)+3].gl_Position = vec4(1,1,1,-1);
+    if (validQuad && gl_GlobalInvocationID.x < payload.jiggle) {
+        gl_MeshVerticesEXT[vertexBase+0].gl_Position = vec4(1,1,1,-1);
+        gl_MeshVerticesEXT[vertexBase+1].gl_Position = vec4(1,1,1,-1);
+        gl_MeshVerticesEXT[vertexBase+2].gl_Position = vec4(1,1,1,-1);
+        gl_MeshVerticesEXT[vertexBase+3].gl_Position = vec4(1,1,1,-1);
 
-    } else {
-        emitVertex(id, 0);
-        emitVertex(id, 1);
-        emitVertex(id, 2);
-        emitVertex(id, 3);
+    } else if (validQuad) {
+        emitVertex(vertexBase+0, id, 0);
+        emitVertex(vertexBase+1, id, 1);
+        emitVertex(vertexBase+2, id, 2);
+        emitVertex(vertexBase+3, id, 3);
     }
     barrier();
     memoryBarrierShared();
 
     performTranslucencySort();
+
+    if (!validQuad) return;
     #else
-    emitVertex(id, 0);
-    emitVertex(id, 1);
-    emitVertex(id, 2);
-    emitVertex(id, 3);
+    emitVertex(vertexBase+0, id, 0);
+    emitVertex(vertexBase+1, id, 1);
+    emitVertex(vertexBase+2, id, 2);
+    emitVertex(vertexBase+3, id, 3);
     #endif
 
-    gl_MeshPrimitivesNV[(gl_LocalInvocationID.x<<1)].gl_PrimitiveID = int((id>>2)<<4)|(0<<3);
-    gl_MeshPrimitivesNV[(gl_LocalInvocationID.x<<1)|1].gl_PrimitiveID = int((id>>2)<<4)|(1<<3);
+    emitQuadIndicies(primBase, vertexBase);
 
-    if (gl_LocalInvocationID.x == 0) {
-        //Remaining quads in workgroup
-        gl_PrimitiveCountNV = min(uint(int(quadCount)-int(gl_WorkGroupID.x<<5))<<1, 64);//2 primatives per quad
-    }
-
+    gl_MeshPrimitivesEXT[primBase+0].gl_PrimitiveID = int((id>>2)<<4)|(0<<3);
+    gl_MeshPrimitivesEXT[primBase+1].gl_PrimitiveID = int((id>>2)<<4)|(1<<3);
 }

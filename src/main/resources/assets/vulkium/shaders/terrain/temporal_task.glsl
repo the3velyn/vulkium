@@ -1,11 +1,9 @@
 #version 460
-//Temporal task shader
-#extension GL_ARB_shading_language_include : enable
-#pragma optionNV(unroll all)
-#define UNROLL_LOOP
-#extension GL_NV_mesh_shader : require
-#extension GL_NV_gpu_shader5 : require
-#extension GL_NV_bindless_texture : require
+
+// Temporal terrain task shader — VK_EXT_mesh_shader port from nvidium's NV_mesh_shader.
+// See ../SHADERS_TODO.md for the translation recipe.
+
+#extension GL_EXT_mesh_shader : require
 
 #extension GL_KHR_shader_subgroup_basic : require
 #extension GL_KHR_shader_subgroup_ballot : require
@@ -32,7 +30,7 @@ void main() {
 
     if (!shouldRenderVisible(sectionId)) {
         //Early exit if the section isnt visible
-        gl_TaskCountNV = 0;
+        EmitMeshTasksEXT(0, 1, 1);
         return;
     }
 
@@ -43,15 +41,17 @@ void main() {
     chunk.y >>= 32-9;
     chunk -= chunkPosition.xyz;
 
-    transformationId = unpackRegionTransformId(regionData.data[sectionId>>8]);
-    chunk -= unpackOriginOffsetId(transformationId);
+    payload.transformationId = unpackRegionTransformId(regionData.data[sectionId>>8]);
+    chunk -= unpackOriginOffsetId(payload.transformationId);
 
-    origin = vec3(chunk<<4);
-    baseOffset = (uint)header.w;
+    payload.origin = vec3(chunk<<4);
+    payload.baseOffset = uint(header.w);
 
-    populateTasks(chunk, uvec4(sectionData.data[sectionId].renderRanges));
+    uint taskCount = populateTasks(chunk, uvec4(sectionData.data[sectionId].renderRanges));
 
     #ifdef STATISTICS_QUADS
-    atomicAdd(statistics_buffer+2, quadCount);
+    atomicAdd(statistics_buffer.data[2], payload.quadCount);
     #endif
+
+    EmitMeshTasksEXT(taskCount, 1, 1);
 }

@@ -1,14 +1,8 @@
 #version 460
 #extension GL_ARB_shading_language_include : enable
-#pragma optionNV(unroll all)
 #define UNROLL_LOOP
-#extension GL_NV_gpu_shader5 : require
-#extension GL_NV_bindless_texture : require
-#extension GL_NV_shader_buffer_load : require
 
-//#extension GL_NV_conservative_raster_underestimation : enable
-
-#extension GL_NV_fragment_shader_barycentric : require
+#extension GL_EXT_fragment_shader_barycentric : require
 
 
 #import <vulkium:occlusion/scene.glsl>
@@ -50,7 +44,7 @@ Vertex V0;
 Vertex Vp;
 Vertex V2;
 void computeOutputColour(inout vec3 colour) {
-    vec3 multiplier = gl_BaryCoordNV.x*computeMultiplier(V0) + gl_BaryCoordNV.y*computeMultiplier(Vp) + gl_BaryCoordNV.z*computeMultiplier(V2);
+    vec3 multiplier = gl_BaryCoordEXT.x*computeMultiplier(V0) + gl_BaryCoordEXT.y*computeMultiplier(Vp) + gl_BaryCoordEXT.z*computeMultiplier(V2);
     colour *= multiplier;
 }
 
@@ -58,13 +52,6 @@ void computeOutputColour(inout vec3 colour) {
 //2 ways to do it, either use an interpolation, or screenspace reversal, screenspace reversal is better when many many vertices
 // however interpolation increases ISBE
 void applyFog(inout vec3 colour) {
-    /*
-    //Reverse the transformation and compute the original position
-    vec4 clip = (MVPInv * vec4((gl_FragCoord.xy/screenSize)-1, gl_FragCoord.z*2-1, 1));
-    vec3 pos = clip.xyz/clip.w;
-    float fogLerp = clamp(computeFogLerp(pos, isCylindricalFog, fogStart, fogEnd) * fogColour.a, 0,1);
-    colour = mix(colour, fogColour.rgb, fogLerp);
-    */
     colour = mix(colour, fogColour.rgb, fogLerp);
 }
 #endif
@@ -84,7 +71,7 @@ void main() {
     colour = texture(tex_diffuse, uv, 0);
     colour.rgb *= v_colour;
     #else
-    vec2 uv = gl_BaryCoordNV.x*decodeVertexUV(V0) + gl_BaryCoordNV.y*decodeVertexUV(Vp) + gl_BaryCoordNV.z*decodeVertexUV(V2);
+    vec2 uv = gl_BaryCoordEXT.x*decodeVertexUV(V0) + gl_BaryCoordEXT.y*decodeVertexUV(Vp) + gl_BaryCoordEXT.z*decodeVertexUV(V2);
     colour = texture(tex_diffuse, uv, ((gl_PrimitiveID>>2)&1)*-8.0f);
     if (colour.a < getVertexAlphaCutoff(uint(gl_PrimitiveID&3))) discard;
     colour.a = 1;

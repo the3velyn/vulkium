@@ -10,19 +10,21 @@ All shaders compile at runtime via `com.mojang.blaze3d.vulkan.glsl.GlslCompiler`
 | `occlusion/scene.glsl` | n/a | ✅ | Pointer types translated to `buffer_reference` blocks |
 | `terrain/task_common.glsl` | ✅ | ✅ | Payload restructured to `taskPayloadSharedEXT`; `populateTasks` now returns the task count |
 | `terrain/task.glsl` | ✅ | ✅ | Uses `EmitMeshTasksEXT(N, 1, 1)` |
-| `terrain/mesh.glsl` | ⚠️ |  ✅ | Pointer-indexing rewritten; `gl_MeshVerticesNV/gl_PrimitiveIndicesNV/gl_PrimitiveCountNV` still NV |
-| `terrain/frag.frag` | ⚠️ | ✅ | `gl_BaryCoordNV`; needs `GL_EXT_fragment_shader_barycentric` + `gl_BaryCoordEXT` |
-| `terrain/temporal_task.glsl` | ⚠️ | ✅ | Same shape as `task.glsl`; port identically |
-| `terrain/translucent/task.glsl` | ⚠️ | ✅ | Same shape as `task.glsl`; port identically |
-| `terrain/translucent/mesh.glsl` | ⚠️ | ✅ | Uses shared-memory sort; subgroup ops stay |
+| `terrain/mesh.glsl` | ✅ |  ✅ | EXT mesh builtins + subgroup-reduced SetMeshOutputsEXT |
+| `terrain/frag.frag` | ✅ | ✅ | Uses `gl_BaryCoordEXT` + `GL_EXT_fragment_shader_barycentric` |
+| `terrain/temporal_task.glsl` | ✅ | ✅ | Uses `EmitMeshTasksEXT`; shares `task_common.glsl` payload |
+| `terrain/translucent/task.glsl` | ✅ | ✅ | Uses own `translucent/task_common.glsl` payload |
+| `terrain/translucent/mesh.glsl` | ✅ | ✅ | SetMeshOutputsEXT from workgroup-base quad count; sort logic unchanged |
+| `terrain/translucent/task_common.glsl` | ✅ | ✅ | Shared payload (`TranslucentTaskPayload`) for translucent task+mesh pair |
 | `terrain/fog.glsl` | ✅ | ✅ | No mesh-shader code; was clean |
 | `terrain/vertex_format.glsl` | ✅ | n/a | Scalar helpers; no changes needed |
-| `occlusion/region_raster/mesh.glsl` | ⚠️ | ✅ | Small — emits region AABBs |
+| `occlusion/region_raster/mesh.glsl` | ✅ | ✅ | Precomputed 12 AABB `uvec3` tris; SetMeshOutputsEXT(8,12) or (0,0) |
 | `occlusion/region_raster/fragment.frag` | ✅ | ✅ | No mesh-shader code |
-| `occlusion/section_raster/task.glsl` | ⚠️ | ✅ | Port identical to `terrain/task.glsl` pattern |
-| `occlusion/section_raster/mesh.glsl` | ⚠️ | ✅ | Section AABB emission |
+| `occlusion/section_raster/task.glsl` | ✅ | ✅ | Uses `section_raster/task_common.glsl` payload; `EmitMeshTasksEXT(count,1,1)` |
+| `occlusion/section_raster/task_common.glsl` | ✅ | ✅ | Shared payload (`SectionRasterTaskPayload`) |
+| `occlusion/section_raster/mesh.glsl` | ✅ | ✅ | Precomputed 12 AABB `uvec3` tris; early-exit path emits (0,0) |
 | `occlusion/section_raster/fragment.glsl` | ✅ | ✅ | No mesh-shader code |
-| `occlusion/queries/region/mesh.glsl` | ⚠️ | ✅ | Visibility-query mesh shader |
+| `occlusion/queries/region/mesh.glsl` | ✅ | ✅ | Precomputed 12 AABB `uvec3` tris; SetMeshOutputsEXT(8,12) |
 | `occlusion/queries/region/fragment.frag` | ✅ | ✅ | No mesh-shader code |
 | `sorting/region_section_sorter.comp` | n/a | ✅ | Compute shader — no mesh-shader code |
 | `sorting/sorting_network.glsl` | n/a | n/a | Pure algorithm, reused as-is |

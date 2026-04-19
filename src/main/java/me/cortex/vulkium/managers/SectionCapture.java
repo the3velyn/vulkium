@@ -22,6 +22,11 @@ import java.util.concurrent.atomic.AtomicLong;
  * <p>Called from the worker thread that owns the section compile — <strong>not</strong> the
  * render thread. Anything that eventually touches VK resources must defer to the render thread
  * or use a thread-safe producer/consumer hand-off.
+ *
+ * <p><strong>Section-key plumbing:</strong> the {@link CompileTaskMixin} wraps
+ * {@code CompileTask.doTask} with {@link #beginSectionCompile(long)} / {@link #endSectionCompile()}
+ * around the compile. The {@link me.cortex.vulkium.mixin.chunk.CompiledSectionMeshMixin} ctor
+ * mixin reads the thread-local to tag the mesh with a real packed {@code SectionPos.asLong}.
  */
 public final class SectionCapture {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/capture");
@@ -35,7 +40,30 @@ public final class SectionCapture {
     /** Running total index bytes across all layers (diagnostic). */
     private static final AtomicLong INDEX_BYTES_TOTAL = new AtomicLong();
 
+    /**
+     * Worker-thread-local packed {@code SectionPos.asLong} set by {@code CompileTaskMixin}
+     * around MC's compile call. {@code Long.MIN_VALUE} means "no compile in flight" (in which
+     * case callers fall back to the legacy 0 sentinel).
+     */
+    private static final ThreadLocal<Long> COMPILING_SECTION = ThreadLocal.withInitial(() -> Long.MIN_VALUE);
+
     private SectionCapture() {}
+
+    /** Called from {@code CompileTaskMixin} at doTask HEAD. */
+    public static void beginSectionCompile(long sectionPosKey) {
+        COMPILING_SECTION.set(sectionPosKey);
+    }
+
+    /** Called from {@code CompileTaskMixin} at doTask RETURN. */
+    public static void endSectionCompile() {
+        COMPILING_SECTION.set(Long.MIN_VALUE);
+    }
+
+    /** Read by the {@code CompiledSectionMesh} ctor mixin when it fires on the compile thread. */
+    public static long currentCompilingSectionKey() {
+        long v = COMPILING_SECTION.get();
+        return v == Long.MIN_VALUE ? 0L : v;
+    }
 
     /**
      * Called from {@code CompiledSectionMeshMixin} at section-mesh construction.
@@ -67,8 +95,8 @@ public final class SectionCapture {
 
         // Only log the first few — this fires from worker threads and can be very high-volume.
         if (seq <= 8 || seq % 1024 == 0) {
-            LOGGER.info("Section capture #{} — layers={} vbBytes={} ibBytes={} (totals vb={} ib={})",
-                seq, layers.size(), vbTotal, ibTotal,
+            LOGGER.info("Section capture #{} key=0x{} layers={} vbBytes={} ibBytes={} (totals vb={} ib={})",
+                seq, Long.toHexString(sectionPosKey), layers.size(), vbTotal, ibTotal,
                 VERTEX_BYTES_TOTAL.get(), INDEX_BYTES_TOTAL.get());
         }
     }

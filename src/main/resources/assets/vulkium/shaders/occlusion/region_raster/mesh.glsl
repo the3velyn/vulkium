@@ -1,11 +1,7 @@
 #version 460
 #extension GL_ARB_shading_language_include : enable
-#pragma optionNV(unroll all)
 #define UNROLL_LOOP
-#extension GL_NV_mesh_shader : require
-#extension GL_NV_gpu_shader5 : require
-#extension GL_NV_bindless_texture : require
-#extension GL_NV_shader_buffer_load : require
+#extension GL_EXT_mesh_shader : require
 
 
 #import <vulkium:occlusion/scene.glsl>
@@ -16,38 +12,45 @@
 layout(local_size_x = 8) in;
 layout(triangles, max_vertices=8, max_primitives=12) out;
 
-const uint PILUTA[] = {0, 3, 6, 0, 1, 7, 4, 5};
-const uint PILUTB[] = {1, 2, 6, 4, 0, 7, 6, 4};
-const uint PILUTC[] = {2, 0, 4, 5, 1, 3, 7, 2};
-const uint PILUTD[] = {1, 2, 0, 5, 5, 1, 7, 7};
-
-const uint PILUTE[] = {6, 2, 3, 7};
-void emitIndicies(int visIndex) {
-    gl_PrimitiveIndicesNV[(gl_LocalInvocationID.x<<2)|0] = PILUTA[gl_LocalInvocationID.x];
-    gl_PrimitiveIndicesNV[(gl_LocalInvocationID.x<<2)|1] = PILUTB[gl_LocalInvocationID.x];
-    gl_PrimitiveIndicesNV[(gl_LocalInvocationID.x<<2)|2] = PILUTC[gl_LocalInvocationID.x];
-    gl_PrimitiveIndicesNV[(gl_LocalInvocationID.x<<2)|3] = PILUTD[gl_LocalInvocationID.x];
-    gl_MeshPrimitivesNV[gl_LocalInvocationID.x].gl_PrimitiveID = visIndex;
-}
-
-void emitParital(int visIndex) {
-    gl_PrimitiveIndicesNV[(8*4)+gl_LocalInvocationID.x] = PILUTE[gl_LocalInvocationID.x];
-    gl_MeshPrimitivesNV[gl_LocalInvocationID.x+8].gl_PrimitiveID = visIndex;
-    gl_PrimitiveCountNV = 12;
-}
+// EXT version: NV used 4 per-lane PILUT writes over a flat index array
+// (36 indices = 12 triangles). EXT requires one `uvec3` per triangle, so we
+// precompute the 12 triangles of the AABB hull directly.
+const uvec3 CUBE_TRIS[12] = {
+    uvec3(0, 1, 2),
+    uvec3(1, 3, 2),
+    uvec3(0, 2, 6),
+    uvec3(6, 4, 0),
+    uvec3(0, 4, 5),
+    uvec3(5, 1, 0),
+    uvec3(1, 5, 7),
+    uvec3(7, 3, 1),
+    uvec3(4, 6, 7),
+    uvec3(7, 5, 4),
+    uvec3(2, 7, 6),
+    uvec3(2, 3, 7),
+};
 
 void main() {
     //FIXME: It might actually be more efficent to just upload the region data straight into the ubo
     // this remove an entire level of indirection and also puts region data in the very fast path
     Region data = regionData.data[regionIndicies.data[gl_WorkGroupID.x]];//fetch the region data
 
-    int visibilityIndex = (int)gl_WorkGroupID.x;
-    //If the region metadata was empty, return
-    if (data.a == uint64_t(-1)) {
-        regionVisibility.data[visibilityIndex] = uint8_t(0);
-        gl_PrimitiveCountNV = 0;
+    int visibilityIndex = int(gl_WorkGroupID.x);
+    bool emptyRegion = (data.a == uint64_t(-1));
+
+    if (emptyRegion) {
+        if (gl_LocalInvocationID.x == 0) {
+            regionVisibility.data[visibilityIndex] = uint8_t(0);
+            SetMeshOutputsEXT(0, 0);
+        }
         return;
     }
+
+    // Non-empty region: always emit 8 verts + 12 tris.
+    if (gl_LocalInvocationID.x == 0) {
+        SetMeshOutputsEXT(8, 12);
+    }
+    barrier();
 
     ivec3 pos = unpackRegionPosition(data);
     pos -= chunkPosition.xyz;
@@ -57,19 +60,16 @@ void main() {
     vec3 start = pos - ADD_SIZE;
     vec3 end = start + 1 + size + (ADD_SIZE*2);
 
-    //TODO: Look into only doing 4 locals, for 2 reasons, its more effective for reducing duplicate computation and bandwidth
-    // it also means that each thread can emit 3 primatives, 9 indicies each
-
-    //can also do 8 threads then each thread emits a primative and 4 indicies each then the lower 4 emit 1 indice extra each
-
     vec3 corner = vec3(((gl_LocalInvocationID.x&1)==0)?start.x:end.x, ((gl_LocalInvocationID.x&4)==0)?start.y:end.y, ((gl_LocalInvocationID.x&2)==0)?start.z:end.z);
     corner *= 16.0f;
-    gl_MeshVerticesNV[gl_LocalInvocationID.x].gl_Position = MVP*(getRegionTransformation(data)*vec4(corner, 1.0));
+    gl_MeshVerticesEXT[gl_LocalInvocationID.x].gl_Position = MVP*(getRegionTransformation(data)*vec4(corner, 1.0));
 
-
-    emitIndicies(visibilityIndex);
+    // Each of 8 lanes emits 1 triangle; lanes 0..3 each emit a second.
+    gl_PrimitiveTriangleIndicesEXT[gl_LocalInvocationID.x] = CUBE_TRIS[gl_LocalInvocationID.x];
+    gl_MeshPrimitivesEXT[gl_LocalInvocationID.x].gl_PrimitiveID = visibilityIndex;
     if (gl_LocalInvocationID.x < 4) {
-        emitParital(visibilityIndex);
+        gl_PrimitiveTriangleIndicesEXT[8 + gl_LocalInvocationID.x] = CUBE_TRIS[8 + gl_LocalInvocationID.x];
+        gl_MeshPrimitivesEXT[8 + gl_LocalInvocationID.x].gl_PrimitiveID = visibilityIndex;
 
         if (gl_LocalInvocationID.x == 0) {
             bool cameraInRegion = all(lessThan(start*16+subchunkOffset.xyz, vec3(ADD_SIZE*16))) && all(lessThan(vec3(-ADD_SIZE*16), end*16+subchunkOffset.xyz));

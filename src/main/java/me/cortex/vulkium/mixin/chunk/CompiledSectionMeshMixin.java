@@ -25,9 +25,10 @@ public class CompiledSectionMeshMixin {
             at = @At("TAIL"))
     private void vulkium$captureMesh(TranslucencyPointOfView pov, SectionCompiler.Results results, CallbackInfo ci) {
         if (!Vulkium.isEnabled()) return;
-        // The CompiledSectionMesh ctor doesn't receive a SectionPos directly. 0 is a sentinel
-        // for "unknown"; SectionManager uses it as a key for now. We'll plumb a real key from
-        // SectionRenderDispatcher$RenderSection when V4 finishes indexing.
-        SectionCapture.onSectionMeshCompiled(0L, results);
+        // The ctor doesn't take a SectionPos directly. CompileTaskMixin stashes the owning
+        // RenderSection's packed SectionPos.asLong on the worker thread around the compile;
+        // we read it here. Falls back to 0 if (defensively) the compile path didn't go
+        // through CompileTask (e.g. Mojang later refactors CompiledSectionMesh callers).
+        SectionCapture.onSectionMeshCompiled(SectionCapture.currentCompilingSectionKey(), results);
     }
 }

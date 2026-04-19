@@ -5,7 +5,8 @@
   "compatibilityLevel": "JAVA_21",
   "client": [
     "blaze3d.VulkanDeviceMixin",
-    "chunk.CompiledSectionMeshMixin"
+    "chunk.CompiledSectionMeshMixin",
+    "chunk.CompileTaskMixin"
   ],
   "injectors": {
     "defaultRequire": 1
