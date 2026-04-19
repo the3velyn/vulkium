@@ -190,13 +190,13 @@ public final class FrameDriver {
         // to the display. The view we captured from ChunkSectionsToRender was an intermediate
         // terrain texture that later gets composited; writing to it after its pass closed didn't
         // land on screen.
-        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc == null || mc.gameRenderer == null || mc.gameRenderer.mainRenderTarget() == null) return;
-        com.mojang.blaze3d.pipeline.RenderTarget rt = mc.gameRenderer.mainRenderTarget();
-        com.mojang.blaze3d.textures.GpuTextureView gpuView = rt.getColorTextureView();
-        if (!(gpuView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkView)) return;
-        long colorView = vkView.vkImageView();
-        int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView.texture().getFormat());
+        net.minecraft.client.Minecraft mc2 = net.minecraft.client.Minecraft.getInstance();
+        if (mc2 == null || mc2.gameRenderer == null || mc2.gameRenderer.mainRenderTarget() == null) return;
+        com.mojang.blaze3d.pipeline.RenderTarget rt = mc2.gameRenderer.mainRenderTarget();
+        com.mojang.blaze3d.textures.GpuTextureView gpuView2 = rt.getColorTextureView();
+        if (!(gpuView2 instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkView2)) return;
+        long colorView = vkView2.vkImageView();
+        int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView2.texture().getFormat());
         if (colorView == 0L) return;
 
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
