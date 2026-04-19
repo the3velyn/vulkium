@@ -1,5 +1,6 @@
 package me.cortex.vulkium;
 
+import me.cortex.vulkium.blaze3d.MojangBackendFixup;
 import me.cortex.vulkium.blaze3d.MojangVulkanBridge;
 import me.cortex.vulkium.blaze3d.VulkanDetect;
 import me.cortex.vulkium.managers.RegionManager;
@@ -45,6 +46,20 @@ public final class Vulkium implements ClientModInitializer {
     public void onInitializeClient() {
         LOGGER.info("Vulkium {} loaded (MC {}). Initialization deferred until Mojang's renderer is ready.",
             getVersion(), Minecraft.getInstance() == null ? "<uninit>" : "initialized");
+
+        // CRITICAL: inject VK_EXT_mesh_shader + bufferDeviceAddress into Mojang's
+        // REQUIRED_DEVICE_EXTENSIONS / REQUIRED_DEVICE_FEATURES NOW, before Mojang's
+        // VulkanBackend.createDevice runs. Otherwise Mojang's VkDevice is created without the
+        // extension enabled and we can't use mesh shaders regardless of hardware capability.
+        try {
+            if (VulkiumConfig.get().forceDisable) {
+                LOGGER.info("Backend-fixup skipped (config.forceDisable=true).");
+            } else {
+                MojangBackendFixup.apply();
+            }
+        } catch (Throwable t) {
+            LOGGER.error("MojangBackendFixup failed — vulkium will probably end up disabled due to missing VK_EXT_mesh_shader", t);
+        }
 
         // We can't feature-probe at onInitializeClient() because RenderSystem.getDevice() isn't
         // yet populated — Mojang's backend is created later during client boot. Defer to a

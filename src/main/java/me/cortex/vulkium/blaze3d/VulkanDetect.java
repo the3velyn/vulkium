@@ -112,8 +112,19 @@ public final class VulkanDetect {
 
             // Extension-gated features: extension must be enabled AND the feature bit must be on.
             // MC 26.2 runs Vulkan 1.2; many of these extensions are core-promoted there.
-            boolean meshShader = enabledExts.contains(EXTMeshShader.VK_EXT_MESH_SHADER_EXTENSION_NAME)
-                && meshFeat.meshShader();
+            //
+            // **Subtlety:** `enabledExts` holds what Mojang enabled at device creation. Mojang
+            // has no reason to enable VK_EXT_mesh_shader on its own, so we check:
+            //   (a) the physical device supports the extension (queryable via
+            //       vkEnumerateDeviceExtensionProperties — we scan it below)
+            //   (b) the feature bit is on in the pNext chain
+            //   (c) Mojang enabled it (via our VulkanBackendMixin)
+            // If (a)+(b) but not (c), vulkium injects the extension via the mixin. At probe
+            // time (post-device-creation) all three must hold for us to actually use mesh shaders.
+            boolean meshExtPhysicallySupported = physicalDeviceHasExtension(phys,
+                EXTMeshShader.VK_EXT_MESH_SHADER_EXTENSION_NAME);
+            boolean meshExtEnabled = enabledExts.contains(EXTMeshShader.VK_EXT_MESH_SHADER_EXTENSION_NAME);
+            boolean meshShader = meshExtEnabled && meshFeat.meshShader();
             boolean meshShaderQueries = meshFeat.meshShaderQueries();
             boolean bda = bdaFeat.bufferDeviceAddress();
             // VkPhysicalDeviceDescriptorIndexingFeatures doesn't carry a top-level rollup bit
@@ -128,9 +139,16 @@ public final class VulkanDetect {
             boolean sparseResBuf = coreFeat.sparseResidencyBuffer();
 
             if (!meshShader) {
+                String reason;
+                if (!meshExtPhysicallySupported) {
+                    reason = "GPU / driver does not expose VK_EXT_mesh_shader. Vulkium requires a Turing+ NVIDIA, RDNA3+ AMD, or Arc+ Intel GPU.";
+                } else if (!meshExtEnabled) {
+                    reason = "VK_EXT_mesh_shader is supported by this GPU but Mojang's VkDevice was created without it enabled. VulkanBackendMixin should inject the extension — this state means the mixin didn't fire.";
+                } else {
+                    reason = "VK_EXT_mesh_shader is enabled but meshShader feature bit is false. This shouldn't happen on supported hardware.";
+                }
                 return new ProbeResult(true, false, meshShaderQueries, bda, di, sparse, sparseResBuf,
-                    pushDesc, sync2, deviceName,
-                    "GPU / driver does not expose VK_EXT_mesh_shader. Vulkium requires a Turing+ NVIDIA, RDNA3+ AMD, or Arc+ Intel GPU.");
+                    pushDesc, sync2, deviceName, reason);
             }
             if (!bda) {
                 return new ProbeResult(true, true, meshShaderQueries, false, di, sparse, sparseResBuf,
@@ -145,6 +163,27 @@ public final class VulkanDetect {
 
             return new ProbeResult(true, true, meshShaderQueries, bda, di, sparse, sparseResBuf,
                 pushDesc, sync2, deviceName, "OK");
+        }
+    }
+
+    /**
+     * Check whether the physical device advertises an extension, independent of whether Mojang
+     * enabled it at {@code vkCreateDevice} time. Used by the probe to distinguish
+     * "GPU doesn't support it" from "Mojang didn't enable it."
+     */
+    private static boolean physicalDeviceHasExtension(org.lwjgl.vulkan.VkPhysicalDevice phys, String name) {
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            IntBuffer pCount = stack.callocInt(1);
+            int r = VK10.vkEnumerateDeviceExtensionProperties(phys, (String) null, pCount, null);
+            if (r != VK10.VK_SUCCESS) return false;
+            int count = pCount.get(0);
+            VkExtensionProperties.Buffer props = VkExtensionProperties.calloc(count, stack);
+            r = VK10.vkEnumerateDeviceExtensionProperties(phys, (String) null, pCount, props);
+            if (r != VK10.VK_SUCCESS) return false;
+            for (int i = 0; i < count; i++) {
+                if (props.get(i).extensionNameString().equals(name)) return true;
+            }
+            return false;
         }
     }
 }
