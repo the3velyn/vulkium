@@ -97,8 +97,7 @@ void main() {
     bool t1draw = false;
 
     if (validQuad) {
-        // DIAG: seeded all slots with identity; revert to lookup once region transforms drive it.
-        transformMat = mat4(1.0);
+        transformMat = transformationArray.data[payload.transformationId];
 
         //Load the data
         V0 = terrainData.data[(id<<2)+0];
