@@ -135,10 +135,19 @@ public final class SecondaryRecorder {
             throw new RuntimeException("vkEndCommandBuffer (SECONDARY) failed: VkResult=" + er);
         }
 
-        // Mojang's execute(VkCommandBuffer) detects SECONDARY vs PRIMARY and emits either
-        // vkCmdExecuteCommands on the current primary (SECONDARY) or a submission-chain step
-        // (PRIMARY). We want the SECONDARY path — draws will land inside the active
-        // vkCmdBeginRendering/vkCmdEndRendering scope that Mojang opened.
-        encoder.execute(cmd);
+        // Splice the secondary into Mojang's active primary via vkCmdExecuteCommands. Using
+        // encoder.execute() would submit our cmd to the queue directly — invalid for secondaries
+        // (queue-submit accepts PRIMARY only) and wouldn't land our draws inside Mojang's
+        // dynamic-rendering scope. Instead, grab the accesswidener-opened currentCommandBuffer
+        // field and record the execute on it.
+        VkCommandBuffer primary = encoder.currentCommandBuffer;
+        if (primary == null) {
+            throw new IllegalStateException("Mojang has no current primary cmd buffer — "
+                + "SecondaryRecorder.recordAndSubmit called outside a render scope?");
+        }
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            org.lwjgl.PointerBuffer pSecondary = stack.pointers(cmd);
+            VK10.vkCmdExecuteCommands(primary, pSecondary);
+        }
     }
 }

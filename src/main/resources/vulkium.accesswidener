@@ -3,6 +3,10 @@ accessWidener v1 official
 # Access the GpuDevice.backend field so we can cast to VulkanDevice without mixing in.
 accessible field com/mojang/blaze3d/systems/GpuDevice backend Lcom/mojang/blaze3d/systems/GpuDeviceBackend;
 
+# Access the current primary VkCommandBuffer Mojang is recording into so vulkium's secondary
+# cmd buffers can be spliced in via vkCmdExecuteCommands during dynamic-rendering scope.
+accessible field com/mojang/blaze3d/vulkan/VulkanCommandEncoder currentCommandBuffer Lorg/lwjgl/vulkan/VkCommandBuffer;
+
 # Make the required-extensions + required-features sets mutable so MojangBackendFixup can
 # inject VK_EXT_mesh_shader + bufferDeviceAddress before Mojang creates its VkDevice.
 mutable field com/mojang/blaze3d/vulkan/VulkanBackend REQUIRED_DEVICE_EXTENSIONS Ljava/util/Set;
