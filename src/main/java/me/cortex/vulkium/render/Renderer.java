@@ -23,6 +23,7 @@ public final class Renderer {
 
     private SceneUniform sceneUniform;
     private VisibilityTracker visibility;
+    private RegionSorter regionSorter;
     private boolean initFailed;
 
     private Renderer() {}
@@ -89,13 +90,19 @@ public final class Renderer {
 
     public SceneUniform sceneUniform() { return sceneUniform; }
     public VisibilityTracker visibility() { return visibility; }
+    public RegionSorter regionSorter() { return regionSorter; }
 
     private void ensureInit() {
         if (sceneUniform != null || initFailed) return;
         try {
             sceneUniform = new SceneUniform();
             visibility = new VisibilityTracker();
-            LOGGER.info("Renderer initialized (SceneUniform allocated, {} bytes; VisibilityTracker ready).",
+            // Eager shader compile — if shaderc rejects region_section_sorter.comp on this GPU
+            // we want the crash here, not at first draw. Construct-failures disable the Renderer
+            // outright (leaves vulkium enabled but rendering paths no-op).
+            regionSorter = new RegionSorter();
+            LOGGER.info(
+                "Renderer initialized (SceneUniform {} bytes; VisibilityTracker; RegionSorter pipeline compiled).",
                 SceneUniform.SCENE_UBO_SIZE);
         } catch (Throwable t) {
             LOGGER.error("Renderer init failed (marking as failed, vulkium rendering paths will no-op)", t);
@@ -104,6 +111,12 @@ public final class Renderer {
     }
 
     public void shutdown() {
+        // Close in reverse construction order so dependent VK handles teardown before their
+        // predecessors.
+        if (regionSorter != null) {
+            try { regionSorter.close(); } catch (Throwable t) { LOGGER.warn("RegionSorter close failed", t); }
+            regionSorter = null;
+        }
         if (sceneUniform != null) {
             try { sceneUniform.close(); } catch (Throwable t) { LOGGER.warn("SceneUniform close failed", t); }
             sceneUniform = null;
