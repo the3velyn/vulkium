@@ -92,7 +92,7 @@ public final class FrameDriver {
         // format via ChunkSectionsToRenderMixin.capturedColorVkFormat. First frame before the
         // mixin fires uses the PrimaryTerrainPass default as fallback — no harm; on first
         // vanilla-cancel call the format gets captured for all subsequent frames.
-        int colorFormat = me.cortex.vulkium.mixin.chunk.ChunkSectionsToRenderMixin.capturedColorVkFormat;
+        int colorFormat = me.cortex.vulkium.blaze3d.MojangColorFormat.get();
         if (colorFormat == 0) colorFormat = me.cortex.vulkium.render.PrimaryTerrainPass.COLOR_FORMAT;
 
         me.cortex.vulkium.vk.SecondaryRecorder.InheritanceSpec spec =

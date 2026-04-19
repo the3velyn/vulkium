@@ -30,8 +30,6 @@ public abstract class ChunkSectionsToRenderMixin {
 
     @Shadow public abstract GpuTextureView textureView();
 
-    /** Captured on first invocation: Mojang's main color attachment VkFormat. */
-    public static volatile int capturedColorVkFormat = 0;
 
     @Inject(method = "renderGroup",
             at = @At("HEAD"),
@@ -41,12 +39,12 @@ public abstract class ChunkSectionsToRenderMixin {
         // Tap Mojang's color-attachment format on first call so FrameDriver can build the
         // SecondaryRecorder.InheritanceSpec with the real format (not a guess). Failure to match
         // silently makes our secondary's draws produce nothing.
-        if (capturedColorVkFormat == 0) {
+        if (me.cortex.vulkium.blaze3d.MojangColorFormat.get() == 0) {
             try {
                 GpuTextureView view = textureView();
                 if (view != null && view.texture() != null) {
                     int vk = VulkanConst.toVk(view.texture().getFormat());
-                    capturedColorVkFormat = vk;
+                    me.cortex.vulkium.blaze3d.MojangColorFormat.set(vk);
                     LOGGER.info("Captured Mojang color attachment VkFormat={} ({}x{}, layer group={})",
                         vk, view.texture().getWidth(0), view.texture().getHeight(0), group);
                 }
