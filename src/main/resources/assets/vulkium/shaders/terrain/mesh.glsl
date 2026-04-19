@@ -91,15 +91,20 @@ void main() {
     // regressed in the pipeline.
     SetMeshOutputsEXT(3u, 1u);
     if (gl_LocalInvocationIndex == 0u) {
-        // DIAG: project world origin (0,0,0) — ignore payload entirely. If visible, MVP is fine
-        // and payload.origin values are junk (uninitialized origin buffer). If invisible,
-        // MVP itself is wrong despite earlier sentinel test.
-        vec4 world = vec4(0.0, 0.0, 0.0, 1.0);
-        vec4 c = MVP * world;
-        float s = max(abs(c.w), 0.1) * 0.1;
-        gl_MeshVerticesEXT[0].gl_Position = c + vec4(-s, -s, 0, 0);
-        gl_MeshVerticesEXT[1].gl_Position = c + vec4( s, -s, 0, 0);
-        gl_MeshVerticesEXT[2].gl_Position = c + vec4( 0,  s, 0, 0);
+        // DIAG: project world pos (10, 64, 10) — close to surface near world origin.
+        // Do NDC offset AFTER perspective divide so screen-space size is always sensible.
+        vec4 c = MVP * vec4(10.0, 64.0, 10.0, 1.0);
+        if (c.w > 0.01) {
+            vec2 ndc = c.xy / c.w;
+            gl_MeshVerticesEXT[0].gl_Position = vec4(ndc.x - 0.06, ndc.y - 0.06, 0.5, 1.0);
+            gl_MeshVerticesEXT[1].gl_Position = vec4(ndc.x + 0.06, ndc.y - 0.06, 0.5, 1.0);
+            gl_MeshVerticesEXT[2].gl_Position = vec4(ndc.x,        ndc.y + 0.06, 0.5, 1.0);
+        } else {
+            // Behind camera / degenerate: put tiny marker at top-right so we know.
+            gl_MeshVerticesEXT[0].gl_Position = vec4(0.85, 0.85, 0.5, 1.0);
+            gl_MeshVerticesEXT[1].gl_Position = vec4(0.95, 0.85, 0.5, 1.0);
+            gl_MeshVerticesEXT[2].gl_Position = vec4(0.90, 0.95, 0.5, 1.0);
+        }
         gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
         gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
     }
