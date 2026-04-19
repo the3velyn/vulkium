@@ -26,9 +26,6 @@ public final class FrameDriver {
     /** Max section-ingest drains per frame — caps latency when a big chunk batch lands at once. */
     private static final int DRAIN_PER_FRAME = 256;
 
-    /** Log stats every N frames. Roughly once every ~17s @ 60fps. */
-    private static final int LOG_EVERY = 1024;
-
     private static final AtomicLong FRAMES = new AtomicLong();
 
     private FrameDriver() {}
@@ -43,22 +40,22 @@ public final class FrameDriver {
 
     private static void onStartMain(LevelTerrainRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
-        long frame = FRAMES.incrementAndGet();
+        FRAMES.incrementAndGet();
 
         // Ingest queue drain: move captured compile results from worker threads into the
-        // render-thread-owned live section table + region ledger.
-        int drained = SectionManager.get().drainPending(DRAIN_PER_FRAME);
+        // render-thread-owned live section table + region ledger. MUST run every frame —
+        // this is the only path from MC's worker-thread captures to our live state.
+        SectionManager.get().drainPending(DRAIN_PER_FRAME);
 
-        // Populate scene UBO for this frame. Safe to call even when pipelines aren't wired —
-        // this just updates the host-mapped buffer; it only costs GPU bandwidth when a
-        // subsequent pipeline actually reads from it.
-        Renderer.get().prepareFrame(ctx);
-
-        if (frame <= 4 || frame % LOG_EVERY == 0) {
-            SectionManager sm = SectionManager.get();
-            LOGGER.info("Frame {}: drained={} liveSections={} regions={}",
-                frame, drained, sm.liveView().size(),
-                Vulkium.regionManager() != null ? Vulkium.regionManager().regionCount() : 0);
+        // prepareFrame runs the frustum cull + writes the scene UBO (+visibility pointers).
+        // Only needed if we're drawing OR if F3 is shown (so the HUD overlay's visible-region
+        // count stays fresh). When F3 is hidden AND draws are off, the idle frame cost is just
+        // drainPending above.
+        VulkiumConfig cfg = VulkiumConfig.get();
+        boolean f3Shown = net.minecraft.client.Minecraft.getInstance().getDebugOverlay() != null
+            && net.minecraft.client.Minecraft.getInstance().getDebugOverlay().showDebugScreen();
+        if (cfg.drawTerrain || cfg.enableHzb || f3Shown) {
+            Renderer.get().prepareFrame(ctx);
         }
     }
 
