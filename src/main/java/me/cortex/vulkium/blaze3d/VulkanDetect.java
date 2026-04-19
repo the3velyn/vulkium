@@ -172,18 +172,26 @@ public final class VulkanDetect {
      * "GPU doesn't support it" from "Mojang didn't enable it."
      */
     private static boolean physicalDeviceHasExtension(org.lwjgl.vulkan.VkPhysicalDevice phys, String name) {
+        // Heap-alloc the extension-properties buffer — a device typically has 200-400+
+        // extensions × 260 bytes each, which overflows LWJGL's 64 KB default stack.
+        IntBuffer pCount;
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            IntBuffer pCount = stack.callocInt(1);
+            pCount = stack.callocInt(1);
             int r = VK10.vkEnumerateDeviceExtensionProperties(phys, (String) null, pCount, null);
             if (r != VK10.VK_SUCCESS) return false;
             int count = pCount.get(0);
-            VkExtensionProperties.Buffer props = VkExtensionProperties.calloc(count, stack);
-            r = VK10.vkEnumerateDeviceExtensionProperties(phys, (String) null, pCount, props);
-            if (r != VK10.VK_SUCCESS) return false;
-            for (int i = 0; i < count; i++) {
-                if (props.get(i).extensionNameString().equals(name)) return true;
+            if (count == 0) return false;
+            VkExtensionProperties.Buffer props = VkExtensionProperties.calloc(count);
+            try {
+                r = VK10.vkEnumerateDeviceExtensionProperties(phys, (String) null, pCount, props);
+                if (r != VK10.VK_SUCCESS) return false;
+                for (int i = 0; i < count; i++) {
+                    if (props.get(i).extensionNameString().equals(name)) return true;
+                }
+                return false;
+            } finally {
+                props.free();
             }
-            return false;
         }
     }
 }
