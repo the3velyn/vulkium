@@ -125,8 +125,10 @@ void main() {
         vec2 t1max = max(ssmax, point);
 
         //Possibly cull the triangles if they dont cover the center of a pixel on the screen (degen)
-        t0draw = all(notEqual(round(t0min),round(t0max)));
-        t1draw = all(notEqual(round(t1min),round(t1max)));
+        // DIAG: bypass bbox cull unconditionally. If terrain appears → screenSize/bbox-cull still
+        // broken. If still red, vertex data itself is bad.
+        t0draw = true;
+        t1draw = true;
     }
 
     uint triCnt = uint(t0draw) + uint(t1draw);
