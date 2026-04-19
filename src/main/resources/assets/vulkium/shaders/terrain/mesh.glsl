@@ -92,21 +92,16 @@ void main() {
     bool t1draw = false;
 
     if (validQuad) {
-        // DIAG: force identity matrix instead of reading from transformationArray. If terrain
-        // shows magenta, transformationArray data is bad. If still red, issue is elsewhere.
         transformMat = mat4(1.0);
-
-        //Load the data
-        V0 = terrainData.data[(id<<2)+0];
-        V1 = terrainData.data[(id<<2)+1];
-        V2 = terrainData.data[(id<<2)+2];
-        V3 = terrainData.data[(id<<2)+3];
-
-        //Transform the vertices
-        pV0 = transformVertex(V0);
-        pV1 = transformVertex(V1);
-        pV2 = transformVertex(V2);
-        pV3 = transformVertex(V3);
+        // DIAG: skip vertex load/decode entirely. Fixed clip-space quad per valid-quad lane,
+        // offset by gl_LocalInvocationIndex so quads don't all overlap. If magenta squares
+        // appear across screen → vertex load/decode is the bug. Still red → pipeline itself.
+        float off = float(gl_LocalInvocationIndex) * 0.01;
+        pV0 = vec4(-0.1 + off, -0.1 + off, 0.5, 1.0);
+        pV1 = vec4( 0.1 + off, -0.1 + off, 0.5, 1.0);
+        pV2 = vec4( 0.1 + off,  0.1 + off, 0.5, 1.0);
+        pV3 = vec4(-0.1 + off,  0.1 + off, 0.5, 1.0);
+        V0 = V1 = V2 = V3 = uvec4(0);
 
         //Compute the bounding pixels of the 2 triangles in the quad. note, vertex 0 and 2 are the common verticies
         vec2 ssmin = ((pV0.xy/pV0.w)+1)*screenSize;
