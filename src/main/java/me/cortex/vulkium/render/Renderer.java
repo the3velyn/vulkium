@@ -127,7 +127,11 @@ public final class Renderer {
 
         sceneUniform
             .mvp(mvp)
-            .chunkPosition(cx, cy, cz, 0)
+            // nvidium convention: chunkPosition is stored in (X, Z, Y) order so that the
+            // shader's `chunk -= chunkPosition.xyz` subtraction matches the axis order of
+            // `ivec3(header.xyz) >> 8` (which is (chunkX, chunkZ, chunkY) per scene.glsl's
+            // Section struct comment).
+            .chunkPosition(cx, cz, cy, 0)
             .subchunkOffset(fx, fy, fz, 0.0f)
             .fogColour(0, 0, 0, 0)
             // Buffer-reference pointers populated as each subsystem lands its buffers.
