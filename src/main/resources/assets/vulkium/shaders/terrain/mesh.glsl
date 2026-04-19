@@ -95,9 +95,9 @@ void main() {
         // If we see triangles, MVP is valid. If red only, reading MVP kills the shader.
         float px = clamp(MVP[0][0] * 0.5, -0.9, 0.9);
         float py = clamp(MVP[1][1] * 0.5, -0.9, 0.9);
-        gl_MeshVerticesEXT[0].gl_Position = vec4(px - 0.01, py - 0.01, 0.5, 1.0);
-        gl_MeshVerticesEXT[1].gl_Position = vec4(px + 0.01, py - 0.01, 0.5, 1.0);
-        gl_MeshVerticesEXT[2].gl_Position = vec4(px,        py + 0.01, 0.5, 1.0);
+        gl_MeshVerticesEXT[0].gl_Position = vec4(px - 0.08, py - 0.08, 0.5, 1.0);
+        gl_MeshVerticesEXT[1].gl_Position = vec4(px + 0.08, py - 0.08, 0.5, 1.0);
+        gl_MeshVerticesEXT[2].gl_Position = vec4(px,        py + 0.08, 0.5, 1.0);
         gl_PrimitiveTriangleIndicesEXT[0] = uvec3(0u, 1u, 2u);
         gl_MeshPrimitivesEXT[0].gl_PrimitiveID = 0;
     }
