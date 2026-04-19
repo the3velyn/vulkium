@@ -328,12 +328,21 @@ public final class Renderer {
      * 0,1,0,0 / 0,0,1,0 / 0,0,0,1) column-major.
      */
     private void seedIdentityTransformation(me.cortex.vulkium.vk.DeviceBuffer buf) {
-        long dst = uploadStream.upload(buf, 0L, 64);
-        org.lwjgl.system.MemoryUtil.memSet(dst, 0, 64);
-        org.lwjgl.system.MemoryUtil.memPutFloat(dst,       1.0f);
-        org.lwjgl.system.MemoryUtil.memPutFloat(dst + 20,  1.0f);
-        org.lwjgl.system.MemoryUtil.memPutFloat(dst + 40,  1.0f);
-        org.lwjgl.system.MemoryUtil.memPutFloat(dst + 60,  1.0f);
+        // Fill every transformation-array slot with identity, not just slot 0. Task shaders pick
+        // transformationId per region from regionData — until we actually drive per-region
+        // transforms, every index should still give a valid identity matrix. Slots left zeroed
+        // produce degenerate transforms and invisible geometry.
+        long size = buf.size();
+        int slots = (int) (size / 64L);
+        long dst = uploadStream.upload(buf, 0L, (int) size);
+        org.lwjgl.system.MemoryUtil.memSet(dst, 0, size);
+        for (int i = 0; i < slots; i++) {
+            long p = dst + (long) i * 64L;
+            org.lwjgl.system.MemoryUtil.memPutFloat(p,       1.0f);
+            org.lwjgl.system.MemoryUtil.memPutFloat(p + 20,  1.0f);
+            org.lwjgl.system.MemoryUtil.memPutFloat(p + 40,  1.0f);
+            org.lwjgl.system.MemoryUtil.memPutFloat(p + 60,  1.0f);
+        }
         uploadStream.commitFrame();
     }
 
