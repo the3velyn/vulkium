@@ -33,9 +33,10 @@ vec4 sampleLight(vec2 uv) {
 
 vec3 computeMultiplier(Vertex V) {
     vec4 tint = decodeVertexColour(V);
-    tint *= sampleLight(decodeLightUV(V));
-    tint *= tint.w;
-    return tint.xyz;
+    // TODO: multiply by sampleLight(decodeLightUV(V)) once tex_light is bound to MC's
+    // actual lightmap (currently bound to the block atlas as a placeholder). For now use
+    // vertex alpha (baked AO weight) to darken based on vertex occlusion.
+    return tint.xyz * tint.w;
 }
 
 
@@ -66,14 +67,19 @@ void main() {
     // Mesh shader emits triangles as:
     //   triSel=0: (V0, V1, V2) → bary (.x, .y, .z) maps to (V0, V1, V2)
     //   triSel=1: (V2, V3, V0) → bary (.x, .y, .z) maps to (V2, V3, V0)
+    // Assign V0/Vp/V2 globals for computeOutputColour(), matching the emitted tri's order:
+    //   triSel=0: tri vertices = (V0, V1, V2)
+    //   triSel=1: tri vertices = (V2, V3, V0)
     vec2 sampleUv;
     if (triSel == 0u) {
         Vertex V1 = terrainData.data[(quadId<<2)+1];
+        V0 = Vq0; Vp = V1; V2 = Vq2;
         sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
                  + gl_BaryCoordEXT.y * decodeVertexUV(V1)
                  + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
     } else {
         Vertex V3 = terrainData.data[(quadId<<2)+3];
+        V0 = Vq2; Vp = V3; V2 = Vq0;
         sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq2)
                  + gl_BaryCoordEXT.y * decodeVertexUV(V3)
                  + gl_BaryCoordEXT.z * decodeVertexUV(Vq0);
@@ -82,5 +88,8 @@ void main() {
     uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
     float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
     if (albedo.a <= cut) discard;
-    colour = albedo;
+
+    vec3 lit = albedo.rgb;
+    computeOutputColour(lit);
+    colour = vec4(lit, albedo.a);
 }
