@@ -104,9 +104,8 @@ public final class MojangAtlasTap {
                 .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                 .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                 .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                // maxLod must not exceed the atlas's actual mip count or NVIDIA may stall
-                // the GPU. The block atlas ships with 4 mip levels (indices 0..3).
-                .minLod(0f).maxLod(4f).mipLodBias(0f);
+                // Atlas actually has 5 mip levels (per texture info at runtime).
+                .minLod(0f).maxLod(5f).mipLodBias(0f);
             LongBuffer pSampler = stack.callocLong(1);
             int r = VK10.vkCreateSampler(MojangVulkanBridge.vkDevice(), info, null, pSampler);
             if (r != VK10.VK_SUCCESS) {
