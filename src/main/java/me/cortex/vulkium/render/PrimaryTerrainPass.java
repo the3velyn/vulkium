@@ -235,14 +235,11 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                 .push(cmd);
 
         if (atlasView != 0L && atlasSampler != 0L) {
-            // Use GENERAL layout — Mojang doesn't track texture layouts so the atlas may be in
-            // GENERAL, SHADER_READ_ONLY_OPTIMAL, or even TRANSFER_DST at our sample time.
-            // GENERAL is the most permissive and samples correctly from any valid image state.
             PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 1)
                     .combinedImageSampler(0, atlasView, atlasSampler,
-                            VK10.VK_IMAGE_LAYOUT_GENERAL)
+                            VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                     .combinedImageSampler(1, atlasView, atlasSampler,
-                            VK10.VK_IMAGE_LAYOUT_GENERAL)
+                            VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
                     .push(cmd);
         }
 
