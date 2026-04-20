@@ -42,13 +42,9 @@ public abstract class OptionsRenderDistanceMixin {
                         target = "Lnet/minecraft/client/OptionInstance$IntRange;<init>(IIZ)V"),
                index = 1,
                slice = @Slice(
-                   from = @At(value = "CONSTANT", args = "stringValue=options.simulationDistance"),
-                   // No explicit `to`: slice extends to end of method. The simulationDistance
-                   // IntRange is the only (I,I,Z) IntRange between that constant and the next
-                   // unrelated option's construction.
-                   to   = @At(value = "INVOKE",
-                              target = "Lnet/minecraft/client/OptionInstance;<init>(Ljava/lang/String;Lnet/minecraft/client/OptionInstance$TooltipSupplier;Lnet/minecraft/client/OptionInstance$CaptionBasedToString;Lnet/minecraft/client/OptionInstance$ValueSet;Ljava/lang/Object;Lnet/minecraft/client/OptionInstance$ValueUpdateListener;)V",
-                              ordinal = 0)
+                   from = @At(value = "CONSTANT", args = "stringValue=options.simulationDistance")
+                   // No explicit `to`: slice extends to end of method. The simulationDistance's
+                   // IntRange(IIZ) ctor is the first and only such call after that string.
                ))
     private int vulkium$extendSimulationDistanceMax(int originalMax) {
         return Math.max(originalMax, 128);
