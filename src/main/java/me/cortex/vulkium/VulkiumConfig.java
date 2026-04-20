@@ -47,7 +47,11 @@ public final class VulkiumConfig {
     public boolean drawTerrain = true;
 
     /** Whether HzbBuilder + MojangDepthTap run each frame. No-op until Mojang depth tap lands. */
-    public boolean enableHzb = true;
+    /** HZB pyramid build runs each frame at AFTER_OPAQUE_TERRAIN. Currently no consumer —
+     *  pyramid is built but never read. Turning on costs ~12 compute dispatches/frame for
+     *  no gain; flip to {@code true} once the HZB region-cull compute pass is wired (the
+     *  feature that actually cuts task-shader work on occluded geometry). */
+    public boolean enableHzb = false;
 
     /** Max sections the render thread drains from the ingest queue per frame. */
     public int drainPerFrame = 256;
