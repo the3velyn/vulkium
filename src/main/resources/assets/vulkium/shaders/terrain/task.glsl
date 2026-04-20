@@ -48,12 +48,12 @@ void main() {
 
     payload.origin = vec3(chunk << 4);
 
-    // renderRanges.w: low 16 = opaque quad count, high 16 = translucent quad count.
-    // Translucent quads are stored in the arena immediately after opaque quads, so
-    // translucent baseOffset = header.w + opaqueCount.
+    // renderRanges.w low 16 = opaque quad count (original semantic preserved;
+    // populateTasks reads ranges.w high 16 as its `fr` base offset — leaving that at 0).
+    // Translucent quad count lives in header.z bits 18-31 (14 bits).
     uvec4 ranges = uvec4(sectionData.data[sectionId].renderRanges);
     uint opaqueQuads = ranges.w & 0xFFFFu;
-    uint translucentQuads = (ranges.w >> 16) & 0xFFFFu;
+    uint translucentQuads = (uint(header.z) >> 18) & 0x3FFFu;
 
     #ifdef TRANSLUCENT_PASS
     payload.baseOffset = uint(header.w) + opaqueQuads;

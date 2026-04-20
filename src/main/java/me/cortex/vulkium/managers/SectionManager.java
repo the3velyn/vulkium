@@ -167,17 +167,24 @@ public final class SectionManager {
                         int opaqueQuads = Math.min(up.opaqueQuadCount, 0xFFFF);
                         int translucentQuads = Math.min(up.translucentQuadCount, 0xFFFF);
                         long ptr = regionManager.setSectionData(ref);
-                        // Full-section AABB (offsets=0, sizes=15 = covers 0..15).
+                        // header.xyz — chunk coords + face AABB. header.z packs translucent
+                        // quad count into bits 16-31 (bits 0-15 = chunk y + offset/size; bit
+                        // 17 was "hide-bit"). Using the high 16 bits avoids clobbering
+                        // populateTasks' `fr` starting-offset read of ranges.w>>16.
                         MemoryUtil.memPutInt(ptr,      (sx << 8) | 0xF0);
                         MemoryUtil.memPutInt(ptr +  4, (sz << 8) | 0xF0);
-                        MemoryUtil.memPutInt(ptr +  8, (sy << 8) | 0xF0);
+                        // header.z bits 8-16 = chunk.y (sign-extended 9-bit); bit 17 = hide-bit.
+                        // Translucent count occupies bits 18-31 (14 bits, max 16383 quads/section).
+                        MemoryUtil.memPutInt(ptr +  8,
+                            ((sy << 8) | 0xF0) | ((translucentQuads & 0x3FFF) << 18));
                         MemoryUtil.memPutInt(ptr + 12, addr);
-                        // renderRanges — .w low 16 = opaque quads, .w high 16 = translucent quads.
-                        // Translucent quads begin at (addr + opaqueQuads) in the arena.
+                        // renderRanges.w low 16 = opaque quads (the existing semantic —
+                        // unsigned-bin quad count). High 16 stays 0 so populateTasks' `fr`
+                        // base-offset read returns 0 as originally intended.
                         MemoryUtil.memPutInt(ptr + 16, 0);
                         MemoryUtil.memPutInt(ptr + 20, 0);
                         MemoryUtil.memPutInt(ptr + 24, 0);
-                        MemoryUtil.memPutInt(ptr + 28, opaqueQuads | (translucentQuads << 16));
+                        MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
                     }
                 }
             } catch (RuntimeException e) {
