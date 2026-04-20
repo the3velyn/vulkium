@@ -31,17 +31,10 @@ public abstract class LevelRendererProjMixin {
     @ModifyArg(
         method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
         at = @At(value = "INVOKE",
-                 target = "Lnet/minecraft/client/renderer/LevelRenderer;renderLevel"
-                        + "(Lcom/mojang/blaze3d/resource/GraphicsResourceAllocator;"
-                        + "Lnet/minecraft/client/DeltaTracker;"
-                        + "Z"
-                        + "Lnet/minecraft/client/renderer/state/level/CameraRenderState;"
-                        + "Lorg/joml/Matrix4fc;"
-                        + "Lcom/mojang/blaze3d/buffers/GpuBufferSlice;"
-                        + "Lorg/joml/Vector4f;"
-                        + "Z"
-                        + "Lnet/minecraft/client/renderer/chunk/ChunkSectionsToRender;)V"),
-        index = 4)
+                 target = "Lnet/minecraft/client/renderer/LevelRenderer;renderLevel(Lcom/mojang/blaze3d/resource/GraphicsResourceAllocator;Lnet/minecraft/client/DeltaTracker;ZLnet/minecraft/client/renderer/state/level/CameraRenderState;Lorg/joml/Matrix4fc;Lcom/mojang/blaze3d/buffers/GpuBufferSlice;Lorg/joml/Vector4f;ZLnet/minecraft/client/renderer/chunk/ChunkSectionsToRender;)V",
+                 remap = false),
+        index = 4,
+        remap = false)
     private Matrix4fc vulkium$captureFinalProjection(Matrix4fc projection) {
         BobViewTap.setProjection(projection);
         return projection;
