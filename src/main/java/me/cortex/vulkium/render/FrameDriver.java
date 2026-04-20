@@ -44,9 +44,11 @@ public final class FrameDriver {
         if (!Vulkium.isEnabled()) return;
         FRAMES.incrementAndGet();
 
-        // Clear last-frame's captured bob matrix so early-returning bobHurt/bobView (e.g. when
-        // the camera isn't a living/player entity) don't leave stale bobbing in our MVP.
-        me.cortex.vulkium.blaze3d.BobViewTap.invalidate();
+        // NB: the BobViewTap reset lives in GameRendererBobMixin at bobHurt HEAD, NOT here.
+        // Fabric's LevelRenderEvents.START_MAIN fires from inside LevelRenderer.renderLevel,
+        // which GameRenderer.renderLevel calls AFTER bobHurt+bobView have already captured this
+        // frame's pose. An invalidate() here would wipe their capture before FrameDriver.onEndMain
+        // reads it, leaving MVP without any bob contribution.
 
         // Initialize the renderer up-front so the ingest drain below has a live TerrainUploader
         // to hand sections to. prepareFrame also runs ensureInit, but it's gated on

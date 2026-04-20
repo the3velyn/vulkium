@@ -18,13 +18,23 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(GameRenderer.class)
 public abstract class GameRendererBobMixin {
 
-    @Inject(method = "bobView", at = @At("TAIL"))
-    private void vulkium$captureBobView(CameraRenderState cam, PoseStack pose, CallbackInfo ci) {
-        BobViewTap.set(pose.last().pose());
+    /** Reset BobViewTap at the HEAD of bobHurt — this is the first bob hook in
+     *  GameRenderer.renderLevel's bob sequence, which runs BEFORE Fabric's LevelRenderEvents
+     *  fire. Invalidating in FrameDriver.onStartMain would wipe out captures that already
+     *  happened this frame. Capturing the pose at TAIL of each bob method lets either bob's
+     *  accumulated matrix flow through to our MVP. */
+    @Inject(method = "bobHurt", at = @At("HEAD"))
+    private void vulkium$resetBobAtFrameStart(CameraRenderState cam, PoseStack pose, CallbackInfo ci) {
+        BobViewTap.invalidate();
     }
 
     @Inject(method = "bobHurt", at = @At("TAIL"))
     private void vulkium$captureBobHurt(CameraRenderState cam, PoseStack pose, CallbackInfo ci) {
+        BobViewTap.set(pose.last().pose());
+    }
+
+    @Inject(method = "bobView", at = @At("TAIL"))
+    private void vulkium$captureBobView(CameraRenderState cam, PoseStack pose, CallbackInfo ci) {
         BobViewTap.set(pose.last().pose());
     }
 }
