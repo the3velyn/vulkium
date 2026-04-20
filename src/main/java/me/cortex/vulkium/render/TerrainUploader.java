@@ -165,7 +165,9 @@ public final class TerrainUploader implements AutoCloseable {
         int opaqueVerts = 0;
         int translucentVerts = 0;
         try {
+            // Pass 1: non-TRANSLUCENT layers first — they land at `addr`.
             for (Map.Entry<ChunkSectionLayer, SectionEntry.LayerGeometry> e : entry.layers.entrySet()) {
+                if (e.getKey() == ChunkSectionLayer.TRANSLUCENT) continue;
                 SectionEntry.LayerGeometry geom = e.getValue();
                 if (geom == null) continue;
                 ByteBuffer src = geom.vertexBytes;
@@ -177,8 +179,19 @@ public final class TerrainUploader implements AutoCloseable {
                 long dstPtr = stream.upload(arena.buffer(), dstByteOffset, outBytes);
                 repackMcToCompact(src, dstPtr, vCount);
                 dstByteOffset += outBytes;
-                if (e.getKey() == ChunkSectionLayer.TRANSLUCENT) translucentVerts += vCount;
-                else opaqueVerts += vCount;
+                opaqueVerts += vCount;
+            }
+            // Pass 2: translucent layer — appended right after opaque so translucent draws
+            // index [addr + opaqueQuads, addr + totalQuads).
+            SectionEntry.LayerGeometry trans = entry.layers.get(ChunkSectionLayer.TRANSLUCENT);
+            if (trans != null && trans.vertexBytes != null && trans.vertexBytes.remaining() > 0
+                    && trans.vertexCount > 0) {
+                int vCount = trans.vertexCount;
+                int outBytes = vCount * VERTEX_STRIDE;
+                long dstPtr = stream.upload(arena.buffer(), dstByteOffset, outBytes);
+                repackMcToCompact(trans.vertexBytes, dstPtr, vCount);
+                dstByteOffset += outBytes;
+                translucentVerts += vCount;
             }
         } catch (RuntimeException ex) {
             if (newAlloc) {

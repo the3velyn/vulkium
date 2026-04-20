@@ -173,15 +173,19 @@ public final class SectionManager {
                         // populateTasks' `fr` starting-offset read of ranges.w>>16.
                         MemoryUtil.memPutInt(ptr,      (sx << 8) | 0xF0);
                         MemoryUtil.memPutInt(ptr +  4, (sz << 8) | 0xF0);
-                        MemoryUtil.memPutInt(ptr +  8, (sy << 8) | 0xF0);
+                        // header.z low 16 = sy<<8|size; high bits 18-31 carry translucentQuads
+                        // (14 bits = max 16383). Mask sy<<8 to bits 8-16 so negative sign-extension
+                        // doesn't clobber bits 17+.
+                        int syBits = (sy << 8) & 0x0001FF00;
+                        MemoryUtil.memPutInt(ptr +  8,
+                            0xF0 | syBits | ((translucentQuads & 0x3FFF) << 18));
                         MemoryUtil.memPutInt(ptr + 12, addr);
-                        // renderRanges.w low 16 = total quad count (pre-split semantic so
-                        // populateTasks stays intact while translucent is being debugged).
-                        int totalQuads = Math.min(opaqueQuads + translucentQuads, 0xFFFF);
+                        // renderRanges.w low 16 = opaque quad count (consumed by populateTasks'
+                        // unsigned-bin path). High 16 stays 0 so `fr = ranges.w>>16` = 0.
                         MemoryUtil.memPutInt(ptr + 16, 0);
                         MemoryUtil.memPutInt(ptr + 20, 0);
                         MemoryUtil.memPutInt(ptr + 24, 0);
-                        MemoryUtil.memPutInt(ptr + 28, totalQuads);
+                        MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
                     }
                 }
             } catch (RuntimeException e) {

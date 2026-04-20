@@ -38,6 +38,20 @@ public final class TranslucentSectionSorter implements AutoCloseable {
         this.buffer = DeviceBuffer.allocate((long) capacity * 2L);
         this.ids = new int[maxSections];
         this.dists = new int[maxSections];
+        // One-shot fill the entire buffer with 0xFFFF sentinel via a separate upload path —
+        // after this, per-frame sort() only writes the small prefix + a trailing sentinel so
+        // we don't churn 0.5 MB through the upload ring every frame.
+        seedSentinel();
+    }
+
+    private void seedSentinel() {
+        me.cortex.vulkium.vk.UploadStream tmp = me.cortex.vulkium.render.Renderer.get().uploadStream();
+        if (tmp == null) return;
+        long base = tmp.upload(buffer, 0L, capacity * 2);
+        for (int i = 0; i < capacity; i++) {
+            MemoryUtil.memPutShort(base + (long) i * 2L, (short) 0xFFFF);
+        }
+        tmp.commitFrame();
     }
 
     public long deviceAddress() { return buffer.deviceAddress(); }
@@ -100,17 +114,16 @@ public final class TranslucentSectionSorter implements AutoCloseable {
             dists[j + 1] = kD;
         }
 
-        // Stream the sort list to the device-addressable buffer via UploadStream. Writing the
-        // whole buffer each frame is fine at 1024 * 256 * 2 = 512KB.
-        int byteCount = capacity * 2;
+        // Stream only (n + 1) shorts: the actual sorted IDs + one trailing 0xFFFF sentinel.
+        // The rest of the buffer stays at 0xFFFF from the init-time seed. Minimizes per-frame
+        // staging-ring churn which otherwise collided with terrain uploads.
+        int writeCount = n + 1;
+        int byteCount = writeCount * 2;
         long base = stream.upload(buffer, 0L, byteCount);
         for (int i = 0; i < n; i++) {
             MemoryUtil.memPutShort(base + (long) i * 2L, (short) (ids[i] & 0xFFFF));
         }
-        // Fill remainder with 0xFFFF sentinel so out-of-range task dispatches no-op.
-        for (int i = n; i < capacity; i++) {
-            MemoryUtil.memPutShort(base + (long) i * 2L, (short) 0xFFFF);
-        }
+        MemoryUtil.memPutShort(base + (long) n * 2L, (short) 0xFFFF);
     }
 
     @Override
