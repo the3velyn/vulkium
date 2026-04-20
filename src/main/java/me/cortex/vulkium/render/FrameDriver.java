@@ -23,8 +23,10 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class FrameDriver {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/frame");
 
-    /** Max section-ingest drains per frame — caps latency when a big chunk batch lands at once. */
-    private static final int DRAIN_PER_FRAME = 256;
+    /** Max section-ingest drains per frame. Large cap because leaving sections in the queue
+     *  over multiple frames causes visible load stutter — vanilla renders nothing while
+     *  vulkium is the active terrain path, so unshown sections = black void until drained. */
+    private static final int DRAIN_PER_FRAME = 4096;
 
     private static final AtomicLong FRAMES = new AtomicLong();
 
