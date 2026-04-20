@@ -344,24 +344,36 @@ public final class FrameDriver {
             me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
             var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
             if (scene != null && camState != null) {
-                // Prefer the catch-all projection capture from LevelRendererProjMixin — that
-                // single Matrix4fc has bob + portal + nausea + screen-effect + mod distortions
-                // all composed in by MC. Fall back to `projection × pose × viewRotation` using
-                // the bob-only PoseStack capture if the LevelRenderer inject didn't apply at
-                // runtime for mapping reasons.
-                org.joml.Matrix4f mvp;
-                org.joml.Matrix4f captured = new org.joml.Matrix4f();
-                if (me.cortex.vulkium.blaze3d.BobViewTap.readProjection(captured)) {
-                    mvp = captured.mul(camState.viewRotationMatrix);
-                } else {
-                    org.joml.Matrix4f pose = new org.joml.Matrix4f();
-                    boolean havePose = me.cortex.vulkium.blaze3d.BobViewTap.readPose(pose);
-                    mvp = new org.joml.Matrix4f(camState.projectionMatrix);
-                    if (havePose) mvp.mul(pose);
-                    mvp.mul(camState.viewRotationMatrix);
-                }
+                // Bob-only MVP. The LevelRenderer catch-all projection mixin is applying
+                // (confirmed by absence of mixin errors) but multiplying its captured matrix
+                // with camState.viewRotationMatrix produced near-total terrain culling —
+                // almost no blocks visible from most angles. The captured projection arg
+                // evidently is NOT pre-composed with the bob pose the way the byte-code
+                // inspection suggested, so my `captured × viewRotation` composition was
+                // applying a non-sensical transform. Disabling that path and continuing with
+                // the bob-only MVP that was already working. Diagnostic prints the captured
+                // projection's first column (m00..m03) alongside camState.projectionMatrix's —
+                // if they're identical every frame, MC isn't folding bob into that arg and the
+                // catch-all strategy needs a different capture point.
+                org.joml.Matrix4f pose = new org.joml.Matrix4f();
+                boolean havePose = me.cortex.vulkium.blaze3d.BobViewTap.readPose(pose);
+                org.joml.Matrix4f mvp = new org.joml.Matrix4f(camState.projectionMatrix);
+                if (havePose) mvp.mul(pose);
+                mvp.mul(camState.viewRotationMatrix);
                 scene.mvp(mvp);
                 scene.flush();
+
+                // Once-per-N log to compare captured projection with camState.projectionMatrix.
+                org.joml.Matrix4f captured = new org.joml.Matrix4f();
+                if (me.cortex.vulkium.blaze3d.BobViewTap.readProjection(captured)) {
+                    long f = FRAMES.get();
+                    if (f <= 3 || f % 300 == 0) {
+                        LOGGER.info("proj-cap m00/m11/m22/m32 captured=[{} {} {} {}] camState=[{} {} {} {}]",
+                            captured.m00(), captured.m11(), captured.m22(), captured.m32(),
+                            camState.projectionMatrix.m00(), camState.projectionMatrix.m11(),
+                            camState.projectionMatrix.m22(), camState.projectionMatrix.m32());
+                    }
+                }
             }
             dispatchTerrainDraw();
         }

@@ -1,45 +1,49 @@
 package me.cortex.vulkium.mixin.camera;
 
-import com.mojang.blaze3d.buffers.GpuBufferSlice;
-import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import me.cortex.vulkium.blaze3d.BobViewTap;
-import net.minecraft.client.DeltaTracker;
-import net.minecraft.client.renderer.LevelRenderer;
-import net.minecraft.client.renderer.state.level.CameraRenderState;
-import org.joml.Matrix4fc;
-import org.joml.Vector4f;
+import net.minecraft.client.renderer.GameRenderer;
+import org.joml.Matrix4f;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
-import org.spongepowered.asm.mixin.injection.Inject;
-import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
+import org.spongepowered.asm.mixin.injection.ModifyArg;
 
 /**
- * Catch-all projection capture for vulkium's MVP.
+ * Catch-all capture of MC's view-space projection at the exact moment it's finalized.
  *
- * <p>Hooks {@code LevelRenderer.renderLevel} at HEAD and captures the projection argument —
- * that parameter already has every view-space effect baked in (bob, portal warp, nausea,
- * screen-effect-scale, mods/datapacks that tweak the composed projection). One mixin covers
- * every distortion source automatically.
+ * <p>Previous attempt targeted {@code LevelRenderer.renderLevel}'s 5th arg assuming it held
+ * the bob-composed projection. A deeper bytecode read of
+ * {@code GameRenderer.renderLevel} showed that arg is actually
+ * {@code camState.viewRotationMatrix}, not the projCopy — multiplying our captured matrix
+ * by viewRotation again produced a compound rotation, which collapsed almost all terrain
+ * to off-frustum positions (the "few blocks at specific angles" symptom).
  *
- * <p>The method is declared as {@code renderLevel} in MC 26.2 official mappings (per javap)
- * but Fabric's own {@code fabric-rendering-v1} mixin on the same method uses
- * {@code method=["render"]} in its {@code @Inject} annotation — likely the name Fabric
- * Loom's mixin AP expects before the dev-environment remap kicks in. Using the same name
- * so Loom's refmap generator resolves it the same way.
+ * <p>The REAL final projection is composed into a local {@code projCopy} Matrix4f:
+ * <ol>
+ *   <li>{@code projCopy = new Matrix4f(camState.projectionMatrix)}</li>
+ *   <li>{@code projCopy.mul(pose.last().pose())}  // bobHurt+bobView applied</li>
+ *   <li>portal spin rotate / scale / un-rotate</li>
+ *   <li>{@code projectionMatrixBuffer.getBuffer(projCopy)}  // converts Matrix4f → GpuBufferSlice</li>
+ *   <li>{@code RenderSystem.setProjectionMatrix(slice, PERSPECTIVE)}</li>
+ *   <li>{@code levelRenderer.renderLevel(..., viewRotationMatrix, ...)}  // passes viewRot, not projCopy</li>
+ * </ol>
+ * We hook step 4 — {@code @ModifyArg} on
+ * {@code ProjectionMatrixBuffer.getBuffer(Matrix4f)}'s single argument. The arg at that
+ * moment is projCopy with every view-space effect (bob + portal + nausea + any future /
+ * modded distortion) already composed. We sniff it, store it in {@link BobViewTap}, and
+ * return it unchanged so MC's rendering is undisturbed.
  */
-@Mixin(LevelRenderer.class)
+@Mixin(GameRenderer.class)
 public abstract class LevelRendererProjMixin {
 
-    @Inject(method = {"render", "renderLevel"}, at = @At("HEAD"))
-    private void vulkium$captureFinalProjection(GraphicsResourceAllocator allocator,
-                                                 DeltaTracker delta,
-                                                 boolean cullSpectator,
-                                                 CameraRenderState camera,
-                                                 Matrix4fc projection,
-                                                 GpuBufferSlice fogBuffer,
-                                                 Vector4f fogColor,
-                                                 boolean visualizeChunks,
-                                                 CallbackInfo ci) {
-        BobViewTap.setProjection(projection);
+    @ModifyArg(
+        method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
+        at = @At(value = "INVOKE",
+                 target = "Lnet/minecraft/client/renderer/ProjectionMatrixBuffer;"
+                        + "getBuffer(Lorg/joml/Matrix4f;)"
+                        + "Lcom/mojang/blaze3d/buffers/GpuBufferSlice;"),
+        remap = false)
+    private Matrix4f vulkium$captureComposedProjection(Matrix4f projCopy) {
+        BobViewTap.setProjection(projCopy);
+        return projCopy;
     }
 }
