@@ -227,8 +227,30 @@ public final class FrameDriver {
                         barIdx++;
                     }
                     bars.position(0);
+                    // Global buffer/memory barrier in addition to image layouts: UploadStream's
+                    // vkCmdCopyBuffer submissions run on the same queue BEFORE us, but cross-
+                    // submit execution order alone doesn't guarantee cache coherence between
+                    // TRANSFER writes and SHADER reads. Without this, task/mesh/fragment stages
+                    // occasionally read stale arena, sectionBuffer or regionBuffer data — the
+                    // symptom matches "new chunks render holes" (their freshly-uploaded headers
+                    // aren't visible yet) and the sporadic translucent artifacts (stale sort-list
+                    // entries). Cover both: transfer-dst writes AND host writes (our sort list
+                    // is host-mapped BDA; some GPUs still need an explicit host → device fence).
+                    org.lwjgl.vulkan.VkMemoryBarrier2.Buffer memBars = org.lwjgl.vulkan.VkMemoryBarrier2.calloc(1, stack);
+                    memBars.position(0).sType$Default()
+                        .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COPY_BIT
+                                    | org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_HOST_BIT)
+                        .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT
+                                     | org.lwjgl.vulkan.VK13.VK_ACCESS_2_HOST_WRITE_BIT)
+                        .dstStageMask(0x00000040 /* TASK_SHADER_BIT_EXT */
+                                    | 0x00000080 /* MESH_SHADER_BIT_EXT */
+                                    | org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
+                                    | org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT)
+                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_READ_BIT
+                                     | org.lwjgl.vulkan.VK13.VK_ACCESS_2_UNIFORM_READ_BIT);
                     org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd,
                         org.lwjgl.vulkan.VkDependencyInfo.calloc(stack).sType$Default()
+                            .pMemoryBarriers(memBars)
                             .pImageMemoryBarriers(bars));
 
                     // LOAD_OP_LOAD to preserve Mojang's sky/clouds composite. Our draws layer

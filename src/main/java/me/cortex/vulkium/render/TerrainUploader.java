@@ -343,11 +343,18 @@ public final class TerrainUploader implements AutoCloseable {
         int r = src.get(o + 12) & 0xFF;
         int g = src.get(o + 13) & 0xFF;
         int b = src.get(o + 14) & 0xFF;
-        int a = src.get(o + 15) & 0xFF; // MC encodes translucent-block transparency (water,
-                                         // glass panes, etc.) as vertex alpha — vanilla's
-                                         // rendertype_translucent outputs `color.a = tex.a *
-                                         // vertexColor.a`. Dropping this was making water render
-                                         // opaque (tex.a=1, our alpha=1 → no blend).
+        // MC encodes translucent-block transparency (water, glass panes) as vertex alpha —
+        // vanilla's rendertype_translucent outputs `color.a = tex.a * vertexColor.a`. Dropping
+        // this was making water render opaque (tex.a=1, our alpha=1 → no blend).
+        //
+        // The low 2 bits of our alpha byte land in v.y bits 16-17, which the mesh shader
+        // reads as `rawVertexAlphaCutoff` (0/1/2 → cut 0.0/0.1/0.5). For alpha values whose
+        // low 2 bits happen to be 1 or 2, the fragment shader then kills perfectly valid
+        // translucent fragments based on their texture alpha — water ended up rendering as
+        // speckled swiss cheese after more chunks loaded and different water vertices hit
+        // these bad alpha values. Clear the low 2 bits so cutoffIdx is always 0. Costs 2 bits
+        // of alpha precision (64 levels instead of 256), which is imperceptible for blend.
+        int a = src.get(o + 15) & 0xFC;
 
         float u = src.getFloat(o + 16);
         float w = src.getFloat(o + 20);
