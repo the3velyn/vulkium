@@ -67,7 +67,9 @@ void main() {
     vec2 uv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
             + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
             + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
+    // DIAG: sample middle of atlas — should have some color if binding works.
+    vec4 mid = texture(tex_diffuse, vec2(0.5, 0.5));
+    // DIAG: also sample at uv. Output as r=mid-center-sample g=uv.x b=uv.y
     vec4 albedo = texture(tex_diffuse, uv);
-    // DIAG: force alpha to 1, no discard. Shows raw sample color.
-    colour = vec4(albedo.rgb, 1.0);
+    colour = vec4(mid.r + albedo.r, uv.x, uv.y, 1.0);
 }
