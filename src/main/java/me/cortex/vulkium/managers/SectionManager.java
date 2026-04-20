@@ -308,6 +308,17 @@ public final class SectionManager {
      *  upload per resort, bounded by the number of translucent sections that MC re-sorted
      *  this frame (typically 0-few dozen on POV threshold crossings). */
     public int drainResorts(int limit) {
+        // Gate on the user-configurable sorting level. NONE/SECTIONS both skip the per-quad
+        // POV resort; only QUADS applies it. When gated off, we still need to drain the queue
+        // (the worker-side mixin is always-on — easier to drop here than to add a config
+        // check on the worker thread) so it doesn't grow unbounded as the player moves.
+        me.cortex.vulkium.config.TranslucencySortingLevel level =
+            me.cortex.vulkium.VulkiumConfig.get().translucencySortingLevel;
+        if (level != me.cortex.vulkium.config.TranslucencySortingLevel.QUADS) {
+            int dropped = 0;
+            while (resortQueue.poll() != null) dropped++;
+            return dropped;
+        }
         me.cortex.vulkium.render.Renderer renderer = me.cortex.vulkium.render.Renderer.get();
         me.cortex.vulkium.render.TerrainUploader uploader = renderer.terrainUploader();
         me.cortex.vulkium.vk.UploadStream stream = renderer.uploadStream();
@@ -325,5 +336,46 @@ public final class SectionManager {
             n++;
         }
         return n;
+    }
+
+    /**
+     * Region-keep-distance sweep. Matches nvidium's {@code region_keep_distance} semantics:
+     * evict live sections whose chunk X/Z is outside a square of radius {@code keepDistance+4}
+     * around {@code (cameraChunkX, cameraChunkZ)}. The +4 slack mirrors nvidium's
+     * {@code RenderPipeline.java:198} — it avoids evict-thrash at the exact RD boundary.
+     *
+     * <p>Special values (same as nvidium):
+     * <ul>
+     *   <li>{@code 32} — rely on MC's own unload to evict (this method early-returns; MC's
+     *       RenderSection rotating cache handles it via CompiledSectionMesh replacement).</li>
+     *   <li>{@code 256} — keep-all: this method is a no-op.</li>
+     * </ul>
+     *
+     * <p>Walks all live keys via a one-shot array snapshot (map-walk + evict would ConcurrentMod).
+     * Budget-bound by {@code maxEvictPerCall} so a huge live set doesn't stall the render
+     * thread — remaining work picks up on the next call.
+     *
+     * @return number of sections evicted in this call.
+     */
+    public int sweepKeepDistance(int cameraChunkX, int cameraChunkZ,
+                                 int keepDistance, int maxEvictPerCall) {
+        if (keepDistance == 32 || keepDistance >= 256) return 0;
+        final int radius = keepDistance + 4;
+        final int radiusSq = radius * radius;
+        // Snapshot keys so eviction can safely mutate the live map inside the loop.
+        long[] keys = live.keySet().toLongArray();
+        int evicted = 0;
+        for (long key : keys) {
+            if (evicted >= maxEvictPerCall) break;
+            int sx = net.minecraft.core.SectionPos.x(key);
+            int sz = net.minecraft.core.SectionPos.z(key);
+            int dx = sx - cameraChunkX;
+            int dz = sz - cameraChunkZ;
+            if (dx * dx + dz * dz > radiusSq) {
+                evict(key);
+                evicted++;
+            }
+        }
+        return evicted;
     }
 }

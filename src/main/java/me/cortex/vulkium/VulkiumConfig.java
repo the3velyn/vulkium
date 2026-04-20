@@ -2,6 +2,8 @@ package me.cortex.vulkium;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
+import me.cortex.vulkium.config.StatisticsLoggingLevel;
+import me.cortex.vulkium.config.TranslucencySortingLevel;
 import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,6 +63,60 @@ public final class VulkiumConfig {
 
     /** Max regions in the ledger. One region = 8×4×8 sections = 256 sections. */
     public int maxRegions = 1024;
+
+    // --- nvidium-parity tunables (for port parity) ----------------------------------------
+    //
+    // Field names match nvidium's snake_case JSON keys where possible, but kept camelCase in
+    // Java since GSON writes the field name verbatim (vulkium's config file uses camelCase
+    // throughout). Direct nvidium config file reuse is not supported — semantics only.
+
+    /**
+     * Section keep-distance in chunks. Matches nvidium's {@code region_keep_distance}.
+     * <ul>
+     *   <li>{@code 32} — vanilla behavior: evict out-of-RD sections as MC unloads them.</li>
+     *   <li>{@code 256} — keep everything. Matches vulkium's current (no-eviction) baseline
+     *       — safe default while the arena is sized for the worst case.</li>
+     *   <li>Any value in {@code (32, 256)} — keep sections within a square of that radius
+     *       around the camera; evict further ones on a periodic sweep.</li>
+     * </ul>
+     * Wired in {@link me.cortex.vulkium.managers.SectionManager#sweepKeepDistance}.
+     */
+    public int regionKeepDistance = 256;
+
+    /** Matches nvidium's {@code translucency_sorting_level}. Controls the resort path that
+     *  was just stabilized on 2026-04-20. Wired in {@code SectionManager.drainResorts} and
+     *  {@code Renderer.prepareFrame} (cross-section sort). */
+    public TranslucencySortingLevel translucencySortingLevel = TranslucencySortingLevel.QUADS;
+
+    /** Matches nvidium's {@code render_fog}. When false, the scene UBO's fog range is pushed
+     *  so far out that the fragment shader's fog factor clamps to 0 — effectively disables
+     *  fog for vulkium's terrain pass without touching the shader variant. */
+    public boolean renderFog = true;
+
+    /** Matches nvidium's {@code statistics_level}. Tracked but currently inert — F3 overlay
+     *  integration lands with V9. */
+    public StatisticsLoggingLevel statisticsLevel = StatisticsLoggingLevel.NONE;
+
+    /** Matches nvidium's {@code enable_temporal_coherence}. Inert until HZB temporal-coherence
+     *  pass lands (nvidium's 6-phase pipeline step 4 — vulkium currently runs phases 1-3). */
+    public boolean enableTemporalCoherence = false;
+
+    /** Matches nvidium's {@code async_bfs}. Inert — vulkium's visibility is GPU-driven via
+     *  task-shader culling, not a CPU BFS, so there's no async vs. sync tradeoff to expose. */
+    public boolean asyncBfs = false;
+
+    /** Matches nvidium's {@code automatic_memory}. Inert — vulkium currently uses a fixed
+     *  {@link #terrainArenaMb}. Auto-sizing based on {@code vmaGetHeapBudgets} is a follow-up. */
+    public boolean automaticMemory = false;
+
+    /** Matches nvidium's {@code max_geometry_memory}. Alias of {@link #terrainArenaMb} —
+     *  kept for config-file parity with nvidium users; the runtime reads {@link #terrainArenaMb}.
+     *  If you edit this value, also edit {@link #terrainArenaMb}. */
+    public int maxGeometryMemory = 256;
+
+    /** Matches nvidium's {@code extra_rd}. Inert until the view-distance extension mixin on
+     *  {@code GameRenderer.getRenderDistance} lands. */
+    public int extraRd = 0;
 
     public static VulkiumConfig get() {
         if (INSTANCE == null) {

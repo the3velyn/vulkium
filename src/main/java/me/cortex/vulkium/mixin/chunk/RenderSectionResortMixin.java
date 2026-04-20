@@ -3,7 +3,6 @@ package me.cortex.vulkium.mixin.chunk;
 import me.cortex.vulkium.managers.SectionManager;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.chunk.CompiledSectionMesh;
-import net.minecraft.client.renderer.chunk.SectionMesh;
 import net.minecraft.client.renderer.chunk.SectionRenderDispatcher;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.SectionPos;
@@ -45,7 +44,7 @@ public abstract class RenderSectionResortMixin {
     @Inject(method = "addSectionBuffersToUberBuffer",
             at = @At("HEAD"))
     private void vulkium$captureTranslucentResort(ChunkSectionLayer layer,
-                                                   SectionMesh mesh,
+                                                   CompiledSectionMesh mesh,
                                                    ByteBuffer vertexBuffer,
                                                    ByteBuffer indexBuffer,
                                                    CallbackInfoReturnable<Boolean> cir) {

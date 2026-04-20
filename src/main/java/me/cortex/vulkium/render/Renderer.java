@@ -96,13 +96,26 @@ public final class Renderer {
         // upload ring stays clean for chunk-mesh uploads). The shader picks this list up via
         // sortingRegionListPtr and redirects gl_WorkGroupID.x through it.
         long translucentSortPtr = 0L;
-        if (translucentSorter != null && rm != null) {
+        me.cortex.vulkium.config.TranslucencySortingLevel sortLevel =
+            me.cortex.vulkium.VulkiumConfig.get().translucencySortingLevel;
+        // NONE = skip cross-section sort entirely; SECTIONS/QUADS both compute the back-to-front
+        // order (QUADS additionally applies MC's POV resort inside each section via drainResorts).
+        if (translucentSorter != null && rm != null
+                && sortLevel != me.cortex.vulkium.config.TranslucencySortingLevel.NONE) {
             translucentSorter.sort(
                 me.cortex.vulkium.managers.SectionManager.get().translucentSectionKeys(),
                 rm,
                 me.cortex.vulkium.managers.SectionManager.get(),
                 cx, cy, cz);
             translucentSortPtr = translucentSorter.deviceAddress();
+        }
+
+        // Section-keep-distance sweep. Runs every 60 frames to amortize the live-map walk.
+        // Matches nvidium's region_keep_distance semantics — config default (256) is a no-op.
+        int keepDist = me.cortex.vulkium.VulkiumConfig.get().regionKeepDistance;
+        if (keepDist != 256 && keepDist != 32 && (FrameDriver.frameCount() % 60L) == 0L) {
+            me.cortex.vulkium.managers.SectionManager.get()
+                .sweepKeepDistance(cx, cz, keepDist, 128);
         }
         long sortListPtr = regionSorter != null && uploadStream != null
             ? regionSorter.uploadVisibleList(uploadStream, visibility)
