@@ -1,6 +1,8 @@
 package me.cortex.vulkium.gui;
 
 import me.cortex.vulkium.VulkiumConfig;
+import me.cortex.vulkium.config.StatisticsLoggingLevel;
+import me.cortex.vulkium.config.TranslucencySortingLevel;
 import net.minecraft.client.OptionInstance;
 import net.minecraft.client.Options;
 import net.minecraft.client.gui.screens.Screen;
@@ -75,6 +77,55 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
             intSlider("Max regions",
                 "Region-ledger capacity. One region = 8×4×8 sections. " + TIP_RESTART.getString(),
                 256, 4096, cfg.maxRegions, v -> cfg.maxRegions = v));
+
+        // --- nvidium-parity options --------------------------------------------------------
+        // Sliders here mirror nvidium's settings page so users coming from nvidium find the
+        // same knobs. Sliders that toggle an enum render the enum name in the label (e.g.
+        // "Translucency sort: QUADS") so the slider value is readable.
+
+        this.list.addSmall(
+            intSliderLabel("Region keep distance",
+                "Chunks to keep loaded around the camera. 32 = Vanilla (MC-driven unload). "
+                    + "256 = Keep All (never evict). Intermediate values sweep sections outside "
+                    + "(value+4) chunks every 60 frames.",
+                32, 256, cfg.regionKeepDistance,
+                v -> v == 32 ? "Vanilla" : (v == 256 ? "Keep All" : v + " chunks"),
+                v -> cfg.regionKeepDistance = v),
+            boolOption("Render fog",
+                "Apply MC-style fog in vulkium's terrain pass. Matches nvidium's render_fog.",
+                cfg.renderFog, v -> cfg.renderFog = v));
+
+        this.list.addSmall(
+            enumSlider("Translucency sort", TranslucencySortingLevel.class,
+                "NONE = no sort (cheapest, visually wrong). SECTIONS = cross-section back-to-front "
+                    + "only. QUADS = full (cross-section + POV-driven per-section resort).",
+                cfg.translucencySortingLevel,
+                v -> cfg.translucencySortingLevel = v),
+            enumSlider("Statistics level", StatisticsLoggingLevel.class,
+                "Granularity of periodic per-frame counter logging. Tracked but currently inert — "
+                    + "F3 overlay integration lands with V9.",
+                cfg.statisticsLevel,
+                v -> cfg.statisticsLevel = v));
+
+        this.list.addSmall(
+            boolOption("Temporal coherence",
+                "Reuse visibility across frames when camera/chunks didn't move. Inert until the "
+                    + "HZB temporal-coherence pass lands.",
+                cfg.enableTemporalCoherence, v -> cfg.enableTemporalCoherence = v),
+            boolOption("Async BFS",
+                "Run section-graph BFS on a worker thread. Inert — vulkium's visibility is GPU-driven "
+                    + "via task-shader culling, not CPU BFS.",
+                cfg.asyncBfs, v -> cfg.asyncBfs = v));
+
+        this.list.addSmall(
+            boolOption("Automatic memory",
+                "Auto-size the terrain arena from free VRAM at boot. Inert — vulkium currently uses "
+                    + "the fixed \"Terrain arena (MB)\" slider above.",
+                cfg.automaticMemory, v -> cfg.automaticMemory = v),
+            intSlider("Extra render distance",
+                "Chunks of additional view distance beyond MC's setting. Inert until the "
+                    + "GameRenderer.getRenderDistance mixin lands.",
+                0, 64, cfg.extraRd, v -> cfg.extraRd = v));
     }
 
     @Override
@@ -103,6 +154,35 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
             new OptionInstance.IntRange(min, max),
             initial,
             setter::accept);
+    }
+
+    /** Int slider with a custom label-from-value formatter (e.g. 32→"Vanilla", 256→"Keep All"). */
+    private static OptionInstance<Integer> intSliderLabel(String name, String tooltip,
+                                                          int min, int max, int initial,
+                                                          java.util.function.IntFunction<String> fmt,
+                                                          java.util.function.Consumer<Integer> setter) {
+        return new OptionInstance<>(
+            "vulkium.opt." + name,
+            OptionInstance.cachedConstantTooltip(Component.literal(tooltip)),
+            (label, value) -> Component.literal(name + ": " + fmt.apply(value)),
+            new OptionInstance.IntRange(min, max),
+            initial,
+            setter::accept);
+    }
+
+    /** Renders an enum as a slider whose label shows the enum constant name. Range 0..ordinal(max)
+     *  so MC's slider widget handles click-through-values cleanly. */
+    private static <T extends Enum<T>> OptionInstance<Integer> enumSlider(
+            String name, Class<T> cls, String tooltip, T initial,
+            java.util.function.Consumer<T> setter) {
+        T[] values = cls.getEnumConstants();
+        return new OptionInstance<>(
+            "vulkium.opt." + name,
+            OptionInstance.cachedConstantTooltip(Component.literal(tooltip)),
+            (label, v) -> Component.literal(name + ": " + values[Math.floorMod(v, values.length)].name()),
+            new OptionInstance.IntRange(0, values.length - 1),
+            initial.ordinal(),
+            v -> setter.accept(values[Math.floorMod(v, values.length)]));
     }
 
     /** Used by the Video Settings mixin to construct us without importing from a mixin package. */
