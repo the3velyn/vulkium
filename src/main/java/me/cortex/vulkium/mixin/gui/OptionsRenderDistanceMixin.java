@@ -2,8 +2,6 @@ package me.cortex.vulkium.mixin.gui;
 
 import net.minecraft.client.Options;
 import net.minecraft.client.OptionInstance;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.ModifyArg;
@@ -25,7 +23,6 @@ import org.spongepowered.asm.mixin.injection.Slice;
  */
 @Mixin(Options.class)
 public abstract class OptionsRenderDistanceMixin {
-    private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/rd");
 
     @ModifyArg(method = "<init>",
                at = @At(value = "INVOKE",
@@ -36,8 +33,6 @@ public abstract class OptionsRenderDistanceMixin {
                    to   = @At(value = "CONSTANT", args = "stringValue=options.simulationDistance")
                ))
     private int vulkium$extendRenderDistanceMax(int originalMax) {
-        int v = Math.max(originalMax, 128);
-        LOGGER.info("Options: render-distance slider max raised {} -> {}", originalMax, v);
-        return v;
+        return Math.max(originalMax, 128);
     }
 }
