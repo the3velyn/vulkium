@@ -1,9 +1,14 @@
 package me.cortex.vulkium.mixin.world;
 
 import net.minecraft.server.level.ChunkMap;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.spongepowered.asm.mixin.Mixin;
+import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Constant;
+import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.ModifyConstant;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * Raises MC's hard-coded server view-distance ceiling from 32 to 128 so integrated-server
@@ -17,10 +22,21 @@ import org.spongepowered.asm.mixin.injection.ModifyConstant;
  */
 @Mixin(ChunkMap.class)
 public abstract class ChunkMapViewDistanceMixin {
+    private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/rd");
+    private static int lastRequested = -1;
 
     @ModifyConstant(method = "setServerViewDistance",
                     constant = @Constant(intValue = 32))
     private int vulkium$raiseServerViewDistanceCap(int originalMax) {
         return 128;
+    }
+
+    @Inject(method = "setServerViewDistance", at = @At("HEAD"))
+    private void vulkium$logRequested(int requested, CallbackInfo ci) {
+        // Only log on change so normal play isn't noisy.
+        if (requested != lastRequested) {
+            LOGGER.info("ChunkMap.setServerViewDistance requested={} (prev={})", requested, lastRequested);
+            lastRequested = requested;
+        }
     }
 }
