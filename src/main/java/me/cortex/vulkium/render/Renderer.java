@@ -50,6 +50,7 @@ public final class Renderer {
     private int hzbHeight;
     private long hzbLastBuildNs;
     private boolean initFailed;
+    private int lastLoggedRd = -1;
 
     /** Upload-ring section size (bytes) × count. Balances per-frame peak upload vs memory. */
     private static final long UPLOAD_SECTION_BYTES = 16L * 1024 * 1024;   // 16 MB / frame peak
@@ -129,7 +130,18 @@ public final class Renderer {
         // SP, min(slider, serverRenderDistance) on MP), which is exactly what we want — vulkium
         // doesn't need to cull further out than MC is actually loading chunks.
         if (cam.cullFrustum != null && rm != null) {
-            int rd = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
+            net.minecraft.client.Options opts = net.minecraft.client.Minecraft.getInstance().options;
+            int rd = opts.getEffectiveRenderDistance();
+            // Diagnostic throttle: log first frame + every time the effective RD changes.
+            if (rd != lastLoggedRd) {
+                int sliderRd = opts.renderDistance().get();
+                lastLoggedRd = rd;
+                org.slf4j.LoggerFactory.getLogger("vulkium/rd").info(
+                    "render-thread RD: effective={} slider={} serverRenderDistance={}",
+                    rd, sliderRd,
+                    // Mirror MC's getEffectiveRenderDistance branch: >0 means server override active.
+                    (rd == sliderRd ? "inactive" : String.valueOf(rd)));
+            }
             visibility.update(cam.cullFrustum, cx, cy, cz, rd);
         }
 

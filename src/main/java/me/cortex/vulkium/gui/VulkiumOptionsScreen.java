@@ -38,7 +38,22 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
             boolOption("Vulkium enabled",
                 "Master switch. OFF hands rendering back to MC's vanilla terrain path (takes effect "
                     + "immediately; no restart needed). Default: ON.",
-                !cfg.forceDisable, v -> cfg.forceDisable = !v),
+                !cfg.forceDisable, v -> {
+                    cfg.forceDisable = !v;
+                    // Force MC to re-mark every section dirty and recompile. Without this,
+                    // sections that were already compiled while vulkium was suppressing MC's
+                    // draws don't re-render properly when MC takes over — MC's uber-buffer
+                    // still has their data but the dispatch path had stale state from our
+                    // renderGroup-cancel. The allChanged call on LevelExtractor forces a
+                    // full vanilla recompile, which both refills MC's state and triggers our
+                    // capture mixin on the way through (so vulkium gets fresh data too when
+                    // re-enabled).
+                    net.minecraft.client.Minecraft mc =
+                        net.minecraft.client.Minecraft.getInstance();
+                    if (mc != null && mc.levelExtractor != null) {
+                        mc.levelExtractor.allChanged();
+                    }
+                }),
             boolOption("HZB occlusion",
                 "Build the Hi-Z occlusion buffer each frame. No-op until depth tap lands.",
                 cfg.enableHzb, v -> cfg.enableHzb = v));
