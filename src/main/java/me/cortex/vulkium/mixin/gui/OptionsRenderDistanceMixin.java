@@ -8,18 +8,19 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 import org.spongepowered.asm.mixin.injection.Slice;
 
 /**
- * Raises the max of MC's built-in "Render Distance" slider from 32 (vanilla) / 16 (non-far)
- * to 128. Works by {@link ModifyArg}-ing the {@code max} argument of the
+ * Raises the max of MC's "Render Distance" and "Simulation Distance" sliders from
+ * 32/16 to 128, via two scoped {@link ModifyArg}s on the
  * {@code OptionInstance.IntRange(int,int,boolean)} constructor in {@link Options}'s
- * {@code <init>}, scoped via a {@link Slice} between the {@code "options.renderDistance"}
- * string constant and the {@code "options.simulationDistance"} one so we only touch the
- * RD slider's range (there are many other IntRanges in the same method).
+ * {@code <init>}. Slices scope each rewrite to its relevant slider so we don't touch
+ * unrelated IntRanges in the same method.
  *
- * <p>Singleplayer only in practice: the integrated server honors this and streams chunks
- * out to 128, but multiplayer servers still clamp to their own view-distance setting.
+ * <p>Why both: chunk streaming in MC 26.2's integrated server depends on simulation
+ * distance as well as view distance — chunks past simulation distance stay at a
+ * lower loaded-status that may not get sent to the client. Raising render alone
+ * expands the client's frustum but chunks don't keep up.
  *
- * <p>Using {@link Math#max} preserves MC's own max if it's ever bumped in a future snapshot
- * (so a 26.3-snapshot that ships a native 256-RD slider wouldn't get regressed to 128).
+ * <p>Singleplayer only in practice: the integrated server honors this, but multiplayer
+ * servers still clamp to their own settings.
  */
 @Mixin(Options.class)
 public abstract class OptionsRenderDistanceMixin {
@@ -33,6 +34,23 @@ public abstract class OptionsRenderDistanceMixin {
                    to   = @At(value = "CONSTANT", args = "stringValue=options.simulationDistance")
                ))
     private int vulkium$extendRenderDistanceMax(int originalMax) {
+        return Math.max(originalMax, 128);
+    }
+
+    @ModifyArg(method = "<init>",
+               at = @At(value = "INVOKE",
+                        target = "Lnet/minecraft/client/OptionInstance$IntRange;<init>(IIZ)V"),
+               index = 1,
+               slice = @Slice(
+                   from = @At(value = "CONSTANT", args = "stringValue=options.simulationDistance"),
+                   // No explicit `to`: slice extends to end of method. The simulationDistance
+                   // IntRange is the only (I,I,Z) IntRange between that constant and the next
+                   // unrelated option's construction.
+                   to   = @At(value = "INVOKE",
+                              target = "Lnet/minecraft/client/OptionInstance;<init>(Ljava/lang/String;Lnet/minecraft/client/OptionInstance$TooltipSupplier;Lnet/minecraft/client/OptionInstance$CaptionBasedToString;Lnet/minecraft/client/OptionInstance$ValueSet;Ljava/lang/Object;Lnet/minecraft/client/OptionInstance$ValueUpdateListener;)V",
+                              ordinal = 0)
+               ))
+    private int vulkium$extendSimulationDistanceMax(int originalMax) {
         return Math.max(originalMax, 128);
     }
 }
