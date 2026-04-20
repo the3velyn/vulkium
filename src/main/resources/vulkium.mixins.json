@@ -7,7 +7,7 @@
     "blaze3d.VulkanBackendMixin",
     "blaze3d.VulkanDeviceMixin",
     "chunk.CompiledSectionMeshMixin",
-    "chunk.CompileTaskMixin",
+    "chunk.SectionCompilerMixin",
     "chunk.RenderSectionMixin",
     "chunk.ChunkSectionsToRenderMixin",
     "gui.VideoSettingsScreenMixin",

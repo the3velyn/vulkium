@@ -49,9 +49,11 @@ void main() {
     ivec4 header = sectionData.data[sectionId].header;
     uint baseDataOffset = uint(header.w);
     ivec3 chunk = ivec3(header.xyz)>>8;
-    chunk.y &= 0x1ff;
-    chunk.y <<= 32-9;
-    chunk.y >>= 32-9;
+    // chunk.z holds chunkY in low 9 bits; mask + sign-extend to recover signed chunkY
+    // (bits above 16 in header.z are hide-bit + translucent-count pollution).
+    chunk.z &= 0x1ff;
+    chunk.z <<= 32-9;
+    chunk.z >>= 32-9;
     payload.originAndBaseData.xyz = vec3((chunk - chunkPosition.xyz)<<4);
 
 

@@ -53,7 +53,10 @@ public final class Renderer {
 
     /** Upload-ring section size (bytes) × count. Balances per-frame peak upload vs memory. */
     private static final long UPLOAD_SECTION_BYTES = 16L * 1024 * 1024;   // 16 MB / frame peak
-    private static final int  UPLOAD_SECTION_COUNT = 3;                   // triple-buffered
+    // Bump ring to 6 slices so heavy ingest bursts (render-distance change, F3+A) don't hit the
+    // mid-frame wraparound path in UploadStream nearly as often. The mid-frame commit in
+    // advanceSection is correct but involves a submit + flush, which is measurable overhead.
+    private static final int  UPLOAD_SECTION_COUNT = 6;
 
     private Renderer() {}
 
@@ -88,12 +91,19 @@ public final class Renderer {
         long sectionPtr = rm != null ? rm.sectionBufferAddress() : 0L;
         int regionCount = rm != null ? rm.regionCount() : 0;
         long terrainPtr = terrainUploader != null ? terrainUploader.arenaBuffer().deviceAddress() : 0L;
-        // Translucent section sort is currently disabled — the 0.5 MB DeviceBuffer write via
-        // UploadStream disrupted terrain uploads (arena offsets shifted by ~one chunk).
-        // Proper fix needs a host-visible persistent-mapped buffer with SHADER_DEVICE_ADDRESS
-        // that bypasses the staging ring entirely. Until then, translucent quads render in
-        // per-section arena order — acceptable artifacts at close-range overlapping glass.
+        // Translucent section sort: CPU-side back-to-front, writes GPU-compact section IDs
+        // directly into a host-mapped BDA staging buffer (no UploadStream round-trip, so the
+        // upload ring stays clean for chunk-mesh uploads). The shader picks this list up via
+        // sortingRegionListPtr and redirects gl_WorkGroupID.x through it.
         long translucentSortPtr = 0L;
+        if (translucentSorter != null && rm != null) {
+            translucentSorter.sort(
+                me.cortex.vulkium.managers.SectionManager.get().translucentSectionKeys(),
+                rm,
+                me.cortex.vulkium.managers.SectionManager.get(),
+                cx, cy, cz);
+            translucentSortPtr = translucentSorter.deviceAddress();
+        }
         long sortListPtr = regionSorter != null && uploadStream != null
             ? regionSorter.uploadVisibleList(uploadStream, visibility)
             : 0L;
@@ -181,6 +191,15 @@ public final class Renderer {
     public PrimaryTerrainPass primaryTerrain() { return primaryTerrain; }
     public TerrainUploader terrainUploader() { return terrainUploader; }
     public UploadStream uploadStream() { return uploadStream; }
+
+    /** Public gate for FrameDriver — initializes the renderer eagerly on first frame even
+     *  when drawTerrain / enableHzb / F3-overlay are all off. Without this, drainPending
+     *  silently drops the first batch of compiled sections because {@code terrainUploader}
+     *  hasn't been created yet, and those sections never come back until MC re-ingests
+     *  them (via a block edit or F3+A). */
+    public void ensureReady() {
+        ensureInit();
+    }
     public HzbTexture hzbTexture() { return hzbTexture; }
     public long hzbLastBuildNs() { return hzbLastBuildNs; }
 
@@ -277,9 +296,10 @@ public final class Renderer {
 
             LOGGER.info(
                 "Renderer initialized: SceneUniform({}B) + VisibilityTracker + UploadStream({}MB×{}) + "
-                    + "RegionSorter + PrimaryTerrainPass + TerrainUploader(128MB arena) + "
+                    + "RegionSorter + PrimaryTerrainPass + TerrainUploader({}MB arena) + "
                     + "transformationBuffer(identity) + originBuffer.",
-                SceneUniform.SCENE_UBO_SIZE, UPLOAD_SECTION_BYTES / (1024 * 1024), UPLOAD_SECTION_COUNT);
+                SceneUniform.SCENE_UBO_SIZE, UPLOAD_SECTION_BYTES / (1024 * 1024), UPLOAD_SECTION_COUNT,
+                terrainUploader.arena().allocatedMB());
         } catch (Throwable t) {
             LOGGER.error("Renderer init failed (marking as failed, vulkium rendering paths will no-op)", t);
             initFailed = true;

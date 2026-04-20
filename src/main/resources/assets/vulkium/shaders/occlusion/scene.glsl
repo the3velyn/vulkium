@@ -15,9 +15,12 @@
 // Packed section header. Laid out for section rasterizer cache hit rate.
 struct Section {
     ivec4 header;
+    // Vulkium packing (matches SectionManager.ingest, corrects the swapped Y/Z in the
+    // nvidium-inherited comment — nvidium's own scene.glsl comment lies about its code;
+    // this comment matches what's actually written and read).
     //Header.x -> 0-3=offsetx 4-7=sizex 8-31=chunk x
-    //Header.y -> 0-3=offsetz 4-7=sizez 8-31=chunk z 18-25=local-section-id-post-sort
-    //Header.z -> 0-3=offsety 4-7=sizey 8-15=chunk y  17=hide-bit
+    //Header.y -> 0-3=offsetz 4-7=sizez 8-31=chunk z   18-25=local-section-id-post-sort
+    //Header.z -> 0-3=offsety 4-7=sizey 8-16=chunk y   17=hide-bit   18-31=translucent quad count (14 bits)
     //Header.w -> quad offset
     ivec4 renderRanges;
 };
@@ -78,8 +81,11 @@ layout(buffer_reference, std430, buffer_reference_align=8) writeonly restrict bu
     uvec2 data[];
 };
 
-layout(buffer_reference, std430, buffer_reference_align=2) readonly restrict buffer SortingRegionListPtr {
-    uint16_t data[];
+// uint32 per entry — a GPU-compact section index that must hold values up to
+// (maxRegions-1)<<8 | 0xFF = 262143 for maxRegions=1024, which exceeds uint16 range.
+// CPU writer is TranslucentSectionSorter.sort(); sentinel 0xFFFFFFFF = "no section".
+layout(buffer_reference, std430, buffer_reference_align=4) readonly restrict buffer SortingRegionListPtr {
+    uint data[];
 };
 
 layout(buffer_reference, std430, buffer_reference_align=16) restrict buffer TerrainDataPtr {

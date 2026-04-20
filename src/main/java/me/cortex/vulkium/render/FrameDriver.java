@@ -44,6 +44,14 @@ public final class FrameDriver {
         if (!Vulkium.isEnabled()) return;
         FRAMES.incrementAndGet();
 
+        // Initialize the renderer up-front so the ingest drain below has a live TerrainUploader
+        // to hand sections to. prepareFrame also runs ensureInit, but it's gated on
+        // drawTerrain / enableHzb / F3-overlay — without this eager call, sections compiled
+        // during the first few frames (before the user opens F3 or flips a toggle) would be
+        // popped from the ingest queue with a null uploader and silently dropped, leaving
+        // those chunks invisible until MC re-issued them via a block edit or F3+A.
+        Renderer.get().ensureReady();
+
         // Ingest queue drain: move captured compile results from worker threads into the
         // render-thread-owned live section table + region ledger. MUST run every frame —
         // this is the only path from MC's worker-thread captures to our live state.

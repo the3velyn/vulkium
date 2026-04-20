@@ -21,8 +21,20 @@ bool shouldRenderVisible(uint sectionId) {
 
 void main() {
     uint sectionId = gl_WorkGroupID.x;
-    // Translucent back-to-front sort is disabled until the host-visible BDA path lands;
-    // translucent pass uses direct section order for now (same as opaque dispatch).
+    #ifdef TRANSLUCENT_PASS
+    // Back-to-front redirect: the CPU fills `sortingRegionList` with GPU-compact section IDs
+    // ordered farthest-first, terminated/padded with 0xFFFFFFFF. If the list is unavailable
+    // (null pointer), the dispatch falls back to linear section order. When redirected, the
+    // new sectionId is the one read for all subsequent header/ranges accesses below.
+    if (uint64_t(sortingRegionList) != 0ul) {
+        uint redirected = sortingRegionList.data[sectionId];
+        if (redirected == 0xFFFFFFFFu) {
+            EmitMeshTasksEXT(0, 1, 1);
+            return;
+        }
+        sectionId = redirected;
+    }
+    #endif
 
     if (!shouldRenderVisible(sectionId)) {
         EmitMeshTasksEXT(0, 1, 1);
@@ -31,9 +43,16 @@ void main() {
 
     ivec4 header = sectionData.data[sectionId].header;
     ivec3 chunk = ivec3(header.xyz) >> 8;
-    chunk.y &= 0x1ff;
-    chunk.y <<= 32 - 9;
-    chunk.y >>= 32 - 9;
+    // chunk.x = chunkX (24-bit signed, full) from header.x>>8 — done, arithmetic shift sign-extends.
+    // chunk.y = chunkZ (24-bit signed, full) from header.y>>8 — done.
+    // chunk.z = chunkY in low 9 bits from header.z>>8, PLUS high bits polluted by hide-bit (17)
+    //          and translucent-quad-count (bits 18-31 of header.z, which land at bits 10-23 of
+    //          chunk.z after the shift). Mask to 9 bits and sign-extend so chunk.z holds chunkY.
+    //          (nvidium's shader masks `chunk.y` here, but that's chunkZ in its layout; the fix
+    //           is on chunk.z for our pack order header.z=chunkY.)
+    chunk.z &= 0x1ff;
+    chunk.z <<= 32 - 9;
+    chunk.z >>= 32 - 9;
     chunk -= chunkPosition.xyz;
     payload.transformationId = unpackRegionTransformId(regionData.data[sectionId >> 8]);
     chunk -= unpackOriginOffsetId(payload.transformationId);

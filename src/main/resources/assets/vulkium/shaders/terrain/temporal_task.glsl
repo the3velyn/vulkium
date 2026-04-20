@@ -37,9 +37,11 @@ void main() {
 
     ivec4 header = sectionData.data[sectionId].header;
     ivec3 chunk = ivec3(header.xyz)>>8;
-    chunk.y &= 0x1ff;
-    chunk.y <<= 32-9;
-    chunk.y >>= 32-9;
+    // chunk.z holds chunkY in low 9 bits (bits 8-16 of header.z), with pollution above
+    // from the hide-bit and translucent count. Mask + sign-extend to recover signed chunkY.
+    chunk.z &= 0x1ff;
+    chunk.z <<= 32-9;
+    chunk.z >>= 32-9;
     chunk -= chunkPosition.xyz;
 
     payload.transformationId = unpackRegionTransformId(regionData.data[sectionId>>8]);
