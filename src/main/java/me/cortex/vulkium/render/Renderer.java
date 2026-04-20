@@ -93,9 +93,9 @@ public final class Renderer {
         // task shader indexes in place of gl_WorkGroupID.x. Far sections dispatch first so
         // their blended pixels land before closer sections blend over them.
         long translucentSortPtr = 0L;
-        if (translucentSorter != null) {
+        if (translucentSorter != null && uploadStream != null) {
             me.cortex.vulkium.managers.SectionManager smgr = me.cortex.vulkium.managers.SectionManager.get();
-            translucentSorter.sort(smgr.liveView(), rm, smgr, cx, cy, cz);
+            translucentSorter.sort(smgr.liveView(), rm, smgr, uploadStream, cx, cy, cz);
             translucentSortPtr = translucentSorter.deviceAddress();
         }
         long sortListPtr = regionSorter != null && uploadStream != null

@@ -2,11 +2,10 @@ package me.cortex.vulkium.render;
 
 import me.cortex.vulkium.managers.RegionManager;
 import me.cortex.vulkium.managers.SectionEntry;
-import me.cortex.vulkium.vk.StagingBuffer;
+import me.cortex.vulkium.vk.DeviceBuffer;
+import me.cortex.vulkium.vk.UploadStream;
 import net.minecraft.core.SectionPos;
 import org.lwjgl.system.MemoryUtil;
-
-import java.nio.ByteBuffer;
 
 /**
  * CPU-side per-section back-to-front sort for vulkium's translucent pass.
@@ -24,9 +23,8 @@ import java.nio.ByteBuffer;
  * the active range tells the task shader to emit zero mesh workgroups (out-of-bounds sentinel).
  */
 public final class TranslucentSectionSorter implements AutoCloseable {
-    /** uint16 per slot; sized to the worst-case section count across all regions. */
-    private final StagingBuffer buffer;
-    private final ByteBuffer mapped;
+    /** Device-addressable backing buffer. Uploaded via UploadStream each frame. */
+    private final DeviceBuffer buffer;
     private final int capacity;
 
     /** Reusable CPU-side scratch to avoid per-frame allocation: (sectionId, distanceSquared). */
@@ -37,8 +35,7 @@ public final class TranslucentSectionSorter implements AutoCloseable {
     public TranslucentSectionSorter(int maxRegions) {
         this.maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
         this.capacity = maxSections;
-        this.buffer = StagingBuffer.allocate((long) capacity * 2L);
-        this.mapped = buffer.mapped();
+        this.buffer = DeviceBuffer.allocate((long) capacity * 2L);
         this.ids = new int[maxSections];
         this.dists = new int[maxSections];
     }
@@ -60,6 +57,7 @@ public final class TranslucentSectionSorter implements AutoCloseable {
     public void sort(it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<SectionEntry> live,
                      RegionManager regionMgr,
                      me.cortex.vulkium.managers.SectionManager sectionMgr,
+                     UploadStream stream,
                      int cameraX, int cameraY, int cameraZ) {
         int n = 0;
         // Walk live sections; record (regionRef, distSq). Skip sections with no translucent content
@@ -102,17 +100,17 @@ public final class TranslucentSectionSorter implements AutoCloseable {
             dists[j + 1] = kD;
         }
 
-        // Write packed uint16 into the mapped staging buffer.
-        long base = MemoryUtil.memAddress(mapped);
+        // Stream the sort list to the device-addressable buffer via UploadStream. Writing the
+        // whole buffer each frame is fine at 1024 * 256 * 2 = 512KB.
+        int byteCount = capacity * 2;
+        long base = stream.upload(buffer, 0L, byteCount);
         for (int i = 0; i < n; i++) {
             MemoryUtil.memPutShort(base + (long) i * 2L, (short) (ids[i] & 0xFFFF));
         }
-        // Fill remainder with 0xFFFF sentinel so translucent task shader's out-of-range slots
-        // emit zero mesh workgroups.
+        // Fill remainder with 0xFFFF sentinel so out-of-range task dispatches no-op.
         for (int i = n; i < capacity; i++) {
             MemoryUtil.memPutShort(base + (long) i * 2L, (short) 0xFFFF);
         }
-        buffer.flush(0L, (long) capacity * 2L);
     }
 
     @Override
