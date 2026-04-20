@@ -105,13 +105,16 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .build();
 
             // Descriptor set 1: fragment-only combined-image-samplers for the terrain atlas and
-            // light texture. record() does not populate these — callers must push them before
-            // invoking record() via their own PushDescriptor against textureSetLayout().
+            // light texture. Push-descriptor — without this flag vkCmdPushDescriptorSetKHR is
+            // undefined per Vulkan spec and NVIDIA silently returns zeros from the sampler.
+            // Vulkan allows at most ONE set in a pipeline layout with the push bit; set=0 (UBO)
+            // has been working via driver leniency.
             texLayout = DescriptorSetLayout.builder()
                     .binding(0, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .binding(1, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
+                    .pushDescriptor(true)
                     .build();
 
             // Pipeline layout: both sets, no push constants (scene data travels via the UBO).
