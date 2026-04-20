@@ -68,8 +68,6 @@ void main() {
                   + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
                   + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
     vec4 albedo = texture(tex_diffuse, sampleUv);
-    uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
-    float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
-    if (albedo.a <= cut) discard;
-    colour = albedo;
+    // DIAG: force alpha=1, no discard.
+    colour = vec4(albedo.rgb, 1.0);
 }
