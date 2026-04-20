@@ -136,6 +136,7 @@ public final class FrameDriver {
             depthView = vkDepth.vkImageView();
             depthImage = vkDepth.texture().vkImage();
             depthFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkDepth.texture().getFormat());
+            logDispatchThrottled("Mojang depth: VkFormat={} view=0x{}", depthFormat, Long.toHexString(depthView));
         }
 
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();

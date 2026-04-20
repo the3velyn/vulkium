@@ -126,7 +126,9 @@ public final class MeshPipeline implements AutoCloseable {
                     .sType$Default()
                     .depthTestEnable(depthTest)
                     .depthWriteEnable(depthWrite)
-                    .depthCompareOp(VK10.VK_COMPARE_OP_LESS_OR_EQUAL)
+                    // MC 26.2 uses reverse-Z (near=1, far=0 in clip). Use GREATER_OR_EQUAL so
+                    // smaller depth values (farther) don't overwrite larger depth values (closer).
+                    .depthCompareOp(VK10.VK_COMPARE_OP_GREATER_OR_EQUAL)
                     .depthBoundsTestEnable(false)
                     .stencilTestEnable(false);
 
