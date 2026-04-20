@@ -35,7 +35,7 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
 
         this.list.addSmall(
             boolOption("Force disable",
-                "Force vulkium disabled regardless of GPU/feature probe.",
+                "Force vulkium disabled regardless of GPU/feature probe. Takes effect immediately — no restart needed.",
                 cfg.forceDisable, v -> cfg.forceDisable = v),
             boolOption("Draw terrain",
                 "Run vulkium's mesh-shader terrain draws. Off = vulkium observes + ingests only.",

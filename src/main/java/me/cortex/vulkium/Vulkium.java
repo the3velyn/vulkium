@@ -159,7 +159,14 @@ public final class Vulkium implements ClientModInitializer {
         }
     }
 
-    public static boolean isEnabled() { return enabled; }
+    /** Hot-reload aware: the live config's forceDisable flag takes effect immediately, so
+     *  toggling "Force disable" in Video Settings → Vulkium Options kills/resumes vulkium
+     *  without restarting MC. Still honors the boot-time hardware/driver probe — if the
+     *  probe failed at startup, enabled stays false regardless of config. */
+    public static boolean isEnabled() {
+        if (!enabled) return false;
+        return !VulkiumConfig.get().forceDisable;
+    }
 
     public static VulkanDetect.ProbeResult probe() { return probe; }
 
