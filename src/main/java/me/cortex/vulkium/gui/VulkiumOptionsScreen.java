@@ -106,14 +106,12 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
             boolOption("Automatic memory",
                 "Auto-size the terrain arena from free VRAM at boot. Inert — vulkium currently uses "
                     + "the fixed \"Terrain arena (MB)\" slider above.",
-                cfg.automaticMemory, v -> cfg.automaticMemory = v),
-            intSlider("Extra render distance",
-                "Chunks of additional view distance beyond MC's setting. Wired via "
-                    + "Options.getEffectiveRenderDistance mixin — extends MC's depthFar and "
-                    + "vulkium's region cull in lockstep. SINGLEPLAYER ONLY: on multiplayer the "
-                    + "server still caps how many chunks it sends, so the slider has no visible "
-                    + "effect past the server's view-distance setting.",
-                0, 96, cfg.extraRd, v -> cfg.extraRd = v));
+                cfg.automaticMemory, v -> cfg.automaticMemory = v));
+
+        // NOTE: "Extra render distance" used to live here. Removed — vulkium now extends MC's
+        // own render-distance slider up to 128 via OptionsRenderDistanceMixin, so the user
+        // just moves the vanilla RD slider in Video Settings. Simpler, one fewer knob, and
+        // it works for both server-driven and client-driven distance logic consistently.
     }
 
     @Override

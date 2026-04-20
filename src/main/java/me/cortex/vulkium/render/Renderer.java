@@ -125,9 +125,9 @@ public final class Renderer {
             : 0L;
 
         // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
-        // Uses getEffectiveRenderDistance() (not the raw slider) so our OptionsRenderDistanceMixin
-        // bumps this radius too — otherwise extraRd would extend the frustum but vulkium's own
-        // region cull would still clip at vanilla RD.
+        // getEffectiveRenderDistance() gives the server-clamped effective value (raw slider on
+        // SP, min(slider, serverRenderDistance) on MP), which is exactly what we want — vulkium
+        // doesn't need to cull further out than MC is actually loading chunks.
         if (cam.cullFrustum != null && rm != null) {
             int rd = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
             visibility.update(cam.cullFrustum, cx, cy, cz, rd);

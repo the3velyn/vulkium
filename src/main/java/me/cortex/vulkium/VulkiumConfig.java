@@ -115,8 +115,11 @@ public final class VulkiumConfig {
      *  If you edit this value, also edit {@link #terrainArenaMb}. */
     public int maxGeometryMemory = 256;
 
-    /** Matches nvidium's {@code extra_rd}. Inert until the view-distance extension mixin on
-     *  {@code GameRenderer.getRenderDistance} lands. */
+    /** Legacy — used to hold nvidium's {@code extra_rd}. Vulkium now raises MC's own RD slider
+     *  max to 128 via {@code OptionsRenderDistanceMixin}, so users set render distance in the
+     *  vanilla slider directly. Field kept (defaults to 0 and reads nothing) purely so existing
+     *  config files don't blow up with GSON complaints. Safe to delete from {@code vulkium.json}. */
+    @Deprecated
     public int extraRd = 0;
 
     public static VulkiumConfig get() {
