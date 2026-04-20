@@ -86,15 +86,32 @@ public final class FrameDriver {
         VulkiumConfig cfg = VulkiumConfig.get();
 
         // HZB build: tap Mojang's depth attachment (now fully populated after opaque terrain) +
-        // run the downsample chain. Cheap (~100µs at 1080p) and provides the occlusion buffer
-        // for future region/section visibility tests.
+        // run the downsample chain.
         if (cfg.enableHzb) {
             Renderer.get().buildHzb();
         }
 
-        // Terrain draw moved to onEndMain — AFTER_OPAQUE_TERRAIN fires mid-world-render so
-        // sky/entities/particles render AFTER and overwrite our output. END_MAIN fires after
-        // all world drawing, before HUD — giving us a stable attachment to write into.
+        if (!cfg.drawTerrain) return;
+        // Draw opaque HERE (MC's own opaque was cancelled by ChunkSectionsToRenderMixin). This
+        // is the vanilla position for opaque terrain — sky/entities/clouds/translucent come
+        // after and depth-test against our output. Critical for correct cloud/water layering:
+        // if opaque runs at END_MAIN instead, clouds draw first with empty depth and end up
+        // occluding our translucent at AFTER_TRANSLUCENT_TERRAIN.
+        Renderer r = Renderer.get();
+        me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
+        var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
+        if (scene != null && camState != null) {
+            updateMvpFromCamera(scene, camState);
+        }
+        me.cortex.vulkium.vk.UploadStream stream = r.uploadStream();
+        if (stream != null) {
+            try {
+                stream.commitFrame();
+            } catch (Throwable t) {
+                LOGGER.warn("UploadStream.commitFrame failed (opaque)", t);
+            }
+        }
+        dispatchTerrainDraw(true, false);
     }
 
     private static long lastDispatchLog = 0L;
@@ -382,30 +399,8 @@ public final class FrameDriver {
 
     private static void onEndMain(LevelRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
-        // Flush this frame's pending host → device copies into an actual command-buffer submit
-        // so the GPU sees the terrain arena writes + any scene-UBO-adjacent uploads before the
-        // next frame's draws consume them.
-        me.cortex.vulkium.vk.UploadStream stream = Renderer.get().uploadStream();
-        if (stream != null) {
-            try {
-                stream.commitFrame();
-            } catch (Throwable t) {
-                LOGGER.warn("UploadStream.commitFrame failed", t);
-            }
-        }
-        if (VulkiumConfig.get().drawTerrain) {
-            // Opaque draw at END_MAIN. Translucent was moved to AFTER_TRANSLUCENT_TERRAIN so
-            // it sits between clouds and weather (see onAfterTranslucentTerrain). The scene
-            // UBO may still be stale if AFTER_TRANSLUCENT_TERRAIN didn't fire (e.g. a vanilla
-            // mod cancelled it) — refresh it here for safety.
-            Renderer r = Renderer.get();
-            me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
-            var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
-            if (scene != null && camState != null) {
-                updateMvpFromCamera(scene, camState);
-            }
-            dispatchTerrainDraw(true, false);
-        }
+        // Draws moved to per-phase hooks: opaque at AFTER_OPAQUE_TERRAIN, translucent at
+        // AFTER_TRANSLUCENT_TERRAIN. END_MAIN is now just a tail-end anchor — no draws here.
     }
 
     public static long frameCount() { return FRAMES.get(); }
