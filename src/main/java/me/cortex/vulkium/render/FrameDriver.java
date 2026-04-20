@@ -101,7 +101,8 @@ public final class FrameDriver {
     private static boolean depthFormatLogged = false;
     private static boolean atlasInfoLogged = false;
 
-    private static void dispatchTerrainDraw() {
+    /** Split draw: opaque-only, translucent-only, or both in a single render pass. */
+    private static void dispatchTerrainDraw(boolean includeOpaque, boolean includeTranslucent) {
         Renderer r = Renderer.get();
         me.cortex.vulkium.render.PrimaryTerrainPass pass = r.primaryTerrain();
         me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
@@ -306,14 +307,18 @@ public final class FrameDriver {
                     sc.extent().set(fbW, fbH);
                     org.lwjgl.vulkan.VK10.vkCmdSetScissor(cmd, 0, sc);
 
-                    pass.record(cmd, scene, dispatchCount, false /* renderFog */,
-                                atlasViewFinal, atlasSamplerFinal,
-                                lightmapViewFinal, lightmapSamplerFinal);
-                    pass.recordTranslucent(cmd, scene, dispatchCount,
-                                atlasViewFinal, atlasSamplerFinal,
-                                lightmapViewFinal, lightmapSamplerFinal);
-                    logDispatchThrottled("draw: pass.record() issued pipeline={} dispatchCount={} atlas={}",
-                        Long.toHexString(pass.pipelineLayout().handle()), dispatchCount, atlasViewFinal != 0L);
+                    if (includeOpaque) {
+                        pass.record(cmd, scene, dispatchCount, false /* renderFog */,
+                                    atlasViewFinal, atlasSamplerFinal,
+                                    lightmapViewFinal, lightmapSamplerFinal);
+                    }
+                    if (includeTranslucent) {
+                        pass.recordTranslucent(cmd, scene, dispatchCount,
+                                    atlasViewFinal, atlasSamplerFinal,
+                                    lightmapViewFinal, lightmapSamplerFinal);
+                    }
+                    logDispatchThrottled("draw: opaque={} translucent={} dispatchCount={} atlas={}",
+                        includeOpaque, includeTranslucent, dispatchCount, atlasViewFinal != 0L);
 
                     org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(cmd);
                 }
@@ -326,7 +331,53 @@ public final class FrameDriver {
 
     private static void onAfterTranslucentTerrain(LevelRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
-        // V7 target: translucent mesh-shader pass goes here.
+        if (!VulkiumConfig.get().drawTerrain) return;
+        // Draw translucent HERE, not at END_MAIN. MC's cloud renderer fires between opaque and
+        // translucent in vanilla order; drawing translucent at END_MAIN (after clouds) was the
+        // plan but clouds were rendering OVER water. Moving the translucent draw to
+        // AFTER_TRANSLUCENT_TERRAIN places it exactly where MC's own translucent pass would sit —
+        // after clouds, before weather/particles — so our water / glass / ice depth-tests against
+        // the cloud depth already in the buffer and blends on top correctly.
+        //
+        // Opaque still runs at END_MAIN (sees sky+clouds already composited, uses depth-test to
+        // sort against them). Scene UBO with the final MVP is written at END_MAIN's start, so
+        // we need to update it here too before the translucent dispatch.
+        Renderer r = Renderer.get();
+        me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
+        var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
+        if (scene != null && camState != null) {
+            updateMvpFromCamera(scene, camState);
+        }
+        me.cortex.vulkium.vk.UploadStream stream = r.uploadStream();
+        if (stream != null) {
+            try {
+                stream.commitFrame();
+            } catch (Throwable t) {
+                LOGGER.warn("UploadStream.commitFrame failed (translucent)", t);
+            }
+        }
+        dispatchTerrainDraw(false, true);
+    }
+
+    /** Recompute the final MVP matrix (projection × pose × viewRotation) and push to the scene
+     *  UBO. Shared between the translucent and opaque draw hooks — the MVP needs to incorporate
+     *  MC's post-START_MAIN bob/distortion stack, which is only finalized once we reach the
+     *  per-group render hooks. */
+    private static void updateMvpFromCamera(me.cortex.vulkium.render.SceneUniform scene,
+                                             net.minecraft.client.renderer.state.level.CameraRenderState camState) {
+        org.joml.Matrix4f mvp;
+        org.joml.Matrix4f captured = new org.joml.Matrix4f();
+        if (me.cortex.vulkium.blaze3d.BobViewTap.readProjection(captured)) {
+            mvp = captured.mul(camState.viewRotationMatrix);
+        } else {
+            org.joml.Matrix4f pose = new org.joml.Matrix4f();
+            boolean havePose = me.cortex.vulkium.blaze3d.BobViewTap.readPose(pose);
+            mvp = new org.joml.Matrix4f(camState.projectionMatrix);
+            if (havePose) mvp.mul(pose);
+            mvp.mul(camState.viewRotationMatrix);
+        }
+        scene.mvp(mvp);
+        scene.flush();
     }
 
     private static void onEndMain(LevelRenderContext ctx) {
@@ -343,33 +394,17 @@ public final class FrameDriver {
             }
         }
         if (VulkiumConfig.get().drawTerrain) {
-            // Re-read the modelView matrix NOW (END_MAIN) so bobHurt/bobView/distortion that MC
-            // pushed onto the stack after START_MAIN are included. prepareFrame happens too
-            // early to see them. Update just the MVP slot in the scene UBO and reflush.
+            // Opaque draw at END_MAIN. Translucent was moved to AFTER_TRANSLUCENT_TERRAIN so
+            // it sits between clouds and weather (see onAfterTranslucentTerrain). The scene
+            // UBO may still be stale if AFTER_TRANSLUCENT_TERRAIN didn't fire (e.g. a vanilla
+            // mod cancelled it) — refresh it here for safety.
             Renderer r = Renderer.get();
             me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
             var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
             if (scene != null && camState != null) {
-                // Prefer the catch-all projCopy capture from
-                // GameRenderer#renderLevel → ProjectionMatrixBuffer.getBuffer. It already has
-                // bob + portal + nausea + any mod-injected view-space distortion composed in.
-                // Fall back to the bob-only pose capture if the mixin didn't apply for some
-                // reason (refmap / mapping mismatch).
-                org.joml.Matrix4f mvp;
-                org.joml.Matrix4f captured = new org.joml.Matrix4f();
-                if (me.cortex.vulkium.blaze3d.BobViewTap.readProjection(captured)) {
-                    mvp = captured.mul(camState.viewRotationMatrix);
-                } else {
-                    org.joml.Matrix4f pose = new org.joml.Matrix4f();
-                    boolean havePose = me.cortex.vulkium.blaze3d.BobViewTap.readPose(pose);
-                    mvp = new org.joml.Matrix4f(camState.projectionMatrix);
-                    if (havePose) mvp.mul(pose);
-                    mvp.mul(camState.viewRotationMatrix);
-                }
-                scene.mvp(mvp);
-                scene.flush();
+                updateMvpFromCamera(scene, camState);
             }
-            dispatchTerrainDraw();
+            dispatchTerrainDraw(true, false);
         }
     }
 
