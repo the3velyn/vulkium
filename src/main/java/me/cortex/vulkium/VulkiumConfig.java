@@ -55,8 +55,9 @@ public final class VulkiumConfig {
     /** Upload ring section count (frames in flight). */
     public int uploadSectionCount = 3;
 
-    /** Terrain arena size in MB. */
-    public int terrainArenaMb = 128;
+    /** Terrain arena size in MB. Sized for 32-chunk RD with per-block-edit churn headroom;
+     *  undersizing causes section ingests to hit SIZE_LIMIT and leave stale GPU headers. */
+    public int terrainArenaMb = 256;
 
     /** Max regions in the ledger. One region = 8×4×8 sections = 256 sections. */
     public int maxRegions = 1024;

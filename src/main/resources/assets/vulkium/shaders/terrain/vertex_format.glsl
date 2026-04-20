@@ -21,7 +21,10 @@ vec3 decodeVertexPosition(Vertex v) {
 
 vec4 decodeVertexColour(Vertex v) {
     uvec3 packed_color = (uvec3(v.z) >> uvec3(0, 8, 16)) & uvec3(0xFFu);
-    return vec4(vec3(packed_color) * COLOR_SCALE, 1);
+    // v.y bits 16-23 carry the vertex alpha byte. Vanilla's translucent fragment output is
+    // `color.a = tex.a * vertexColor.a` — water & other translucent blocks rely on this.
+    float a = float((v.y >> 16) & 0xFFu) * COLOR_SCALE;
+    return vec4(vec3(packed_color) * COLOR_SCALE, a);
 }
 
 vec2 decodeVertexUV(Vertex v) {

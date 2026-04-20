@@ -30,19 +30,22 @@ vec4 sampleLight(vec2 uv) {
     return vec4(texture(tex_light, uv).rgb, 1);
 }
 
-vec3 computeMultiplier(Vertex V) {
+vec4 computeMultiplier(Vertex V) {
     vec4 tint = decodeVertexColour(V);
     tint.rgb *= sampleLight(decodeLightUV(V)).rgb;
-    return tint.xyz * tint.w;
+    return tint; // rgb = lit tint, a = vertex alpha (propagated for translucent blending)
 }
 
 
 Vertex V0;
 Vertex Vp;
 Vertex V2;
-void computeOutputColour(inout vec3 colour) {
-    vec3 multiplier = gl_BaryCoordEXT.x*computeMultiplier(V0) + gl_BaryCoordEXT.y*computeMultiplier(Vp) + gl_BaryCoordEXT.z*computeMultiplier(V2);
-    colour *= multiplier;
+/** Combined color + alpha multiplier: out.rgb = lit tint (texture-color scalar),
+ *  out.a = interpolated vertex alpha. Matches vanilla terrain's `sample * vertexColor`. */
+vec4 interpolateMultiplier() {
+    return gl_BaryCoordEXT.x*computeMultiplier(V0)
+         + gl_BaryCoordEXT.y*computeMultiplier(Vp)
+         + gl_BaryCoordEXT.z*computeMultiplier(V2);
 }
 
 #ifdef RENDER_FOG
@@ -86,7 +89,7 @@ void main() {
     float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
     if (albedo.a <= cut) discard;
 
-    vec3 lit = albedo.rgb;
-    computeOutputColour(lit);
-    colour = vec4(lit, albedo.a);
+    vec4 multiplier = interpolateMultiplier();
+    // vanilla rendertype_translucent: fragColor = texSample * vertexColor (rgb AND a).
+    colour = vec4(albedo.rgb * multiplier.rgb, albedo.a * multiplier.a);
 }

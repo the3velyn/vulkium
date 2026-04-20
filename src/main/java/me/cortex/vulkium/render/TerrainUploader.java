@@ -51,11 +51,10 @@ public final class TerrainUploader implements AutoCloseable {
     /** Nvidium texture UV scale: packed = uv * 32768. Matches TEXTURE_MAX_SCALE in vertex_format.glsl. */
     private static final float UV_SCALE      = 32768f;
 
-    /**
-     * 128 MB — enough for roughly 8 million quads, which comfortably covers a 16-chunk render
-     * distance with margin for overdraw regions.
-     */
-    private static final long DEFAULT_ARENA_SIZE = 128L << 20;
+    /** Fallback arena size if the config's {@code terrainArenaMb} is unreadable. 256 MB gives
+     *  ~16M-quad capacity — enough headroom for a 32-chunk RD with per-section churn during
+     *  block edits without hitting the SIZE_LIMIT branch. */
+    private static final long FALLBACK_ARENA_SIZE = 256L << 20;
 
     private final BufferArena arena;
 
@@ -68,7 +67,14 @@ public final class TerrainUploader implements AutoCloseable {
         // SIZE_LIMIT == -1 is the sentinel returned by allocQuads when full; use it as the
         // Long2IntOpenHashMap "missing" default so a raw get() disambiguates naturally.
         this.sectionToAddr.defaultReturnValue((int) SegmentedManager.SIZE_LIMIT);
-        this.arena = new BufferArena(DEFAULT_ARENA_SIZE, VERTEX_STRIDE);
+        long arenaSize = FALLBACK_ARENA_SIZE;
+        try {
+            int mb = me.cortex.vulkium.VulkiumConfig.get().terrainArenaMb;
+            if (mb > 0) arenaSize = (long) mb << 20;
+        } catch (Throwable ignored) {
+            // config not yet initialized — stick with fallback
+        }
+        this.arena = new BufferArena(arenaSize, VERTEX_STRIDE);
     }
 
     /**
@@ -136,19 +142,27 @@ public final class TerrainUploader implements AutoCloseable {
             return UploadResult.FULL;
         }
 
-        // 2. Reuse existing slot if the quad count matches, else free + re-alloc.
+        // 2. Reuse existing slot if the quad count matches, else alloc-then-free.
+        // Critical ordering: allocate the new slot BEFORE freeing the old one. If we free
+        // first and the arena is full, the subsequent alloc fails (SIZE_LIMIT) and we'd return
+        // UploadResult.FULL leaving the section's GPU header.w pointing at the freed slot —
+        // which another section will promptly reuse, scrambling the first section's render
+        // (symptom: placing a block in a chunk that pushes the arena to full instantly hides
+        // that chunk). Keeping the old slot live when alloc fails preserves last-known-good
+        // rendering until either memory frees up or the section is evicted.
         int existing = sectionToAddr.get(sectionPosKey);
         int addr;
         if (existing != (int) SegmentedManager.SIZE_LIMIT && arena.canReuse(existing, quadCount)) {
             addr = existing;
         } else {
-            if (existing != (int) SegmentedManager.SIZE_LIMIT) {
-                arena.free(existing);
-                sectionToAddr.remove(sectionPosKey);
-            }
             addr = arena.allocQuads(quadCount);
             if (addr == (int) SegmentedManager.SIZE_LIMIT) {
+                // Arena full — DO NOT free `existing`; keep the old slot valid so the GPU
+                // keeps rendering stale-but-coherent geometry for this section.
                 return UploadResult.FULL;
+            }
+            if (existing != (int) SegmentedManager.SIZE_LIMIT) {
+                arena.free(existing);
             }
         }
 
@@ -182,14 +196,30 @@ public final class TerrainUploader implements AutoCloseable {
                 opaqueVerts += vCount;
             }
             // Pass 2: translucent layer — appended right after opaque so translucent draws
-            // index [addr + opaqueQuads, addr + totalQuads).
+            // index [addr + opaqueQuads, addr + totalQuads). When MC built this section it
+            // also sort-wrote an index buffer ordering quads back-to-front for the POV of the
+            // build. Our mesh shader can't easily consume a custom index buffer (it reads 4
+            // consecutive verts per quad from terrainData), so we *permute* the verts here —
+            // writing them out in sorted quad-order. Result: blending order matches vanilla's
+            // for the POV that built this section (drifts only as player moves beyond MC's
+            // re-sort threshold, at which point MC rebuilds and we ingest a fresh sort).
             SectionEntry.LayerGeometry trans = entry.layers.get(ChunkSectionLayer.TRANSLUCENT);
             if (trans != null && trans.vertexBytes != null && trans.vertexBytes.remaining() > 0
                     && trans.vertexCount > 0) {
                 int vCount = trans.vertexCount;
                 int outBytes = vCount * VERTEX_STRIDE;
                 long dstPtr = stream.upload(arena.buffer(), dstByteOffset, outBytes);
-                repackMcToCompact(trans.vertexBytes, dstPtr, vCount);
+                // Eligible for sorted-repack when we have an index buffer AND it's sized as
+                // MC's "6 indices per quad" layout. Fall back to linear repack otherwise.
+                int qCount = vCount / 4;
+                ByteBuffer ib = trans.indexBytes;
+                if (ib != null && trans.indexCount == qCount * 6 && ib.remaining() >= trans.indexCount * 2) {
+                    int indexBytesPerElem = ib.remaining() / trans.indexCount;
+                    repackMcToCompactSortedByIndex(trans.vertexBytes, ib, qCount,
+                            indexBytesPerElem, dstPtr);
+                } else {
+                    repackMcToCompact(trans.vertexBytes, dstPtr, vCount);
+                }
                 dstByteOffset += outBytes;
                 translucentVerts += vCount;
             }
@@ -262,44 +292,91 @@ public final class TerrainUploader implements AutoCloseable {
         src = src.order(java.nio.ByteOrder.LITTLE_ENDIAN);
         int base = src.position();
         for (int v = 0; v < vCount; v++) {
-            int o = base + v * MC_VERTEX_STRIDE;
-
-            float px = src.getFloat(o);
-            float py = src.getFloat(o + 4);
-            float pz = src.getFloat(o + 8);
-
-            int r = src.get(o + 12) & 0xFF;
-            int g = src.get(o + 13) & 0xFF;
-            int b = src.get(o + 14) & 0xFF;
-            // alpha at o+15 ignored — nvidium's z.w is light, alpha comes from MIP bit in y.
-
-            float u = src.getFloat(o + 16);
-            float w = src.getFloat(o + 20);
-
-            int bl = src.getShort(o + 24) & 0xFFFF;
-            int sl = src.getShort(o + 26) & 0xFFFF;
-
-            int pxQ = clamp16(Math.round((px + POS_ORIGIN) * POS_INV_SCALE));
-            int pyQ = clamp16(Math.round((py + POS_ORIGIN) * POS_INV_SCALE));
-            int pzQ = clamp16(Math.round((pz + POS_ORIGIN) * POS_INV_SCALE));
-            int uQ  = clamp16(Math.round(u * UV_SCALE));
-            int vQ  = clamp16(Math.round(w * UV_SCALE));
-
-            int rgb = r | (g << 8) | (b << 16);
-            // MC's vertex lightmap values are 0-240 in 16-step increments; sample_lightmap
-            // formula is `clamp(uv/256.0 + 0.5/16.0, 0.5/16.0, 15.5/16.0)`. Our shader
-            // applies the same formula, so pass bl/sl through raw (low 8 bits of each short).
-            int blockLight8 = bl & 0xFF;
-            int skyLight8   = sl & 0xFF;
-
-            long p = dstPtr + (long) v * VERTEX_STRIDE;
-            MemoryUtil.memPutInt(p,      pxQ | (pyQ << 16));
-            // v.y high byte → block light (decodeLightUV.x in the shader).
-            MemoryUtil.memPutInt(p + 4,  pzQ | (blockLight8 << 24));
-            // v.z high byte → sky light (decodeLightUV.y in the shader).
-            MemoryUtil.memPutInt(p + 8,  rgb | (skyLight8 << 24));
-            MemoryUtil.memPutInt(p + 12, uQ | (vQ << 16));
+            packOneVertex(src, base + v * MC_VERTEX_STRIDE, dstPtr + (long) v * VERTEX_STRIDE);
         }
+    }
+
+    /**
+     * Translucent-sorted variant. MC's sort writes an index buffer with 6 indices per sorted
+     * quad in the form {@code [4k+0, 4k+1, 4k+2, 4k+2, 4k+3, 4k+0]} where {@code k} walks the
+     * BACK-TO-FRONT quad order for the build POV. We pull the leading index of each 6-tuple,
+     * divide by 4 to recover the original quad index, and copy that quad's 4 verts to the
+     * next slot in the destination — producing a vertex stream whose consecutive quad-sized
+     * groups are already sorted. The mesh shader then needs no indirection: reading
+     * {@code terrainData[(id<<2)+lane]} walks the sorted sequence.
+     *
+     * <p>Index element size = 2 (uint16) or 4 (uint32), selected by MC's
+     * {@code VertexFormat.IndexType.least(vertexCount)}. We read it straight from the provided
+     * {@code indexBytesPerElem} so we don't duplicate the decision.
+     */
+    private static void repackMcToCompactSortedByIndex(ByteBuffer vb, ByteBuffer ib,
+                                                        int quadCount, int indexBytesPerElem,
+                                                        long dstPtr) {
+        vb = vb.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        ib = ib.order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        int vbBase = vb.position();
+        int ibBase = ib.position();
+        int ibStride = 6 * indexBytesPerElem;
+        for (int q = 0; q < quadCount; q++) {
+            int idxOff = ibBase + q * ibStride;
+            int firstIdx = (indexBytesPerElem == 2)
+                    ? (ib.getShort(idxOff) & 0xFFFF)
+                    : ib.getInt(idxOff);
+            // firstIdx == 4 * originalQuadIndex by MC's sortQuads layout.
+            int origQuad = firstIdx >>> 2;
+            int srcVertBase = origQuad << 2; // 4 verts per quad
+            long dstVertBase = (long) (q << 2) * VERTEX_STRIDE;
+            for (int lane = 0; lane < 4; lane++) {
+                packOneVertex(vb,
+                        vbBase + (srcVertBase + lane) * MC_VERTEX_STRIDE,
+                        dstPtr + dstVertBase + (long) lane * VERTEX_STRIDE);
+            }
+        }
+    }
+
+    /** Shared per-vertex packer used by both linear and indexed repack paths. */
+    private static void packOneVertex(ByteBuffer src, int o, long dstPtr) {
+        float px = src.getFloat(o);
+        float py = src.getFloat(o + 4);
+        float pz = src.getFloat(o + 8);
+
+        int r = src.get(o + 12) & 0xFF;
+        int g = src.get(o + 13) & 0xFF;
+        int b = src.get(o + 14) & 0xFF;
+        int a = src.get(o + 15) & 0xFF; // MC encodes translucent-block transparency (water,
+                                         // glass panes, etc.) as vertex alpha — vanilla's
+                                         // rendertype_translucent outputs `color.a = tex.a *
+                                         // vertexColor.a`. Dropping this was making water render
+                                         // opaque (tex.a=1, our alpha=1 → no blend).
+
+        float u = src.getFloat(o + 16);
+        float w = src.getFloat(o + 20);
+
+        int bl = src.getShort(o + 24) & 0xFFFF;
+        int sl = src.getShort(o + 26) & 0xFFFF;
+
+        int pxQ = clamp16(Math.round((px + POS_ORIGIN) * POS_INV_SCALE));
+        int pyQ = clamp16(Math.round((py + POS_ORIGIN) * POS_INV_SCALE));
+        int pzQ = clamp16(Math.round((pz + POS_ORIGIN) * POS_INV_SCALE));
+        int uQ  = clamp16(Math.round(u * UV_SCALE));
+        int vQ  = clamp16(Math.round(w * UV_SCALE));
+
+        int rgb = r | (g << 8) | (b << 16);
+        // MC's vertex lightmap values are 0-240 in 16-step increments; sample_lightmap
+        // formula is `clamp(uv/256.0 + 0.5/16.0, 0.5/16.0, 15.5/16.0)`. Our shader
+        // applies the same formula, so pass bl/sl through raw (low 8 bits of each short).
+        int blockLight8 = bl & 0xFF;
+        int skyLight8   = sl & 0xFF;
+
+        MemoryUtil.memPutInt(dstPtr,      pxQ | (pyQ << 16));
+        // v.y: bits 0-15 = pzQ, bits 16-23 = vertex alpha (8-bit), bits 24-31 = block light.
+        // The "metadata" nibble in the original nvidium format (alphaCutoff/mipping) lived
+        // here too, but we don't populate those from MC's capture — the vertex alpha takes
+        // precedence and the fragment shader reads it for translucent blending.
+        MemoryUtil.memPutInt(dstPtr + 4,  pzQ | (a << 16) | (blockLight8 << 24));
+        // v.z high byte → sky light (decodeLightUV.y in the shader).
+        MemoryUtil.memPutInt(dstPtr + 8,  rgb | (skyLight8 << 24));
+        MemoryUtil.memPutInt(dstPtr + 12, uQ | (vQ << 16));
     }
 
     private static int clamp16(long v) {
