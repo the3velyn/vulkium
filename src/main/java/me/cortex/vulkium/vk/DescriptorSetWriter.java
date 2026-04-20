@@ -45,6 +45,7 @@ public final class DescriptorSetWriter {
                     .dstSet(set)
                     .dstBinding(b.index)
                     .dstArrayElement(0)
+                    .descriptorCount(1)
                     .descriptorType(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
                     .pImageInfo(VkDescriptorImageInfo.create(images.address(i), 1));
             }
