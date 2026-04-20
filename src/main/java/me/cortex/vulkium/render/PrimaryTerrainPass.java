@@ -37,8 +37,9 @@ public final class PrimaryTerrainPass implements AutoCloseable {
 
     /** Color attachment format the pipelines are built against. Matches Mojang's swapchain. */
     public static final int COLOR_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
-    /** Depth attachment format the pipelines are built against. */
-    public static final int DEPTH_FORMAT = VK10.VK_FORMAT_D32_SFLOAT;
+    /** Depth attachment format the pipelines are built against. MC 26.2's mainRenderTarget
+     *  uses VK_FORMAT_D32_SFLOAT_S8_UINT; mismatching the pipeline format silently fails. */
+    public static final int DEPTH_FORMAT = VK10.VK_FORMAT_D32_SFLOAT_S8_UINT;
 
     // VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT.
     // The scene UBO is read by all three stages of the pipeline (task shader reads chunk+section
@@ -124,11 +125,11 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .mesh(meshNo)
                     .fragment(fragNo)
                     .colorFormat(COLOR_FORMAT)
-                    .depthFormat(VK10.VK_FORMAT_UNDEFINED)
-                    .depthTest(false)
-                    .depthWrite(false)
+                    .depthFormat(DEPTH_FORMAT)
+                    .depthTest(true)
+                    .depthWrite(true)
                     .blend(false)
-                    .cullMode(VK10.VK_CULL_MODE_NONE /* diag: rule out winding */)
+                    .cullMode(VK10.VK_CULL_MODE_BACK_BIT)
                     .build();
 
             pipeFog = MeshPipeline.builder(pLayout)
@@ -136,11 +137,11 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .mesh(meshFog)
                     .fragment(fragFog)
                     .colorFormat(COLOR_FORMAT)
-                    .depthFormat(VK10.VK_FORMAT_UNDEFINED)
-                    .depthTest(false)
-                    .depthWrite(false)
+                    .depthFormat(DEPTH_FORMAT)
+                    .depthTest(true)
+                    .depthWrite(true)
                     .blend(false)
-                    .cullMode(VK10.VK_CULL_MODE_NONE /* diag: rule out winding */)
+                    .cullMode(VK10.VK_CULL_MODE_BACK_BIT)
                     .build();
         } catch (RuntimeException e) {
             // Rollback in reverse construction order. close() is null-safe per se (its checks

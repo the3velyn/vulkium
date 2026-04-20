@@ -68,13 +68,6 @@ void main() {
             + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
             + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
     vec4 albedo = texture(tex_diffuse, uv);
-    // DIAG: output UV coords as color so we can tell if UVs are valid.
-    //  red/green gradient = valid UVs, only sampling broken.
-    //  flat magenta fallback = fell through to transparent sampling AND UVs are zero.
-    if (albedo.a < 0.001 && albedo.rgb == vec3(0.0)) {
-        colour = vec4(uv.x, uv.y, 0.0, 1.0);
-        return;
-    }
     uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
     float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
     if (albedo.a <= cut) discard;

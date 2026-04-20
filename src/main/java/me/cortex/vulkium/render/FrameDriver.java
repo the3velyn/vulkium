@@ -126,21 +126,18 @@ public final class FrameDriver {
         int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView2.texture().getFormat());
         if (colorView == 0L) return;
 
-        // DIAG: clearColorTexture(BLUE) first. If user sees BLUE, Mojang's clear landed but
-        // our CommandRecorder block below is lost. If user sees RED (our LOAD_OP_CLEAR
-        // target), CommandRecorder writes overrode the blue — the whole path works.
-        try {
-            com.mojang.blaze3d.vulkan.VulkanCommandEncoder mojangEnc2 =
-                me.cortex.vulkium.blaze3d.MojangVulkanBridge.commandEncoder();
-            if (mojangEnc2 != null) {
-                mojangEnc2.clearColorTexture(rt.getColorTexture(), 0xFF0000FF);
-            }
-        } catch (Throwable t) {
-            logDispatchThrottled("preamble clearColorTexture threw: {}", t.toString());
+        // Grab Mojang's depth attachment so our draws can depth-test + depth-write into the
+        // same buffer vanilla uses. Falls back to no-depth if Mojang's target lacks depth.
+        long depthView = 0L;
+        long depthImage = 0L;
+        int depthFormat = org.lwjgl.vulkan.VK10.VK_FORMAT_UNDEFINED;
+        com.mojang.blaze3d.textures.GpuTextureView depthGpuView = rt.getDepthTextureView();
+        if (depthGpuView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkDepth) {
+            depthView = vkDepth.vkImageView();
+            depthImage = vkDepth.texture().vkImage();
+            depthFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkDepth.texture().getFormat());
         }
 
-        // Atlas is only needed for the real mesh draw; diag path does clears only. Allowing
-        // null atlas lets the diag fire from the first frame.
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
         long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
 
@@ -148,54 +145,85 @@ public final class FrameDriver {
         final int fbH = rt.height;
         final long colorViewHandle = colorView;
         final long colorImageHandle = vkView2.texture().vkImage();
+        final long depthViewHandle = depthView;
+        final long depthImageHandle = depthImage;
+        final int depthFormatFinal = depthFormat;
         final long atlasViewFinal = atlasView;
         final long atlasSamplerFinal = atlasSampler;
 
         try {
             me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
                 try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-                    // Transition to COLOR_ATTACHMENT_OPTIMAL from whatever Mojang left it in.
-                    // oldLayout=UNDEFINED tells the driver we don't care about existing contents
-                    // — combined with LOAD_OP_CLEAR that's valid and cheap. Once terrain draws
-                    // are confirmed working we'll swap to LOAD_OP_LOAD with a known src layout
-                    // so sky/clouds/particles survive.
-                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer enterB = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(1, stack)
-                        .sType$Default()
+                    // Two image barriers: color (UNDEFINED→COLOR_ATTACHMENT) + depth
+                    // (UNDEFINED→DEPTH_ATTACHMENT) so LOAD_OP_LOAD is valid for both.
+                    int barrierCount = depthViewHandle != 0L ? 2 : 1;
+                    org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer bars = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(barrierCount, stack);
+                    bars.position(0).sType$Default()
                         .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
                         .srcAccessMask(0)
                         .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT)
-                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)
-                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
+                        .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                                     | org.lwjgl.vulkan.VK13.VK_ACCESS_2_COLOR_ATTACHMENT_READ_BIT)
+                        .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                         .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                         .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
                         .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
                         .image(colorImageHandle);
-                    enterB.subresourceRange()
+                    bars.position(0).subresourceRange()
                         .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
                         .baseMipLevel(0).levelCount(1)
                         .baseArrayLayer(0).layerCount(1);
+                    if (depthViewHandle != 0L) {
+                        bars.position(1).sType$Default()
+                            .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
+                            .srcAccessMask(0)
+                            .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT
+                                        | org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT)
+                            .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT
+                                         | org.lwjgl.vulkan.VK13.VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
+                            .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                            .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                            .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                            .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                            .image(depthImageHandle);
+                        bars.position(1).subresourceRange()
+                            .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_DEPTH_BIT)
+                            .baseMipLevel(0).levelCount(1)
+                            .baseArrayLayer(0).layerCount(1);
+                    }
+                    bars.position(0);
                     org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd,
                         org.lwjgl.vulkan.VkDependencyInfo.calloc(stack).sType$Default()
-                            .pImageMemoryBarriers(enterB));
+                            .pImageMemoryBarriers(bars));
 
-                    // LOAD_OP_CLEAR red background so any magenta mesh-draw pixels stand out.
-                    org.lwjgl.vulkan.VkClearValue.Buffer clearVal = org.lwjgl.vulkan.VkClearValue.calloc(1, stack);
-                    clearVal.color().float32(0, 1.0f).float32(1, 0.0f).float32(2, 0.0f).float32(3, 1.0f);
+                    // LOAD_OP_LOAD to preserve Mojang's sky/clouds composite. Our draws layer
+                    // on top with depth test against Mojang's depth buffer.
                     org.lwjgl.vulkan.VkRenderingAttachmentInfo.Buffer colorAtt = org.lwjgl.vulkan.VkRenderingAttachmentInfo.calloc(1, stack)
                         .sType$Default()
                         .imageView(colorViewHandle)
                         .imageLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL)
                         .resolveMode(0)
-                        .loadOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_CLEAR)
-                        .storeOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE)
-                        .clearValue(clearVal.get(0));
+                        .loadOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_LOAD)
+                        .storeOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE);
+
+                    org.lwjgl.vulkan.VkRenderingAttachmentInfo depthAtt = null;
+                    if (depthViewHandle != 0L) {
+                        depthAtt = org.lwjgl.vulkan.VkRenderingAttachmentInfo.calloc(stack)
+                            .sType$Default()
+                            .imageView(depthViewHandle)
+                            .imageLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL)
+                            .resolveMode(0)
+                            .loadOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_LOAD_OP_LOAD)
+                            .storeOp(org.lwjgl.vulkan.VK10.VK_ATTACHMENT_STORE_OP_STORE);
+                    }
 
                     org.lwjgl.vulkan.VkRenderingInfo renderInfo = org.lwjgl.vulkan.VkRenderingInfo.calloc(stack)
                         .sType$Default()
                         .flags(0)
                         .layerCount(1)
                         .viewMask(0)
-                        .pColorAttachments(colorAtt);
+                        .pColorAttachments(colorAtt)
+                        .pDepthAttachment(depthAtt);
                     renderInfo.renderArea().offset().set(0, 0);
                     renderInfo.renderArea().extent().set(fbW, fbH);
 
