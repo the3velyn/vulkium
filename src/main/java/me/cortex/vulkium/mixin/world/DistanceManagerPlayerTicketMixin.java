@@ -10,14 +10,15 @@ import org.spongepowered.asm.mixin.injection.ModifyConstant;
  *
  * <p>{@code DistanceManager.<init>} builds a {@code PlayerTicketTracker} with
  * {@code maxDistance=32}. That tracker is the source of {@code PLAYER_LOADING} tickets —
- * the ticket type that actually causes chunks to generate + reach FULL status. Since its
- * internal {@code FixedPlayerDistanceChunkTracker.maxDistance} is only 32, chunks beyond
- * that radius never enter the tracker and never get a ticket, so raising view distance
- * higher had no effect — generation silently capped at 32 chunks.
+ * the ticket type that actually causes chunks to generate + reach FULL status.
  *
- * <p>Matching nvidium-style view-distance extension on the integrated server requires
- * raising this constant too. 128 matches our other caps (Options sliders + ChunkMap
- * serverViewDistance ceiling).
+ * <p><b>Byte-overflow caveat:</b> the tracker's parent class ({@code FixedPlayerDistanceChunkTracker})
+ * stores per-chunk distance/level values in a {@code Long2ByteMap}, with {@code defaultReturnValue}
+ * initialized to {@code (byte)(maxDistance + 2)}. At maxDistance=128, {@code 130} truncates to the
+ * signed byte {@code -126}, which corrupts the tracker's "untracked / out-of-range" sentinel —
+ * observed symptom: a 3×3 chunk patch centered on the player's initial spawn that doesn't follow
+ * the player. Stay safely inside byte range: {@code 120} is the biggest safe value that leaves the
+ * {@code +2} default still positive ({@code 122}).
  *
  * <p>This is the only {@code bipush 32} inside {@code DistanceManager.<init>} — 8 is
  * used for naturalSpawnChunkCounter, 32 is exclusively the PlayerTicketTracker arg.
@@ -28,6 +29,6 @@ public abstract class DistanceManagerPlayerTicketMixin {
     @ModifyConstant(method = "<init>",
                     constant = @Constant(intValue = 32))
     private int vulkium$raisePlayerTicketTrackerMaxDistance(int original) {
-        return 128;
+        return 120;
     }
 }
