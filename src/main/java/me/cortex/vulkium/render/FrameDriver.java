@@ -267,9 +267,10 @@ public final class FrameDriver {
                     pass.record(cmd, scene, dispatchCount, false /* renderFog */,
                                 atlasViewFinal, atlasSamplerFinal,
                                 lightmapViewFinal, lightmapSamplerFinal);
-                    pass.recordTranslucent(cmd, scene, dispatchCount,
-                                atlasViewFinal, atlasSamplerFinal,
-                                lightmapViewFinal, lightmapSamplerFinal);
+                    // DIAG: translucent pass disabled — testing if opaque alone renders.
+                    //pass.recordTranslucent(cmd, scene, dispatchCount,
+                    //            atlasViewFinal, atlasSamplerFinal,
+                    //            lightmapViewFinal, lightmapSamplerFinal);
                     logDispatchThrottled("draw: pass.record() issued pipeline={} dispatchCount={} atlas={}",
                         Long.toHexString(pass.pipelineLayout().handle()), dispatchCount, atlasViewFinal != 0L);
 
