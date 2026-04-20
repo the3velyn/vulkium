@@ -33,9 +33,7 @@ vec4 sampleLight(vec2 uv) {
 
 vec3 computeMultiplier(Vertex V) {
     vec4 tint = decodeVertexColour(V);
-    // TODO: multiply by sampleLight(decodeLightUV(V)) once tex_light is bound to MC's
-    // actual lightmap (currently bound to the block atlas as a placeholder). For now use
-    // vertex alpha (baked AO weight) to darken based on vertex occlusion.
+    tint.rgb *= sampleLight(decodeLightUV(V)).rgb;
     return tint.xyz * tint.w;
 }
 

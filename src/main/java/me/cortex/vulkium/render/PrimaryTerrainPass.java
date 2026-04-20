@@ -259,7 +259,9 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                        int visibleRegionCount,
                        boolean renderFog,
                        long atlasView,
-                       long atlasSampler) {
+                       long atlasSampler,
+                       long lightmapView,
+                       long lightmapSampler) {
         if (closed) throw new IllegalStateException("PrimaryTerrainPass is closed");
         if (cmd == null) throw new NullPointerException("cmd");
         if (sceneUniform == null) throw new NullPointerException("sceneUniform");
@@ -283,7 +285,11 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         if (atlasView != 0L && atlasSampler != 0L) {
             pd.combinedImageSampler(1, atlasView, atlasSampler,
                     VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
-            pd.combinedImageSampler(2, atlasView, atlasSampler,
+            // Lightmap goes at binding=2. Fall back to atlas+sampler if lightmap isn't
+            // available yet (first frames before GameRenderer.lightmap is initialized).
+            long lView = lightmapView != 0L ? lightmapView : atlasView;
+            long lSampler = lightmapSampler != 0L ? lightmapSampler : atlasSampler;
+            pd.combinedImageSampler(2, lView, lSampler,
                     VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
         }
         pd.push(cmd);

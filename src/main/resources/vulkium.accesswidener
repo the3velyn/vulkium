@@ -17,3 +17,6 @@ accessible field com/mojang/blaze3d/vulkan/VulkanBackend REQUIRED_DEVICE_FEATURE
 # Expose Mojang's VkSampler handle so vulkium can reuse the exact sampler Mojang uses
 # for the block atlas instead of rolling its own (which may be misconfigured).
 accessible field com/mojang/blaze3d/vulkan/VulkanGpuSampler vkSampler J
+
+# GameRenderer owns the Lightmap — expose so vulkium can bind its texture view to tex_light.
+accessible field net/minecraft/client/renderer/GameRenderer lightmap Lnet/minecraft/client/renderer/Lightmap;

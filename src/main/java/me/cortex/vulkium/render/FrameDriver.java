@@ -145,9 +145,9 @@ public final class FrameDriver {
         }
 
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
-        // Use our own NEAREST sampler for MC's pixel-art look. Mojang's own sampler uses
-        // LINEAR which blurs the textures.
         long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
+        long lightmapView = me.cortex.vulkium.blaze3d.MojangLightmapTap.lightmapImageView();
+        long lightmapSampler = me.cortex.vulkium.blaze3d.MojangLightmapTap.sampler();
         long atlasImage = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImage();
         int atlasMipLevels = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasMipLevels();
         if (atlasView != 0L && !atlasInfoLogged) {
@@ -169,6 +169,8 @@ public final class FrameDriver {
         final long atlasSamplerFinal = atlasSampler;
         final long atlasImageFinal = atlasImage;
         final int atlasMipFinal = atlasMipLevels;
+        final long lightmapViewFinal = lightmapView;
+        final long lightmapSamplerFinal = lightmapSampler;
 
         try {
             me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
@@ -261,7 +263,8 @@ public final class FrameDriver {
                     org.lwjgl.vulkan.VK10.vkCmdSetScissor(cmd, 0, sc);
 
                     pass.record(cmd, scene, dispatchCount, false /* renderFog */,
-                                atlasViewFinal, atlasSamplerFinal);
+                                atlasViewFinal, atlasSamplerFinal,
+                                lightmapViewFinal, lightmapSamplerFinal);
                     logDispatchThrottled("draw: pass.record() issued pipeline={} dispatchCount={} atlas={}",
                         Long.toHexString(pass.pipelineLayout().handle()), dispatchCount, atlasViewFinal != 0L);
 
