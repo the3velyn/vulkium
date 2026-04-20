@@ -45,7 +45,10 @@ float getVertexAlphaCutoff(uint v) {
 }
 
 vec2 decodeLightUV(Vertex v) {
+    // Match MC's sample_lightmap: clamp(uv/256.0 + 0.5/16.0, 0.5/16.0, 15.5/16.0).
+    // v.y>>24 = block light (0..240), v.z>>24 = sky light (0..240).
     uvec2 light = uvec2(v.y>>24, v.z>>24) & uvec2(0xFFu);
-    return vec2(light)/256.0;
+    vec2 uv = vec2(light) / 256.0 + vec2(0.5 / 16.0);
+    return clamp(uv, vec2(0.5 / 16.0), vec2(15.5 / 16.0));
 }
 
