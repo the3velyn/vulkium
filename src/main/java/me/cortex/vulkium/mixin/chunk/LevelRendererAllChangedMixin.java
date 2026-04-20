@@ -24,5 +24,16 @@ public abstract class LevelRendererAllChangedMixin {
     @Inject(method = "allChanged", at = @At("HEAD"))
     private void vulkium$flushAllOnLevelExtractorAllChanged(CallbackInfo ci) {
         SectionManager.get().queueFlushAll();
+        // Force LevelRenderer.resetLevelRenderData so ViewArea gets rebuilt at the current RD.
+        // MC's LevelExtractor.allChanged only updates SectionUpdateTracker + lastViewDistance;
+        // ViewArea itself is only rebuilt from inside LevelExtractor.extract (gated on
+        // shouldResetLevelRenderData, which is only set by resource-reload). This means raising
+        // the RD slider past the initial value never extends the visible grid until the user
+        // reloads chunks or resources. Piggy-backing the full reset here makes F3+A (and other
+        // allChanged paths) also expand the grid when RD has grown.
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        if (mc != null && mc.levelRenderer != null) {
+            mc.levelRenderer.resetLevelRenderData();
+        }
     }
 }
