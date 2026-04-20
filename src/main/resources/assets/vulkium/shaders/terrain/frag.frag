@@ -59,20 +59,10 @@ void applyFog(inout vec3 colour) {
 layout(set = 1, binding = 0) uniform sampler2D tex_diffuse;
 
 void main() {
-    uint quadId = uint(gl_PrimitiveID) >> 4;
-    uint triSel = (uint(gl_PrimitiveID) >> 3) & 1u;
-    Vertex Vq0 = terrainData.data[(quadId<<2)+0];
-    Vertex Vq2 = terrainData.data[(quadId<<2)+2];
-    Vertex VqP = terrainData.data[(quadId<<2) + (triSel == 0u ? 1u : 3u)];
-    vec2 sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
-                  + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
-                  + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
-    // DIAG: output textureSize(). Blue=(0,0) means descriptor not bound. Non-zero
-    // dimensions → texture is actually bound, sample failing for a different reason.
-    ivec2 sz = textureSize(tex_diffuse, 0);
-    if (sz.x == 0) {
-        colour = vec4(0.0, 0.0, 1.0, 1.0);  // blue = unbound
-    } else {
-        colour = vec4(float(sz.x) / 2048.0, float(sz.y) / 2048.0, 0.5, 1.0);  // ~white/yellow if 2048x2048
-    }
+    // Atlas sampling not yet functional — textureSize(tex_diffuse, 0) returns 0 even with
+    // VkDescriptorPool + vkUpdateDescriptorSets + vkCmdBindDescriptorSets, likely because the
+    // set=0 push-descriptor (scene UBO, without the PUSH_DESCRIPTOR flag due to driver
+    // leniency) invalidates our set=1 binding. Fix candidates: route set=0 through the same
+    // descriptor pool instead of push, or audit pipeline-layout compatibility more carefully.
+    colour = vec4(1.0, 0.0, 1.0, 1.0);
 }
