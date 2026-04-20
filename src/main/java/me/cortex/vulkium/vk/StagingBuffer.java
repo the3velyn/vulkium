@@ -43,7 +43,11 @@ public final class StagingBuffer implements VkBuffer {
             var bufferInfo = VkBufferCreateInfo.calloc(stack)
                 .sType$Default()
                 .size(size)
-                .usage(VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT)
+                // UNIFORM_BUFFER_BIT lets SceneUniform bind this buffer directly as a UBO
+                // via vkCmdBindDescriptorSets (no intermediate device buffer). Without it,
+                // descriptor-set binding is invalid and triggers GPU hangs on NVIDIA.
+                .usage(VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT
+                     | VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT)
                 .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
 
             var allocInfo = VmaAllocationCreateInfo.calloc(stack)
