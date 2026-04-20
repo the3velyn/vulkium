@@ -422,7 +422,7 @@ public final class FrameDriver {
             mvp.mul(camState.viewRotationMatrix);
         }
         scene.mvp(mvp);
-        scene.flush();
+        scene.flushMvp();  // narrow flush — only MVP changed since prepareFrame's full flush
     }
 
     private static void onEndMain(LevelRenderContext ctx) {

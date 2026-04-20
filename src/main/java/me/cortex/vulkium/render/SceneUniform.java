@@ -137,6 +137,13 @@ public final class SceneUniform implements AutoCloseable {
         buffer.flush(0, SCENE_UBO_SIZE);
     }
 
+    /** Narrow flush covering just the MVP matrix range (bytes 0..64). Use for mid-frame
+     *  refreshes that only update MVP (per-draw bob/distortion composite) — avoids re-
+     *  flushing the entire 240-byte UBO when everything else is already current. */
+    public void flushMvp() {
+        buffer.flush(OFFSET_MVP, 64);
+    }
+
     @Override
     public void close() {
         buffer.close();
