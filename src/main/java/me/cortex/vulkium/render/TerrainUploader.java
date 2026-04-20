@@ -255,15 +255,21 @@ public final class TerrainUploader implements AutoCloseable {
             int vQ  = clamp16(Math.round(w * UV_SCALE));
 
             int rgb = r | (g << 8) | (b << 16);
-            // MC packs lightmap as 16-bit values with the lit level in the high nibble;
-            // compress to a single byte for nvidium's decode (v.z >> 24 / 256.0 in the shader).
+            // MC packs lightmap as 16-bit values with the lit level in the high nibble.
+            // Vulkium's vertex format: v.y >> 24 = block light, v.z >> 24 = sky light
+            // (decodeLightUV returns vec2(v.y>>24, v.z>>24) / 256.0 — that's (block, sky)).
+            // Actually scene.glsl comments disagree; based on the current MC lightmap 16×16
+            // texture where X = sky-light, Y = block-light, vulkium passes UV (X, Y) to a
+            // LINEAR sampler. Map MC's bl → Y (block), sl → X (sky).
             int blockLight8 = (bl >>> 4) & 0xFF;
-            // skyLight8 intentionally unused — nvidium reads v.y>>24 for sky but metadata is 0.
+            int skyLight8   = (sl >>> 4) & 0xFF;
 
             long p = dstPtr + (long) v * VERTEX_STRIDE;
             MemoryUtil.memPutInt(p,      pxQ | (pyQ << 16));
-            MemoryUtil.memPutInt(p + 4,  pzQ /* metadata<<16 == 0 */);
-            MemoryUtil.memPutInt(p + 8,  rgb | (blockLight8 << 24));
+            // v.y high byte → block light (decodeLightUV.x in the shader).
+            MemoryUtil.memPutInt(p + 4,  pzQ | (blockLight8 << 24));
+            // v.z high byte → sky light (decodeLightUV.y in the shader).
+            MemoryUtil.memPutInt(p + 8,  rgb | (skyLight8 << 24));
             MemoryUtil.memPutInt(p + 12, uQ | (vQ << 16));
         }
     }
