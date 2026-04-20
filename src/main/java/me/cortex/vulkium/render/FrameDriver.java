@@ -403,14 +403,10 @@ public final class FrameDriver {
         if (scene != null && camState != null) {
             updateMvpFromCamera(scene, camState);
         }
-        me.cortex.vulkium.vk.UploadStream stream = r.uploadStream();
-        if (stream != null) {
-            try {
-                stream.commitFrame();
-            } catch (Throwable t) {
-                LOGGER.warn("UploadStream.commitFrame failed (translucent)", t);
-            }
-        }
+        // Second commitFrame skipped — no UploadStream writes land between opaque hook and
+        // translucent hook. The opaque hook's commit already pushed this frame's arena /
+        // region-header / dispatch-list writes to the GPU. Dropping this commit removes one
+        // command-buffer submission per frame.
         dispatchTerrainDraw(false, true);
     }
 
