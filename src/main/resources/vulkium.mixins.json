@@ -15,7 +15,6 @@
     "gui.OptionsRenderDistanceMixin",
     "gui.VideoSettingsScreenMixin",
     "world.ChunkMapViewDistanceMixin",
-    "world.DistanceManagerPlayerTicketMixin",
     "camera.GameRendererBobMixin",
     "camera.LevelRendererProjMixin"
   ],
