@@ -42,6 +42,13 @@ public final class TranslucentSectionSorter implements AutoCloseable {
     private int[] ids;
     private int[] dists;
 
+    /** Highest {@code n} (entry count) written in any prior frame. Each subsequent frame must
+     *  re-sentinel positions past its own (possibly smaller) {@code n} up through this
+     *  watermark, otherwise stale entries from the high-water frame linger on the GPU side
+     *  and the task shader redirects to ghost section refs — visible as phantom translucent
+     *  quads that "self-correct" only after the dispatch width shrinks below their index. */
+    private int maxEntriesEverWritten;
+
     public TranslucentSectionSorter(int maxRegions) {
         int maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
         this.capacity = maxSections;
@@ -119,15 +126,21 @@ public final class TranslucentSectionSorter implements AutoCloseable {
             dists[j + 1] = kD;
         }
 
-        // Write directly into the mapped pointer. Trailing 0xFFFFFFFF sentinel terminates the
-        // active range; slots past n + 1 are already 0xFFFFFFFF from init.
+        // Write directly into the mapped pointer. Active entries at [0, n), then sentinels
+        // from [n, maxEntriesEverWritten] — we must re-sentinel every slot up to the prior
+        // high-water mark, otherwise stale refs from a previous (larger-n) frame still sit in
+        // the buffer and the task shader dispatches phantom workgroups against them.
         long base = buffer.mappedPointer();
         for (int i = 0; i < n; i++) {
             MemoryUtil.memPutInt(base + (long) i * 4L, ids[i]);
         }
-        MemoryUtil.memPutInt(base + (long) n * 4L, 0xFFFFFFFF);
-        // Flush the active + sentinel range only.
-        buffer.flush(0L, (long) (n + 1) * 4L);
+        // Inclusive-end sentinel sweep from n through the high-water mark. Bounded by capacity.
+        int sentinelEnd = Math.max(n, maxEntriesEverWritten);
+        for (int i = n; i <= sentinelEnd; i++) {
+            MemoryUtil.memPutInt(base + (long) i * 4L, 0xFFFFFFFF);
+        }
+        if (n > maxEntriesEverWritten) maxEntriesEverWritten = n;
+        buffer.flush(0L, (long) (sentinelEnd + 1) * 4L);
     }
 
     @Override
