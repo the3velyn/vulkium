@@ -51,12 +51,14 @@ public final class Vulkium implements ClientModInitializer {
         // REQUIRED_DEVICE_EXTENSIONS / REQUIRED_DEVICE_FEATURES NOW, before Mojang's
         // VulkanBackend.createDevice runs. Otherwise Mojang's VkDevice is created without the
         // extension enabled and we can't use mesh shaders regardless of hardware capability.
+        //
+        // ALWAYS apply, even if forceDisable=true at boot. Otherwise toggling "Vulkium enabled"
+        // back ON at runtime has no path forward — the VkDevice was created without the
+        // extensions and there's no API to add them to an existing device. Cost of unconditional
+        // fixup is negligible (just appends extension strings + feature bits to Mojang's
+        // required set).
         try {
-            if (VulkiumConfig.get().forceDisable) {
-                LOGGER.info("Backend-fixup skipped (config.forceDisable=true).");
-            } else {
-                MojangBackendFixup.apply();
-            }
+            MojangBackendFixup.apply();
         } catch (Throwable t) {
             LOGGER.error("MojangBackendFixup failed — vulkium will probably end up disabled due to missing VK_EXT_mesh_shader", t);
         }
@@ -82,13 +84,19 @@ public final class Vulkium implements ClientModInitializer {
 
     private static void onClientStarted(Minecraft client) {
         VulkiumConfig cfg = VulkiumConfig.get();
-        if (cfg.forceDisable) {
-            enabled = false;
-            LOGGER.warn("Vulkium DISABLED by config (forceDisable=true).");
-            return;
-        }
 
+        // Always run the probe + hardware gate + init, even when booting with
+        // forceDisable=true. Otherwise toggling "Vulkium enabled" back ON at runtime can't
+        // re-enter this init — the `enabled` flag would stay false and `isEnabled()` would
+        // gate every draw path. This path fully initializes vulkium's resources (region
+        // manager, renderer subsystems) up front; isEnabled() then flips cleanly with the
+        // config toggle because the underlying state is ready either way.
         probe = VulkanDetect.probe();
+
+        if (cfg.forceDisable) {
+            LOGGER.info("Vulkium booted with forceDisable=true; hardware probe + init still run "
+                + "so the user can toggle enable at runtime. Probe: {}", probe);
+        }
 
         // Shader sanity-check + compute smoke-test are both useful on any Vulkan-backed GPU,
         // not just ones that pass vulkium's full mesh-shader gate. They validate shaderc's
