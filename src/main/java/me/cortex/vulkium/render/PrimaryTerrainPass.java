@@ -67,6 +67,14 @@ public final class PrimaryTerrainPass implements AutoCloseable {
     private final MeshPipeline pipelineNoFog;
     private final MeshPipeline pipelineFog;
 
+    // Traditional (non-push) descriptor pool + set for texture bindings. Push-descriptor path
+    // hangs the GPU on NVIDIA when used for set=1 in a pipeline that also pushes set=0, so we
+    // allocate a real set and update it once when the atlas becomes available.
+    private final me.cortex.vulkium.vk.DescriptorPool textureDescriptorPool;
+    private final long textureDescriptorSet;
+    private long lastBoundAtlasView = 0L;
+    private long lastBoundAtlasSampler = 0L;
+
     private boolean closed;
 
     /**
@@ -105,16 +113,14 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .build();
 
             // Descriptor set 1: fragment-only combined-image-samplers for the terrain atlas and
-            // light texture. Push-descriptor — without this flag vkCmdPushDescriptorSetKHR is
-            // undefined per Vulkan spec and NVIDIA silently returns zeros from the sampler.
-            // Vulkan allows at most ONE set in a pipeline layout with the push bit; set=0 (UBO)
-            // has been working via driver leniency.
+            // light texture. Traditional (non-push) layout — bound via vkCmdBindDescriptorSets.
+            // Push-descriptor hangs the GPU when set=0 is also push-pushed (even without the
+            // flag due to driver leniency), so set=1 goes through a real descriptor pool.
             texLayout = DescriptorSetLayout.builder()
                     .binding(0, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .binding(1, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
-                    .pushDescriptor(true)
                     .build();
 
             // Pipeline layout: both sets, no push constants (scene data travels via the UBO).
@@ -173,6 +179,25 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         this.pipelineLayout = pLayout;
         this.pipelineNoFog = pipeNo;
         this.pipelineFog = pipeFog;
+
+        // Allocate the texture descriptor pool + set. Single set, two combined-image-samplers
+        // (block atlas + lightmap). Populated lazily once the atlas is ready.
+        this.textureDescriptorPool = me.cortex.vulkium.vk.DescriptorPool.forCombinedImageSampler(1, 2);
+        this.textureDescriptorSet = textureDescriptorPool.allocateSet(this.textureSetLayout);
+    }
+
+    /** Rebuild the texture descriptor set when the atlas view or sampler changes. Cheap no-op
+     *  when handles are identical to last call. */
+    private void updateTextureDescriptors(long atlasView, long atlasSampler) {
+        if (atlasView == lastBoundAtlasView && atlasSampler == lastBoundAtlasSampler) return;
+        new me.cortex.vulkium.vk.DescriptorSetWriter(textureDescriptorSet)
+            .combinedImageSampler(0, atlasView, atlasSampler,
+                    VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .combinedImageSampler(1, atlasView, atlasSampler,
+                    VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+            .update();
+        lastBoundAtlasView = atlasView;
+        lastBoundAtlasSampler = atlasSampler;
     }
 
     /** The shared {@link PipelineLayout} both variants are built against. */
@@ -234,12 +259,20 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                         SceneUniform.SCENE_UBO_SIZE)
                 .push(cmd);
 
-        // TODO(vulkium): texture sampling via push-descriptor for set=1 hangs the GPU on NVIDIA
-        // (semaphore timeout at submit). Suspect: Vulkan disallows multiple sets with the
-        // push flag in one pipeline layout, and/or the atlas image isn't in the expected
-        // SHADER_READ_ONLY_OPTIMAL layout at END_MAIN. Migrating to a traditional descriptor
-        // set (allocated from a pool) for textures is the cleaner long-term fix. For now
-        // frag stays hardcoded and we keep the rest of the pipeline healthy.
+        // Bind the texture descriptor set (allocated, non-push). Update it first if the atlas
+        // view/sampler changed (happens once when the atlas becomes available mid-session).
+        if (atlasView != 0L && atlasSampler != 0L) {
+            updateTextureDescriptors(atlasView, atlasSampler);
+            try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                java.nio.LongBuffer pSet = stack.longs(textureDescriptorSet);
+                VK10.vkCmdBindDescriptorSets(cmd,
+                    VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    pipelineLayout.handle(),
+                    1 /* firstSet */,
+                    pSet,
+                    null /* pDynamicOffsets */);
+            }
+        }
 
         if (visibleRegionCount == 0) {
             return;
@@ -252,7 +285,8 @@ public final class PrimaryTerrainPass implements AutoCloseable {
     public void close() {
         if (closed) return;
         closed = true;
-        // Reverse construction order: pipelines → pipeline layout → set layouts → shader modules.
+        // Reverse construction order: pool → pipelines → pipeline layout → set layouts → modules.
+        textureDescriptorPool.close();
         pipelineFog.close();
         pipelineNoFog.close();
         pipelineLayout.close();

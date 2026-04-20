@@ -67,7 +67,17 @@ void main() {
     vec2 uv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
             + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
             + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
-    // Texture-sampling path temporarily disabled while the atlas binding/layout path is
-    // being figured out. Keep magenta so the block outlines remain visible against sky.
-    colour = vec4(1.0, 0.0, 1.0, 1.0);
+    uint quadId = uint(gl_PrimitiveID) >> 4;
+    uint triSel = (uint(gl_PrimitiveID) >> 3) & 1u;
+    Vertex Vq0 = terrainData.data[(quadId<<2)+0];
+    Vertex Vq2 = terrainData.data[(quadId<<2)+2];
+    Vertex VqP = terrainData.data[(quadId<<2) + (triSel == 0u ? 1u : 3u)];
+    vec2 uv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
+            + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
+            + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
+    vec4 albedo = texture(tex_diffuse, uv);
+    uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
+    float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
+    if (albedo.a <= cut) discard;
+    colour = albedo;
 }
