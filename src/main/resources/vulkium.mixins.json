@@ -12,7 +12,6 @@
     "chunk.RenderSectionResortMixin",
     "chunk.ChunkSectionsToRenderMixin",
     "chunk.LevelRendererAllChangedMixin",
-    "chunk.SectionOcclusionGraphSkipMixin",
     "gui.OptionsRenderDistanceMixin",
     "gui.VideoSettingsScreenMixin",
     "world.ChunkMapViewDistanceMixin",
