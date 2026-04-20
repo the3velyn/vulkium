@@ -28,6 +28,8 @@ public final class MojangAtlasTap {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/atlas");
 
     private static long cachedSampler = VK10.VK_NULL_HANDLE;
+    private static int cachedMipLevels = -1;      // atlas mip count the cached sampler was built for
+    private static int cachedOptionMipmap = -1;   // MC's Options.mipmapLevels().get() at cache time
     private static boolean samplerLogged;
 
     private MojangAtlasTap() {}
@@ -89,12 +91,42 @@ public final class MojangAtlasTap {
     }
 
     /**
-     * Returns (and lazily creates) a vulkium-owned sampler configured like vanilla MC's
-     * terrain sampler: nearest mag/min, linear mipmap, clamp-to-edge, anisotropy disabled.
-     * Cached for the process lifetime.
+     * Returns a vulkium-owned sampler configured to match vanilla MC's terrain sampler:
+     * nearest mag/min, linear mipmap filter between levels, clamp-to-edge, anisotropy off.
+     *
+     * <p>The sampler's max-LOD is driven by two inputs: the atlas's actual mip count (from
+     * {@link #blockAtlasMipLevels()}) and the user's {@code Video Settings → Mipmap Levels}
+     * option (0–4). {@code maxLod = min(atlasMips - 1, optionLevels)}. When the user changes
+     * the vanilla mipmap slider MC rebuilds the atlas with a new mip count — we notice the
+     * change here and re-create the sampler to match.
+     *
+     * <p>Cached across frames; invalidated when either the atlas mip count or the option
+     * changes. First call or rebuild logs once.
      */
     public static long sampler() {
-        if (cachedSampler != VK10.VK_NULL_HANDLE) return cachedSampler;
+        int atlasMips = Math.max(1, blockAtlasMipLevels());
+        int optionMips = 0;
+        try {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc != null && mc.options != null) {
+                Object raw = mc.options.mipmapLevels().get();
+                if (raw instanceof Integer i) optionMips = i;
+            }
+        } catch (RuntimeException ignored) {
+            // MC not ready yet — fall back to no mipmapping (optionMips=0).
+        }
+        if (cachedSampler != VK10.VK_NULL_HANDLE
+                && cachedMipLevels == atlasMips
+                && cachedOptionMipmap == optionMips) {
+            return cachedSampler;
+        }
+        // Rebuild: destroy old first.
+        if (cachedSampler != VK10.VK_NULL_HANDLE) {
+            VK10.vkDestroySampler(MojangVulkanBridge.vkDevice(), cachedSampler, null);
+            cachedSampler = VK10.VK_NULL_HANDLE;
+        }
+        // Max LOD = min(atlasMips - 1, optionMips). optionMips==0 → maxLod=0 (no mipmapping).
+        final int effectiveMaxMip = Math.max(0, Math.min(atlasMips - 1, optionMips));
         try (MemoryStack stack = MemoryStack.stackPush()) {
             VkSamplerCreateInfo info = VkSamplerCreateInfo.calloc(stack)
                 .sType$Default()
@@ -104,19 +136,19 @@ public final class MojangAtlasTap {
                 .addressModeU(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                 .addressModeV(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
                 .addressModeW(VK10.VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE)
-                // DIAG: lock to base mip only to rule out mipmap-range issues.
-                .minLod(0f).maxLod(0f).mipLodBias(0f);
+                .minLod(0f).maxLod((float) effectiveMaxMip).mipLodBias(0f);
             LongBuffer pSampler = stack.callocLong(1);
             int r = VK10.vkCreateSampler(MojangVulkanBridge.vkDevice(), info, null, pSampler);
             if (r != VK10.VK_SUCCESS) {
                 throw new RuntimeException("vkCreateSampler (atlas) failed: VkResult=" + r);
             }
             cachedSampler = pSampler.get(0);
-            if (!samplerLogged) {
-                LOGGER.info("Created vulkium block-atlas sampler (handle=0x{}).",
-                    Long.toHexString(cachedSampler));
-                samplerLogged = true;
-            }
+            cachedMipLevels = atlasMips;
+            cachedOptionMipmap = optionMips;
+            LOGGER.info("{} vulkium block-atlas sampler (handle=0x{}, atlasMips={}, optionMips={}, maxLod={}).",
+                samplerLogged ? "Rebuilt" : "Created",
+                Long.toHexString(cachedSampler), atlasMips, optionMips, effectiveMaxMip);
+            samplerLogged = true;
             return cachedSampler;
         }
     }
