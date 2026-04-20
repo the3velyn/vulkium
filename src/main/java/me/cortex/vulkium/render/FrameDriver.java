@@ -293,6 +293,18 @@ public final class FrameDriver {
             }
         }
         if (VulkiumConfig.get().drawTerrain) {
+            // Re-read the modelView matrix NOW (END_MAIN) so bobHurt/bobView/distortion that MC
+            // pushed onto the stack after START_MAIN are included. prepareFrame happens too
+            // early to see them. Update just the MVP slot in the scene UBO and reflush.
+            Renderer r = Renderer.get();
+            me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
+            if (scene != null && ctx.levelState() != null && ctx.levelState().cameraRenderState != null) {
+                org.joml.Matrix4f proj = ctx.levelState().cameraRenderState.projectionMatrix;
+                org.joml.Matrix4f mv = com.mojang.blaze3d.systems.RenderSystem.getModelViewMatrixCopy();
+                org.joml.Matrix4f mvp = new org.joml.Matrix4f(proj).mul(mv);
+                scene.mvp(mvp);
+                scene.flush();
+            }
             dispatchTerrainDraw();
         }
     }
