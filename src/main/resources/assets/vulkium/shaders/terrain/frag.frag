@@ -87,7 +87,18 @@ void main() {
     vec4 albedo = texture(tex_diffuse, sampleUv);
     uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
     float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
-    if (albedo.a <= cut) discard;
+    // Alpha cutoff + mipmaps: at coarse LODs, mipped alpha averages texel neighbours, so
+    // pixels that are empty at mip 0 (transparent gaps between grass blades / kelp fronds)
+    // inherit neighbouring-texel alpha and cross the cutoff — distant tall-grass textures
+    // look like opaque rectangles. Test the cutoff against the SHARP (mip-0) alpha so the
+    // silhouette stays clean, while RGB still uses the mipped sample for clean distant
+    // colour. Only do the extra fetch for cutout (cut>0); opaque rarely discards anyway.
+    if (cut > 0.0) {
+        float sharpAlpha = textureLod(tex_diffuse, sampleUv, 0.0).a;
+        if (sharpAlpha <= cut) discard;
+    } else if (albedo.a <= cut) {
+        discard;
+    }
 
     vec4 multiplier = interpolateMultiplier();
     // vanilla rendertype_translucent: fragColor = texSample * vertexColor (rgb AND a).
