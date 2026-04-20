@@ -69,12 +69,11 @@ public final class Renderer {
         if (state == null || state.cameraRenderState == null) return;
         CameraRenderState cam = state.cameraRenderState;
 
-        // MVP = projection * modelView. We use RenderSystem.getModelViewMatrixCopy() rather
-        // than cam.viewRotationMatrix because the former is the matrix vanilla terrain was
-        // rendered with — it has bobHurt/bobView/distortion (nausea) applied on top of the
-        // rotation. Without it, vulkium terrain is rigid while entities/particles bob around.
-        Matrix4f modelView = com.mojang.blaze3d.systems.RenderSystem.getModelViewMatrixCopy();
-        Matrix4f mvp = new Matrix4f(cam.projectionMatrix).mul(modelView);
+        // MVP = projection * viewRotation. Rotation-only matrix pairs with our in-shader
+        // chunkPosition subtraction; using a full modelView (with camera translation baked in)
+        // double-offsets positions. FrameDriver.onEndMain re-refreshes this value later in the
+        // frame using the same rotation-only matrix.
+        Matrix4f mvp = new Matrix4f(cam.projectionMatrix).mul(cam.viewRotationMatrix);
 
         Vec3 pos = cam.pos == null ? Vec3.ZERO : cam.pos;
         int cx = (int) Math.floor(pos.x) >> 4;

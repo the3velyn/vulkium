@@ -55,9 +55,8 @@ public final class VulkiumConfig {
     /** Upload ring section count (frames in flight). */
     public int uploadSectionCount = 3;
 
-    /** Terrain arena size in MB. 512 covers 32-chunk RD with dense terrain comfortably.
-     *  At 16-RD usage sits around ~80 MB; at 32-RD it climbs to ~300 MB so 512 leaves headroom. */
-    public int terrainArenaMb = 512;
+    /** Terrain arena size in MB. */
+    public int terrainArenaMb = 128;
 
     /** Max regions in the ledger. One region = 8×4×8 sections = 256 sections. */
     public int maxRegions = 1024;
