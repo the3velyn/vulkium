@@ -31,4 +31,13 @@ public final class BobViewTap {
     }
 
     public static boolean hasValue() { return valid; }
+
+    /** Call at the start of each frame so early-returning bobHurt/bobView (which skip our
+     *  @At("TAIL") inject) don't leave a stale matrix from the previous frame in place. */
+    public static void invalidate() {
+        synchronized (MATRIX) {
+            MATRIX.identity();
+            valid = false;
+        }
+    }
 }

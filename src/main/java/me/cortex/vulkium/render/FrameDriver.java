@@ -44,6 +44,10 @@ public final class FrameDriver {
         if (!Vulkium.isEnabled()) return;
         FRAMES.incrementAndGet();
 
+        // Clear last-frame's captured bob matrix so early-returning bobHurt/bobView (e.g. when
+        // the camera isn't a living/player entity) don't leave stale bobbing in our MVP.
+        me.cortex.vulkium.blaze3d.BobViewTap.invalidate();
+
         // Initialize the renderer up-front so the ingest drain below has a live TerrainUploader
         // to hand sections to. prepareFrame also runs ensureInit, but it's gated on
         // drawTerrain / enableHzb / F3-overlay — without this eager call, sections compiled
@@ -338,12 +342,21 @@ public final class FrameDriver {
             me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
             var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
             if (scene != null && camState != null) {
-                // Stable: projection × viewRotation. Camera rotation always correct.
-                // TODO: re-add bob/distortion via player-state computation instead of capturing
-                // from Mojang's local PoseStack — the mixin capture flickered because the
-                // PoseStack isn't in the same state at our END_MAIN as when we read it.
-                org.joml.Matrix4f mvp = new org.joml.Matrix4f(camState.projectionMatrix)
-                    .mul(camState.viewRotationMatrix);
+                // Match vanilla's renderLevel composition:
+                //     projCopy = projection.clone()
+                //     projCopy.mul(pose.last().pose())   // pose = hurtBob from bobHurt+bobView
+                //     mvp = projCopy * viewRotation
+                // Equivalent to: mvp = projection * hurtBob * viewRotation.
+                //
+                // BobViewTap is populated at the TAIL of each bob method earlier in this frame
+                // (both methods run before this hook fires). Its invalidate() at onStartMain
+                // ensures we don't carry stale bobs from a previous frame through an
+                // early-returning bob method on the current frame.
+                org.joml.Matrix4f bob = new org.joml.Matrix4f();
+                boolean haveBob = me.cortex.vulkium.blaze3d.BobViewTap.read(bob);
+                org.joml.Matrix4f mvp = new org.joml.Matrix4f(camState.projectionMatrix);
+                if (haveBob) mvp.mul(bob);
+                mvp.mul(camState.viewRotationMatrix);
                 scene.mvp(mvp);
                 scene.flush();
             }
