@@ -32,26 +32,14 @@ public final class TranslucentSectionSorter implements AutoCloseable {
     private int[] dists;
     private final int maxSections;
 
+    private boolean seeded = false;
+
     public TranslucentSectionSorter(int maxRegions) {
         this.maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
         this.capacity = maxSections;
         this.buffer = DeviceBuffer.allocate((long) capacity * 2L);
         this.ids = new int[maxSections];
         this.dists = new int[maxSections];
-        // One-shot fill the entire buffer with 0xFFFF sentinel via a separate upload path —
-        // after this, per-frame sort() only writes the small prefix + a trailing sentinel so
-        // we don't churn 0.5 MB through the upload ring every frame.
-        seedSentinel();
-    }
-
-    private void seedSentinel() {
-        me.cortex.vulkium.vk.UploadStream tmp = me.cortex.vulkium.render.Renderer.get().uploadStream();
-        if (tmp == null) return;
-        long base = tmp.upload(buffer, 0L, capacity * 2);
-        for (int i = 0; i < capacity; i++) {
-            MemoryUtil.memPutShort(base + (long) i * 2L, (short) 0xFFFF);
-        }
-        tmp.commitFrame();
     }
 
     public long deviceAddress() { return buffer.deviceAddress(); }
@@ -114,11 +102,19 @@ public final class TranslucentSectionSorter implements AutoCloseable {
             dists[j + 1] = kD;
         }
 
-        // Stream only (n + 1) shorts: the actual sorted IDs + one trailing 0xFFFF sentinel.
-        // The rest of the buffer stays at 0xFFFF from the init-time seed. Minimizes per-frame
-        // staging-ring churn which otherwise collided with terrain uploads.
-        int writeCount = n + 1;
-        int byteCount = writeCount * 2;
+        // First frame: seed the whole buffer with 0xFFFF sentinels so stale memory past `n`
+        // doesn't masquerade as valid section IDs when the shader reads those slots.
+        // Subsequent frames: just write n + 1 shorts (actual entries + trailing sentinel) to
+        // minimize staging-ring churn.
+        if (!seeded) {
+            long seedBase = stream.upload(buffer, 0L, capacity * 2);
+            for (int i = 0; i < capacity; i++) {
+                MemoryUtil.memPutShort(seedBase + (long) i * 2L, (short) 0xFFFF);
+            }
+            seeded = true;
+        }
+
+        int byteCount = (n + 1) * 2;
         long base = stream.upload(buffer, 0L, byteCount);
         for (int i = 0; i < n; i++) {
             MemoryUtil.memPutShort(base + (long) i * 2L, (short) (ids[i] & 0xFFFF));
