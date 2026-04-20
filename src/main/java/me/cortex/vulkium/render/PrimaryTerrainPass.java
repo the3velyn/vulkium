@@ -270,17 +270,13 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         long pipeline = (renderFog ? pipelineFog : pipelineNoFog).handle();
         VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        // Bind both descriptor sets (allocated from pool, non-push). Update them first if
-        // their underlying resources changed — cheap no-op when stable.
+        // Scene UBO via allocated descriptor set. Atlas set=1 binding is CURRENTLY DISABLED —
+        // referencing Mojang's atlas VkImageView from our independent command buffer hangs the
+        // GPU even without sampling. Needs a queue-ownership / semaphore synchronization fix.
         bindSceneBuffer(sceneUniform.buffer().handle(), 0L, SceneUniform.SCENE_UBO_SIZE);
-        if (atlasView != 0L && atlasSampler != 0L) {
-            updateTextureDescriptors(atlasView, atlasSampler);
-        }
 
         try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-            java.nio.LongBuffer pSets = (atlasView != 0L && atlasSampler != 0L)
-                ? stack.longs(sceneDescriptorSet, textureDescriptorSet)
-                : stack.longs(sceneDescriptorSet);
+            java.nio.LongBuffer pSets = stack.longs(sceneDescriptorSet);
             VK10.vkCmdBindDescriptorSets(cmd,
                 VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
                 pipelineLayout.handle(),
