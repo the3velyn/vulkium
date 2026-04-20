@@ -47,7 +47,7 @@ public final class VulkiumConfig {
     public boolean drawTerrain = true;
 
     /** Whether HzbBuilder + MojangDepthTap run each frame. No-op until Mojang depth tap lands. */
-    public boolean enableHzb = false;
+    public boolean enableHzb = true;
 
     /** Max sections the render thread drains from the ingest queue per frame. */
     public int drainPerFrame = 256;
