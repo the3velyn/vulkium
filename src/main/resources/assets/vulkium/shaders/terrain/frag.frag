@@ -27,8 +27,8 @@ layout(location = 1) in Interpolants {
 layout(set = 0, binding = 2) uniform sampler2D tex_light;
 
 vec4 sampleLight(vec2 uv) {
-    //Its divided by 16 to match sodium/vanilla (it can never be 1 which is funny)
-    return vec4(texture(tex_light, uv).rgb, 1);
+    // DIAG: ignore uv, sample (1,1). If world is now bright, vertex lightUV is wrong.
+    return vec4(texture(tex_light, vec2(1.0, 1.0)).rgb, 1);
 }
 
 vec3 computeMultiplier(Vertex V) {
