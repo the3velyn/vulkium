@@ -173,21 +173,15 @@ public final class SectionManager {
                         // populateTasks' `fr` starting-offset read of ranges.w>>16.
                         MemoryUtil.memPutInt(ptr,      (sx << 8) | 0xF0);
                         MemoryUtil.memPutInt(ptr +  4, (sz << 8) | 0xF0);
-                        // header.z bits 8-16 = chunk.y (sign-extended 9-bit); bit 17 = hide-bit.
-                        // Translucent count occupies bits 18-31 (14 bits, max 16383 quads/section).
-                        // MUST mask (sy<<8) to bits 8-16 only — negative sy sign-extends into the
-                        // high bits and corrupts the translucent-count pack.
-                        int syBits = (sy << 8) & 0x0001FF00;
-                        MemoryUtil.memPutInt(ptr +  8,
-                            0xF0 | syBits | ((translucentQuads & 0x3FFF) << 18));
+                        MemoryUtil.memPutInt(ptr +  8, (sy << 8) | 0xF0);
                         MemoryUtil.memPutInt(ptr + 12, addr);
-                        // renderRanges.w low 16 = opaque quads (the existing semantic —
-                        // unsigned-bin quad count). High 16 stays 0 so populateTasks' `fr`
-                        // base-offset read returns 0 as originally intended.
+                        // renderRanges.w low 16 = total quad count (pre-split semantic so
+                        // populateTasks stays intact while translucent is being debugged).
+                        int totalQuads = Math.min(opaqueQuads + translucentQuads, 0xFFFF);
                         MemoryUtil.memPutInt(ptr + 16, 0);
                         MemoryUtil.memPutInt(ptr + 20, 0);
                         MemoryUtil.memPutInt(ptr + 24, 0);
-                        MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
+                        MemoryUtil.memPutInt(ptr + 28, totalQuads);
                     }
                 }
             } catch (RuntimeException e) {
