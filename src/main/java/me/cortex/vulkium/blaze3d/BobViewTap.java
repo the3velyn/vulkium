@@ -4,19 +4,17 @@ import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 
 /**
- * Stores the fully-composed view-space projection matrix captured from the parameter that
- * {@code GameRenderer.renderLevel} hands to {@code LevelRenderer.renderLevel}. That matrix
- * already has bob, portal-effect, nausea, screen-effect-scale and any other view-space
- * distortions baked in by MC, so a single capture covers every vanilla view effect.
+ * Stores the bob-and-hurt pose matrix captured from {@code GameRenderer.bobHurt/bobView} via
+ * {@link me.cortex.vulkium.mixin.camera.GameRendererBobMixin}. FrameDriver composes MVP as
+ * {@code projection × pose × viewRotation}, matching vanilla's composition in
+ * {@code renderLevel} — {@code projCopy.mul(pose.last().pose())} then the downstream
+ * {@code LevelRenderer.renderLevel} receives that already-composed projection.
  *
- * <p>Populated by {@link me.cortex.vulkium.mixin.camera.LevelRendererProjMixin} at that
- * method's HEAD. Consumed by {@code FrameDriver.onEndMain} which composes
- * {@code mvp = capturedProjection × viewRotation} — the viewRotation stays separate because
- * MC's LevelRenderer applies rotation downstream of this projection.
- *
- * <p>The class name is historical — it started as a bob-only capture hooked on
- * {@code GameRenderer.bobView/bobHurt}, but was broadened to cover all view-space effects.
- * Keeping the name for now to avoid mixin-path churn.
+ * <p>Does NOT yet cover portal-effect warp or nausea distortion; those get applied further
+ * downstream in {@code GameRenderer.renderLevel} after the bobs. Both the @Inject and
+ * @ModifyArg attempts to catch the final fully-composed projection on MC 26.2 Fabric dev
+ * failed mixin target resolution ("Scanned 0 target(s)" despite byte-accurate descriptors).
+ * Treated as a follow-up.
  */
 public final class BobViewTap {
     private static final Matrix4f MATRIX = new Matrix4f();
@@ -24,16 +22,16 @@ public final class BobViewTap {
 
     private BobViewTap() {}
 
-    /** Called at the HEAD of LevelRenderer.renderLevel with MC's final view-space projection. */
-    public static void setProjection(Matrix4fc source) {
+    /** Called at the TAIL of bobHurt / bobView with the mutated PoseStack's top matrix. */
+    public static void setPose(Matrix4fc source) {
         synchronized (MATRIX) {
             MATRIX.set(source);
             valid = true;
         }
     }
 
-    /** @return the captured projection copied into {@code dst}, or {@code false} if nothing's
-     *  been captured yet (first frame before LevelRenderer.renderLevel has fired). */
+    /** @return the captured matrix copied into {@code dst}, or {@code false} if nothing's
+     *  been captured yet (first frame before any bob hook fired). */
     public static boolean read(Matrix4f dst) {
         if (!valid) return false;
         synchronized (MATRIX) {
@@ -44,9 +42,6 @@ public final class BobViewTap {
 
     public static boolean hasValue() { return valid; }
 
-    /** Invalidate so a subsequent read returns false. Not used on the hot path — the
-     *  capture runs every frame, so the stored matrix stays fresh — but kept for explicit
-     *  reset scenarios (init teardown, etc.). */
     public static void invalidate() {
         synchronized (MATRIX) {
             MATRIX.identity();
