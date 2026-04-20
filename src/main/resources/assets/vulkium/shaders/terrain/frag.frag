@@ -67,7 +67,12 @@ void main() {
     vec2 sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
                   + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
                   + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
-    vec4 albedo = texture(tex_diffuse, sampleUv);
-    // DIAG: no discard; forced alpha=1. Black terrain = sample zero; real textures = works.
-    colour = vec4(albedo.rgb, 1.0);
+    // DIAG: output textureSize(). Blue=(0,0) means descriptor not bound. Non-zero
+    // dimensions → texture is actually bound, sample failing for a different reason.
+    ivec2 sz = textureSize(tex_diffuse, 0);
+    if (sz.x == 0) {
+        colour = vec4(0.0, 0.0, 1.0, 1.0);  // blue = unbound
+    } else {
+        colour = vec4(float(sz.x) / 2048.0, float(sz.y) / 2048.0, 0.5, 1.0);  // ~white/yellow if 2048x2048
+    }
 }
