@@ -145,11 +145,9 @@ public final class FrameDriver {
         }
 
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
-        // Prefer Mojang's own sampler (captured from ChunkSectionsToRenderMixin) — it's the
-        // exact one the vanilla terrain pass uses, so layout/format compatibility is trivially
-        // correct. Fall back to our own sampler only if capture hasn't happened yet.
-        long mojangSampler = me.cortex.vulkium.blaze3d.MojangColorFormat.mojangSampler();
-        long atlasSampler = mojangSampler != 0L ? mojangSampler : me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
+        // Use our own NEAREST sampler for MC's pixel-art look. Mojang's own sampler uses
+        // LINEAR which blurs the textures.
+        long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
         long atlasImage = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImage();
         int atlasMipLevels = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasMipLevels();
         if (atlasView != 0L && !atlasInfoLogged) {

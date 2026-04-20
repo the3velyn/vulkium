@@ -63,11 +63,24 @@ void main() {
     uint triSel = (uint(gl_PrimitiveID) >> 3) & 1u;
     Vertex Vq0 = terrainData.data[(quadId<<2)+0];
     Vertex Vq2 = terrainData.data[(quadId<<2)+2];
-    Vertex VqP = terrainData.data[(quadId<<2) + (triSel == 0u ? 1u : 3u)];
-    vec2 sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
-                  + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
-                  + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
+    // Mesh shader emits triangles as:
+    //   triSel=0: (V0, V1, V2) → bary (.x, .y, .z) maps to (V0, V1, V2)
+    //   triSel=1: (V2, V3, V0) → bary (.x, .y, .z) maps to (V2, V3, V0)
+    vec2 sampleUv;
+    if (triSel == 0u) {
+        Vertex V1 = terrainData.data[(quadId<<2)+1];
+        sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
+                 + gl_BaryCoordEXT.y * decodeVertexUV(V1)
+                 + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
+    } else {
+        Vertex V3 = terrainData.data[(quadId<<2)+3];
+        sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq2)
+                 + gl_BaryCoordEXT.y * decodeVertexUV(V3)
+                 + gl_BaryCoordEXT.z * decodeVertexUV(Vq0);
+    }
     vec4 albedo = texture(tex_diffuse, sampleUv);
-    // DIAG: alpha forced 1 to confirm sampling is now working through the unified set.
-    colour = vec4(albedo.rgb, 1.0);
+    uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
+    float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
+    if (albedo.a <= cut) discard;
+    colour = albedo;
 }
