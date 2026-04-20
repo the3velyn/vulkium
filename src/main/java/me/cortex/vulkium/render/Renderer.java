@@ -88,15 +88,8 @@ public final class Renderer {
         long sectionPtr = rm != null ? rm.sectionBufferAddress() : 0L;
         int regionCount = rm != null ? rm.regionCount() : 0;
         long terrainPtr = terrainUploader != null ? terrainUploader.arenaBuffer().deviceAddress() : 0L;
-        // Translucent back-to-front section sort — CPU builds a per-frame list the translucent
-        // task shader indexes in place of gl_WorkGroupID.x. Far sections dispatch first so
-        // their blended pixels land before closer sections blend over them.
+        // DIAG: translucent sorter disabled — isolate whether it's the offset cause.
         long translucentSortPtr = 0L;
-        if (translucentSorter != null && uploadStream != null) {
-            me.cortex.vulkium.managers.SectionManager smgr = me.cortex.vulkium.managers.SectionManager.get();
-            translucentSorter.sort(smgr.liveView(), rm, smgr, uploadStream, cx, cy, cz);
-            translucentSortPtr = translucentSorter.deviceAddress();
-        }
         long sortListPtr = regionSorter != null && uploadStream != null
             ? regionSorter.uploadVisibleList(uploadStream, visibility)
             : 0L;
