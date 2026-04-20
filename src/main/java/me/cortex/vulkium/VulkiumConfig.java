@@ -39,11 +39,12 @@ public final class VulkiumConfig {
     public boolean runComputeSmokeTest = true;
 
     /**
-     * Whether vulkium should issue mesh-shader draws at AFTER_OPAQUE_TERRAIN. Off by default
-     * until the texture-binding pipeline for Mojang's atlas lands — otherwise the fragment
-     * shader samples undefined descriptors.
+     * Whether vulkium should issue mesh-shader draws at AFTER_OPAQUE_TERRAIN. Kept as a field
+     * for internal kill-switch use (the draw path sets this to false on unrecoverable GPU
+     * errors so the session continues with MC's vanilla terrain). Not exposed in the GUI any
+     * more — "Vulkium enabled" is the user-facing master switch.
      */
-    public boolean drawTerrain = false;
+    public boolean drawTerrain = true;
 
     /** Whether HzbBuilder + MojangDepthTap run each frame. No-op until Mojang depth tap lands. */
     public boolean enableHzb = false;
