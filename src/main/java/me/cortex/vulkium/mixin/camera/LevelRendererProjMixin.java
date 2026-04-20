@@ -5,7 +5,6 @@ import com.mojang.blaze3d.resource.GraphicsResourceAllocator;
 import me.cortex.vulkium.blaze3d.BobViewTap;
 import net.minecraft.client.DeltaTracker;
 import net.minecraft.client.renderer.LevelRenderer;
-import net.minecraft.client.renderer.chunk.ChunkSectionsToRender;
 import net.minecraft.client.renderer.state.level.CameraRenderState;
 import org.joml.Matrix4fc;
 import org.joml.Vector4f;
@@ -40,7 +39,6 @@ public abstract class LevelRendererProjMixin {
                                                  GpuBufferSlice fogBuffer,
                                                  Vector4f fogColor,
                                                  boolean visualizeChunks,
-                                                 ChunkSectionsToRender chunkSections,
                                                  CallbackInfo ci) {
         BobViewTap.setProjection(projection);
     }
