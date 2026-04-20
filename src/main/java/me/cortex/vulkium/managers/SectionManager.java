@@ -339,44 +339,57 @@ public final class SectionManager {
     }
 
     /**
-     * Region-keep-distance sweep. Evict live sections outside a square of radius
-     * {@code keepDistance+4} around {@code (cameraChunkX, cameraChunkZ)}.
+     * Region-keep-distance sweep. Evicts sections vulkium no longer needs.
      *
-     * <p>Semantics differ from nvidium's in one place: nvidium's {@code 32} fell back to
-     * Sodium's own eviction (which is called from MC's chunk-unload path). Vulkium's
-     * {@code RenderSectionMixin} deliberately does <b>not</b> evict on MC's rotating-cache
-     * reassignment (it caused chunks to flicker out while still-loaded), so there's no MC-side
-     * eviction to fall back to. Here {@code 32} means "actually sweep at radius 32" —
-     * the closest thing to vanilla render-distance behavior vulkium can offer on its own.
-     *
-     * <p>Special values:
+     * <p>Two criteria, matching nvidium's three modes:
      * <ul>
-     *   <li>{@code 256+} — keep-all: this method is a no-op (users opt into unbounded memory).</li>
-     *   <li>Anything else — sweep at (keepDistance + 4). The +4 slack mirrors nvidium's
-     *       {@code RenderPipeline.java:198} to avoid evict-thrash at the exact boundary.</li>
+     *   <li>{@code 256+} — <b>Keep All</b>: no-op. Never evict. Memory-unbounded.</li>
+     *   <li>{@code 32} — <b>Vanilla</b>: evict only sections MC itself has unloaded
+     *       ({@code ClientLevel.hasChunk(sx, sz) == false}). Never uses the radius, so
+     *       vulkium's set == MC's set.</li>
+     *   <li>Intermediate {@code (32, 256)} — evict if <b>either</b> the section is outside
+     *       a square of radius {@code keepDistance+4} around the camera, <b>or</b> MC has
+     *       already dropped it. Keeps more than vanilla but still bounded.</li>
      * </ul>
      *
+     * <p><b>Regression fix (2026-04-20):</b> the prior version of this method evicted purely
+     * by radius, which threw away sections MC still had loaded. When the player walked back
+     * toward those sections MC never re-ran {@code SectionCompiler.compile} (no dirty flag
+     * fired) so they stayed invisible forever. Delegating eviction to MC's hasChunk check
+     * means sections only leave vulkium when MC has already unloaded them; re-approaching
+     * then re-loads via MC's normal chunk-load → compile → our capture path.
+     *
      * <p>Walks all live keys via a one-shot array snapshot (map-walk + evict would ConcurrentMod).
-     * Budget-bound by {@code maxEvictPerCall} so a huge live set doesn't stall the render
-     * thread — remaining work picks up on the next call.
+     * Budget-bound by {@code maxEvictPerCall}.
      *
      * @return number of sections evicted in this call.
      */
     public int sweepKeepDistance(int cameraChunkX, int cameraChunkZ,
                                  int keepDistance, int maxEvictPerCall) {
         if (keepDistance >= 256) return 0;
+        final boolean useRadius = keepDistance > 32;
         final int radius = keepDistance + 4;
         final int radiusSq = radius * radius;
-        // Snapshot keys so eviction can safely mutate the live map inside the loop.
+        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+        net.minecraft.client.multiplayer.ClientLevel level = mc != null ? mc.level : null;
+        if (level == null) return 0;
+
         long[] keys = live.keySet().toLongArray();
         int evicted = 0;
         for (long key : keys) {
             if (evicted >= maxEvictPerCall) break;
             int sx = net.minecraft.core.SectionPos.x(key);
             int sz = net.minecraft.core.SectionPos.z(key);
-            int dx = sx - cameraChunkX;
-            int dz = sz - cameraChunkZ;
-            if (dx * dx + dz * dz > radiusSq) {
+            boolean outOfRadius = false;
+            if (useRadius) {
+                int dx = sx - cameraChunkX;
+                int dz = sz - cameraChunkZ;
+                outOfRadius = (long) dx * dx + (long) dz * dz > radiusSq;
+            }
+            // MC's client-side chunk presence. Returns false for chunks that were unloaded
+            // (fell out of the server's streaming radius) or never loaded.
+            boolean mcHasChunk = level.hasChunk(sx, sz);
+            if (outOfRadius || !mcHasChunk) {
                 evict(key);
                 evicted++;
             }
