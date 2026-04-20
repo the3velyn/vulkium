@@ -2,79 +2,96 @@ package me.cortex.vulkium.render;
 
 import me.cortex.vulkium.managers.RegionManager;
 import me.cortex.vulkium.managers.SectionEntry;
-import me.cortex.vulkium.vk.DeviceBuffer;
-import me.cortex.vulkium.vk.UploadStream;
+import me.cortex.vulkium.vk.StagingBuffer;
 import net.minecraft.core.SectionPos;
 import org.lwjgl.system.MemoryUtil;
 
 /**
- * CPU-side per-section back-to-front sort for vulkium's translucent pass.
+ * CPU-side back-to-front section sort for vulkium's translucent pass.
  *
- * <p>Each frame, walks the live section table and writes a list of section IDs into a
- * persistent-mapped buffer, ordered so the farthest sections come first. The translucent
- * task shader indexes this list instead of using {@code gl_WorkGroupID.x} directly, so
- * the mesh-shader dispatch emits its workgroups far-to-near — the blend order then matches
- * what MC's own uber-buffer path produces for vanilla translucent quads.
+ * <p>Each frame, walks the live section table and writes a list of GPU-compact section IDs
+ * into a persistent-mapped buffer, ordered so the farthest sections come first. The translucent
+ * task shader reads {@code sortList[gl_WorkGroupID.x]} to redirect its dispatch, so the
+ * mesh-shader workgroups run far-to-near — the blend order then matches vanilla's translucent
+ * render across the whole frame.
  *
- * <p>Per-quad sort within a section is NOT done here — that's MC's own sort happening at
- * chunk-build time, and we inherit it from the captured vertex order.
+ * <p>Within-section per-quad sort is already handled at upload time by applying MC's sorted
+ * translucent index buffer as a vertex permutation (see {@link TerrainUploader#
+ * uploadSectionSplit}). This class handles ONLY the cross-section order.
  *
- * <p>Entries are packed as 16-bit section IDs. Sentinel value {@code 0xFFFF} at the end of
- * the active range tells the task shader to emit zero mesh workgroups (out-of-bounds sentinel).
+ * <p><b>Buffer choice:</b> a host-mapped BDA staging buffer (allocated via
+ * {@link StagingBuffer#allocateHostMappedBda(long)}). Writes go directly to the mapped pointer
+ * each frame — no UploadStream staging-ring churn, so the upload ring stays dedicated to
+ * chunk-mesh uploads. The shader reads the list through a buffer-reference pointer in the
+ * scene UBO ({@code sortingRegionListPtr}).
+ *
+ * <p>Encoding: uint32 per entry. The value is a GPU-compact section index
+ * {@code (regionId << 8) | compactIdInRegion} — exactly the layout the dispatch's
+ * {@code gl_WorkGroupID.x} maps to when reading {@code sectionData.data[sectionId]}. With
+ * {@code maxRegions=1024} a section ID can reach {@code (1023<<8)|255 = 262143}, so a 16-bit
+ * entry would silently truncate mid-ocean and drop those sections from the translucent pass
+ * (the symptom: blocks of water rendering "opaque" where the seafloor shows through with no
+ * blend). Sentinel value {@code 0xFFFFFFFF} signals "no section — emit zero mesh workgroups".
  */
 public final class TranslucentSectionSorter implements AutoCloseable {
-    /** Device-addressable backing buffer. Uploaded via UploadStream each frame. */
-    private final DeviceBuffer buffer;
+    /** Host-mapped BDA staging. Writes never go through UploadStream. */
+    private final StagingBuffer buffer;
     private final int capacity;
 
-    /** Reusable CPU-side scratch to avoid per-frame allocation: (sectionId, distanceSquared). */
+    /** Reusable CPU-side scratch to avoid per-frame allocation. */
     private int[] ids;
     private int[] dists;
-    private final int maxSections;
-
-    private boolean seeded = false;
 
     public TranslucentSectionSorter(int maxRegions) {
-        this.maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
+        int maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
         this.capacity = maxSections;
-        this.buffer = DeviceBuffer.allocate((long) capacity * 2L);
+        // 4 bytes per entry (uint32). At maxRegions=1024 → 1 MB backing buffer.
+        this.buffer = StagingBuffer.allocateHostMappedBda((long) capacity * 4L);
         this.ids = new int[maxSections];
         this.dists = new int[maxSections];
+        // Seed once with sentinels; subsequent frames overwrite only the active prefix +
+        // trailing sentinel, so anything past `n` remains 0xFFFFFFFF.
+        long base = buffer.mappedPointer();
+        for (int i = 0; i < capacity; i++) {
+            MemoryUtil.memPutInt(base + (long) i * 4L, 0xFFFFFFFF);
+        }
+        buffer.flush(0L, (long) capacity * 4L);
     }
 
     public long deviceAddress() { return buffer.deviceAddress(); }
 
     /**
-     * Populate the sort buffer from the live section table. Sections are ordered farthest-first.
-     * Unused tail is filled with {@code 0xFFFF} sentinels. Only sections with non-zero translucent
-     * quads contribute; opaque-only sections write the sentinel at their slot so the task shader
-     * emits zero mesh workgroups for them in the translucent pass.
+     * Populate the sort list from the live section table. Sections are ordered farthest-first.
+     * Only sections with non-zero translucent content contribute.
      *
      * @param live       the live section map (sectionPosKey → SectionEntry)
-     * @param regionMgr  for sectionPosKey → regionRef lookup
-     * @param cameraX    camera chunk X (block-space units divided by 16)
+     * @param regionMgr  for pos→compact-id translation
+     * @param cameraX    camera chunk X
      * @param cameraY    camera chunk Y
      * @param cameraZ    camera chunk Z
      */
-    public void sort(it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<SectionEntry> live,
+    public void sort(it.unimi.dsi.fastutil.longs.LongOpenHashSet translucentKeys,
                      RegionManager regionMgr,
                      me.cortex.vulkium.managers.SectionManager sectionMgr,
-                     UploadStream stream,
                      int cameraX, int cameraY, int cameraZ) {
         int n = 0;
-        // Walk live sections; record (regionRef, distSq). Skip sections with no translucent content
-        // to keep the sort small.
-        var it = live.long2ObjectEntrySet().fastIterator();
+        var it = translucentKeys.longIterator();
         while (it.hasNext()) {
-            var e = it.next();
-            SectionEntry entry = e.getValue();
-            if (entry == null) continue;
-            var trans = entry.layers.get(net.minecraft.client.renderer.chunk.ChunkSectionLayer.TRANSLUCENT);
-            if (trans == null || trans.vertexCount == 0) continue;
-
-            long key = e.getLongKey();
+            long key = it.nextLong();
             int ref = sectionMgr.getRegionRef(key);
             if (ref < 0 || n >= capacity) continue;
+
+            // Convert pos-based ref → GPU-compact ref. setSectionData writes data to the
+            // compact slot, and the shader dispatches by compact slot, so the sort list must
+            // also reference compact slots.
+            int compactId;
+            try {
+                compactId = regionMgr.getSectionRefId(ref);
+            } catch (RuntimeException ex) {
+                // Race: region got torn down between the live-table read and here. Skip.
+                continue;
+            }
+            int gpuRef = (ref & ~0xFF) | (compactId & 0xFF);
 
             int sx = SectionPos.x(key);
             int sy = SectionPos.y(key);
@@ -82,14 +99,14 @@ public final class TranslucentSectionSorter implements AutoCloseable {
             int dx = sx - cameraX, dy = sy - cameraY, dz = sz - cameraZ;
             int d = dx * dx + dy * dy + dz * dz;
 
-            ids[n] = ref;
+            ids[n] = gpuRef;
             dists[n] = d;
             n++;
         }
 
-        // Insertion sort descending by distance (far first). For typical live-section counts
-        // (a few hundred translucent sections max within RD) this is fine; upgrade to radix
-        // / timsort if profiling shows the sort dominates.
+        // Insertion sort descending by distance (far first). Typical live-translucent-section
+        // counts are low enough (~100s within RD) that N² is fine; swap for radix / timsort if
+        // profiling shows the sort dominating.
         for (int i = 1; i < n; i++) {
             int kId = ids[i], kD = dists[i];
             int j = i - 1;
@@ -102,24 +119,15 @@ public final class TranslucentSectionSorter implements AutoCloseable {
             dists[j + 1] = kD;
         }
 
-        // First frame: seed the whole buffer with 0xFFFF sentinels so stale memory past `n`
-        // doesn't masquerade as valid section IDs when the shader reads those slots.
-        // Subsequent frames: just write n + 1 shorts (actual entries + trailing sentinel) to
-        // minimize staging-ring churn.
-        if (!seeded) {
-            long seedBase = stream.upload(buffer, 0L, capacity * 2);
-            for (int i = 0; i < capacity; i++) {
-                MemoryUtil.memPutShort(seedBase + (long) i * 2L, (short) 0xFFFF);
-            }
-            seeded = true;
-        }
-
-        int byteCount = (n + 1) * 2;
-        long base = stream.upload(buffer, 0L, byteCount);
+        // Write directly into the mapped pointer. Trailing 0xFFFFFFFF sentinel terminates the
+        // active range; slots past n + 1 are already 0xFFFFFFFF from init.
+        long base = buffer.mappedPointer();
         for (int i = 0; i < n; i++) {
-            MemoryUtil.memPutShort(base + (long) i * 2L, (short) (ids[i] & 0xFFFF));
+            MemoryUtil.memPutInt(base + (long) i * 4L, ids[i]);
         }
-        MemoryUtil.memPutShort(base + (long) n * 2L, (short) 0xFFFF);
+        MemoryUtil.memPutInt(base + (long) n * 4L, 0xFFFFFFFF);
+        // Flush the active + sentinel range only.
+        buffer.flush(0L, (long) (n + 1) * 4L);
     }
 
     @Override

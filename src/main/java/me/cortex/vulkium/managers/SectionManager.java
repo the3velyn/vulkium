@@ -40,6 +40,13 @@ public final class SectionManager {
     private final it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap sectionToRegionRef =
         new it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap();
 
+    /** Live translucent-section keys (membership = "this section has translucent quads"). The
+     *  {@code SectionEntry}'s layer map is wiped after ingest to reclaim worker-thread byte
+     *  buffers, so the translucent sorter can't infer translucency from the live entry. This
+     *  set is the authoritative CPU-side answer. */
+    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet translucentSections =
+        new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+
     /** Worker → render hand-off. Unbounded; trimmed per frame by drainPending(). */
     private final ConcurrentLinkedQueue<PendingIngest> ingestQueue = new ConcurrentLinkedQueue<>();
 
@@ -166,6 +173,9 @@ public final class SectionManager {
                     if (ref != -1) {
                         int opaqueQuads = Math.min(up.opaqueQuadCount, 0xFFFF);
                         int translucentQuads = Math.min(up.translucentQuadCount, 0xFFFF);
+                        // Keep the translucent-keys set in sync with actual translucent content.
+                        if (translucentQuads > 0) translucentSections.add(p.key);
+                        else translucentSections.remove(p.key);
                         long ptr = regionManager.setSectionData(ref);
                         // header.xyz — chunk coords + face AABB. header.z packs translucent
                         // quad count into bits 16-31 (bits 0-15 = chunk y + offset/size; bit
@@ -219,6 +229,7 @@ public final class SectionManager {
     private void evictLive(long key) {
         SectionEntry prev = live.remove(key);
         if (prev != null) freeEntry(prev);
+        translucentSections.remove(key);
         int ref = sectionToRegionRef.remove(key);
         if (ref != -1 && regionManager != null) {
             try {
@@ -238,6 +249,16 @@ public final class SectionManager {
 
     /** For future V7 consumers — the current snapshot of live sections. */
     public Long2ObjectOpenHashMap<SectionEntry> liveView() { return live; }
+
+    /** Keys of live sections that have translucent quads. Maintained at ingest / evict time
+     *  (the underlying byte buffers are freed immediately after upload, so layer membership
+     *  can't be checked on the {@code SectionEntry} after the fact). Consumers — mainly the
+     *  {@link me.cortex.vulkium.render.TranslucentSectionSorter} — should iterate this
+     *  directly and call {@link #getRegionRef(long)} to resolve each key. Read-only; mutating
+     *  the returned set is UB. */
+    public it.unimi.dsi.fastutil.longs.LongOpenHashSet translucentSectionKeys() {
+        return translucentSections;
+    }
 
     public long drainedCount() { return drained; }
     public long droppedBytes() { return droppedBytes; }
