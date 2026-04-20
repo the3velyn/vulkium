@@ -36,77 +36,53 @@ public final class MojangAtlasTap {
      * @return the {@code VkImageView} handle of Mojang's block atlas texture, or
      *         {@code VK_NULL_HANDLE} if the atlas isn't ready or not backed by Vulkan.
      */
-    private static int probeFailureLogged = 0;
+    /** Look up the block-atlas TextureAtlas via AtlasManager.forEach, matching
+     *  {@code atlas.location() == TextureAtlas.LOCATION_BLOCKS}. AtlasManager.getAtlasOrThrow
+     *  in MC 26.2 uses the ATLAS id (e.g. "minecraft:blocks"), not the texture location. */
+    private static TextureAtlas findBlockAtlas() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) return null;
+        final TextureAtlas[] found = new TextureAtlas[1];
+        try {
+            mc.getAtlasManager().forEach((id, atlas) -> {
+                if (found[0] != null) return;
+                if (TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())) {
+                    found[0] = atlas;
+                }
+            });
+        } catch (RuntimeException e) {
+            return null;
+        }
+        return found[0];
+    }
 
     public static long blockAtlasImageView() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null) { logProbeOnce("mc=null"); return VK10.VK_NULL_HANDLE; }
-        TextureAtlas atlas;
-        try {
-            atlas = mc.getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS);
-        } catch (RuntimeException e) {
-            logProbeOnce("getAtlasOrThrow threw: " + e);
-            return VK10.VK_NULL_HANDLE;
-        }
-        if (atlas == null) { logProbeOnce("atlas null"); return VK10.VK_NULL_HANDLE; }
+        TextureAtlas atlas = findBlockAtlas();
+        if (atlas == null) return VK10.VK_NULL_HANDLE;
         GpuTextureView view = atlas.getTextureView();
-        if (view == null) { logProbeOnce("getTextureView=null"); return VK10.VK_NULL_HANDLE; }
-        if (!(view instanceof VulkanGpuTextureView vkv)) {
-            logProbeOnce("view not VulkanGpuTextureView, got " + view.getClass().getName());
-            return VK10.VK_NULL_HANDLE;
-        }
-        long handle = vkv.vkImageView();
-        if (handle == 0L) logProbeOnce("vkImageView=0");
-        return handle;
+        if (!(view instanceof VulkanGpuTextureView vkv)) return VK10.VK_NULL_HANDLE;
+        return vkv.vkImageView();
     }
 
-    private static void logProbeOnce(String msg) {
-        if (probeFailureLogged < 3) {
-            probeFailureLogged++;
-            LOGGER.warn("blockAtlasImageView failed: {}", msg);
-        }
-    }
-
-    /** Underlying atlas VkImage handle (needed for layout-transition barriers). */
     public static long blockAtlasImage() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null) return VK10.VK_NULL_HANDLE;
-        TextureAtlas atlas;
-        try {
-            atlas = mc.getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS);
-        } catch (RuntimeException e) {
-            return VK10.VK_NULL_HANDLE;
-        }
+        TextureAtlas atlas = findBlockAtlas();
+        if (atlas == null) return VK10.VK_NULL_HANDLE;
         GpuTextureView view = atlas.getTextureView();
         if (!(view instanceof VulkanGpuTextureView vkv)) return VK10.VK_NULL_HANDLE;
         return vkv.texture().vkImage();
     }
 
-    /** Format (VkFormat int) of the atlas image — useful for diagnosing sampler mismatches. */
     public static int blockAtlasVkFormat() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null) return 0;
-        TextureAtlas atlas;
-        try {
-            atlas = mc.getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS);
-        } catch (RuntimeException e) {
-            return 0;
-        }
+        TextureAtlas atlas = findBlockAtlas();
+        if (atlas == null) return 0;
         GpuTextureView view = atlas.getTextureView();
         if (!(view instanceof VulkanGpuTextureView vkv)) return 0;
         return com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkv.texture().getFormat());
     }
 
-    /** Mip-level count of the block atlas, for barrier subresource ranges. */
     public static int blockAtlasMipLevels() {
-        Minecraft mc = Minecraft.getInstance();
-        if (mc == null) return 1;
-        TextureAtlas atlas;
-        try {
-            atlas = mc.getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS);
-        } catch (RuntimeException e) {
-            return 1;
-        }
+        TextureAtlas atlas = findBlockAtlas();
+        if (atlas == null) return 1;
         GpuTextureView view = atlas.getTextureView();
         if (!(view instanceof VulkanGpuTextureView vkv)) return 1;
         return Math.max(1, vkv.texture().getMipLevels());
