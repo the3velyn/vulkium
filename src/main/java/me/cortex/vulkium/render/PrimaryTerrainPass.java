@@ -38,8 +38,9 @@ public final class PrimaryTerrainPass implements AutoCloseable {
     /** Color attachment format the pipelines are built against. Matches Mojang's swapchain. */
     public static final int COLOR_FORMAT = VK10.VK_FORMAT_R8G8B8A8_UNORM;
     /** Depth attachment format the pipelines are built against. MC 26.2's mainRenderTarget
-     *  uses VK_FORMAT_D32_SFLOAT_S8_UINT; mismatching the pipeline format silently fails. */
-    public static final int DEPTH_FORMAT = VK10.VK_FORMAT_D32_SFLOAT_S8_UINT;
+     *  uses VK_FORMAT_D32_SFLOAT (126, no stencil); mismatching the pipeline format silently
+     *  fails to draw. */
+    public static final int DEPTH_FORMAT = VK10.VK_FORMAT_D32_SFLOAT;
 
     // VK_SHADER_STAGE_TASK_BIT_EXT | VK_SHADER_STAGE_MESH_BIT_EXT | VK_SHADER_STAGE_FRAGMENT_BIT.
     // The scene UBO is read by all three stages of the pipeline (task shader reads chunk+section
