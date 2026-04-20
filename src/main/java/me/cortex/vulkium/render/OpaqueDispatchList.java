@@ -30,6 +30,9 @@ public final class OpaqueDispatchList implements AutoCloseable {
     /** Highest prior-frame count — positions from lastCount..maxEverWritten need sentinel
      *  re-stamping each frame so stale entries don't drive ghost dispatches. */
     private int maxEverWritten;
+    /** Persistent region-visible lookup, reused across builds. Grown on demand; cleared
+     *  each frame instead of reallocated. Saves ~4KB/frame of GC garbage. */
+    private boolean[] regionVisibleCache = new boolean[0];
     private boolean closed;
 
     public OpaqueDispatchList(int maxRegions) {
@@ -59,8 +62,15 @@ public final class OpaqueDispatchList implements AutoCloseable {
         int n = 0;
 
         // Collect visible region IDs into a packed lookup. Bounded by maxRegionIndex.
+        // Reuse the cached array; grow when the ledger expands, clear the used prefix each
+        // frame (saves ~4KB/frame of GC garbage at maxRegions=1024).
         int maxRegion = Math.max(regionMgr.maxRegionIndex(), 0);
-        boolean[] regionVisible = new boolean[maxRegion];
+        if (regionVisibleCache.length < maxRegion) {
+            regionVisibleCache = new boolean[Math.max(maxRegion, regionVisibleCache.length * 2)];
+        }
+        final boolean[] regionVisible = regionVisibleCache;
+        // Clear only the range we'll touch (prior writes were at most maxEverVisibleRegion).
+        java.util.Arrays.fill(regionVisible, 0, Math.min(maxRegion, regionVisible.length), false);
         visibility.forEachVisibleRegion(id -> {
             if (id >= 0 && id < regionVisible.length) regionVisible[id] = true;
         });
