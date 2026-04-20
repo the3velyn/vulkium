@@ -221,6 +221,7 @@ public final class Renderer {
     public RegionSorter regionSorter() { return regionSorter; }
     public PrimaryTerrainPass primaryTerrain() { return primaryTerrain; }
     public OpaqueDispatchList opaqueDispatchList() { return opaqueDispatchList; }
+    public TranslucentSectionSorter translucentSorter() { return translucentSorter; }
     public TerrainUploader terrainUploader() { return terrainUploader; }
     public UploadStream uploadStream() { return uploadStream; }
 

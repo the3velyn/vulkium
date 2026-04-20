@@ -49,6 +49,12 @@ public final class TranslucentSectionSorter implements AutoCloseable {
      *  quads that "self-correct" only after the dispatch width shrinks below their index. */
     private int maxEntriesEverWritten;
 
+    /** Real (non-sentinel) entry count produced by the most recent {@link #sort}. Callers use
+     *  this as the translucent mesh-task dispatch width — replacing the old brute-force
+     *  maxRegionIndex*256 sweep with a tight count. */
+    private int lastCount;
+    public int count() { return lastCount; }
+
     public TranslucentSectionSorter(int maxRegions) {
         int maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
         this.capacity = maxSections;
@@ -141,6 +147,7 @@ public final class TranslucentSectionSorter implements AutoCloseable {
         }
         if (n > maxEntriesEverWritten) maxEntriesEverWritten = n;
         buffer.flush(0L, (long) (sentinelEnd + 1) * 4L);
+        lastCount = n;
     }
 
     @Override

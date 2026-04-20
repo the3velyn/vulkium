@@ -134,16 +134,26 @@ public final class FrameDriver {
             return;
         }
 
-        // Dispatch count: when the compact opaque dispatch list is populated, use its entry
-        // count — task shader redirects gl_WorkGroupID.x through it and no-ops on the
-        // 0xFFFFFFFF sentinel. Fall back to the brute-force maxRegionIndex*256 sweep if the
-        // list is missing or empty (startup, or this frame had no visible sections).
+        // Dispatch count: both passes now consume compact lists — opaque via OpaqueDispatchList,
+        // translucent via TranslucentSectionSorter's sorted list. Task shaders redirect
+        // gl_WorkGroupID.x through their respective list and no-op on 0xFFFFFFFF sentinel, so
+        // the dispatch width can shrink to the actual entry count.
         me.cortex.vulkium.managers.RegionManager rm = me.cortex.vulkium.Vulkium.regionManager();
         int dispatchCount;
-        OpaqueDispatchList list = r.opaqueDispatchList();
-        int listCount = list != null ? list.count() : 0;
-        if (includeOpaque && !includeTranslucent && listCount > 0) {
-            dispatchCount = listCount;
+        if (includeOpaque && !includeTranslucent) {
+            OpaqueDispatchList list = r.opaqueDispatchList();
+            int n = list != null ? list.count() : 0;
+            dispatchCount = n > 0 ? n : (rm == null ? visibleRegionCount
+                : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION);
+        } else if (includeTranslucent && !includeOpaque) {
+            me.cortex.vulkium.render.TranslucentSectionSorter ts =
+                me.cortex.vulkium.render.Renderer.get().translucentSorter();
+            int n = ts != null ? ts.count() : 0;
+            // Fall back to legacy width only if sorter is unavailable; count==0 is legitimate
+            // (no translucent in view) and should skip the dispatch entirely.
+            if (n == 0 && ts != null) return;
+            dispatchCount = n > 0 ? n : (rm == null ? visibleRegionCount
+                : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION);
         } else {
             dispatchCount = rm == null ? visibleRegionCount
                 : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION;
