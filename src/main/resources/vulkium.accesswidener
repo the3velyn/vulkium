@@ -13,3 +13,7 @@ mutable field com/mojang/blaze3d/vulkan/VulkanBackend REQUIRED_DEVICE_EXTENSIONS
 accessible field com/mojang/blaze3d/vulkan/VulkanBackend REQUIRED_DEVICE_EXTENSIONS Ljava/util/Set;
 mutable field com/mojang/blaze3d/vulkan/VulkanBackend REQUIRED_DEVICE_FEATURES Ljava/util/Set;
 accessible field com/mojang/blaze3d/vulkan/VulkanBackend REQUIRED_DEVICE_FEATURES Ljava/util/Set;
+
+# Expose Mojang's VkSampler handle so vulkium can reuse the exact sampler Mojang uses
+# for the block atlas instead of rolling its own (which may be misconfigured).
+accessible field com/mojang/blaze3d/vulkan/VulkanGpuSampler vkSampler J

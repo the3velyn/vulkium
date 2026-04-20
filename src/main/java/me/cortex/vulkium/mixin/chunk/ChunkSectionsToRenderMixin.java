@@ -57,6 +57,15 @@ public abstract class ChunkSectionsToRenderMixin {
             }
         }
 
+        // Capture Mojang's block-atlas VkSampler (access-widened) so vulkium can reuse the
+        // exact sampler instead of creating its own — eliminates one variable from the atlas
+        // binding debug.
+        if (me.cortex.vulkium.blaze3d.MojangColorFormat.mojangSampler() == 0L
+            && sampler instanceof com.mojang.blaze3d.vulkan.VulkanGpuSampler vkSampler) {
+            me.cortex.vulkium.blaze3d.MojangColorFormat.setSampler(vkSampler.vkSampler);
+            LOGGER.info("Captured Mojang block-atlas VkSampler=0x{}", Long.toHexString(vkSampler.vkSampler));
+        }
+
         if (Vulkium.isEnabled() && VulkiumConfig.get().drawTerrain) {
             ci.cancel();
         }

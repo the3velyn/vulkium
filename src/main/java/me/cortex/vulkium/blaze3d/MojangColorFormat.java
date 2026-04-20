@@ -13,6 +13,11 @@ public final class MojangColorFormat {
     private static volatile int attachmentWidth = 0;
     private static volatile int attachmentHeight = 0;
     private static volatile long vkImageView = 0L;
+    private static volatile long mojangSampler = 0L;
+
+    /** @return Mojang's block-atlas VkSampler captured from ChunkSectionsToRenderMixin. */
+    public static long mojangSampler() { return mojangSampler; }
+    public static void setSampler(long s) { mojangSampler = s; }
 
     private MojangColorFormat() {}
 

@@ -270,16 +270,29 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         long pipeline = (renderFog ? pipelineFog : pipelineNoFog).handle();
         VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        // Scene UBO via push-descriptor (set=0). This is the path that worked at the magenta-
-        // milestone — NVIDIA accepts it despite the layout not having the PUSH_DESCRIPTOR flag.
-        // Atlas (set=1) and the allocated-set scaffolding are present but unused until a queue-
-        // ownership / image-layout strategy that doesn't hang the GPU is figured out.
+        // Scene UBO via push-descriptor (set=0) — works despite layout lacking the push flag
+        // due to NVIDIA driver leniency.
         PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 0)
                 .uniformBuffer(0,
                         sceneUniform.buffer().handle(),
                         0L,
                         SceneUniform.SCENE_UBO_SIZE)
                 .push(cmd);
+
+        // Atlas + lightmap (set=1) via allocated descriptor set, using Mojang's own sampler
+        // captured from ChunkSectionsToRender. Only bind if the atlas is available.
+        if (atlasView != 0L && atlasSampler != 0L) {
+            updateTextureDescriptors(atlasView, atlasSampler);
+            try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                java.nio.LongBuffer pSets = stack.longs(textureDescriptorSet);
+                VK10.vkCmdBindDescriptorSets(cmd,
+                    VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                    pipelineLayout.handle(),
+                    1 /* firstSet = 1 (set=0 was pushed) */,
+                    pSets,
+                    null);
+            }
+        }
 
         if (visibleRegionCount == 0) {
             return;
