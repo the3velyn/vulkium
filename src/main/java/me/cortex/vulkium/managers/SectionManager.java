@@ -232,6 +232,20 @@ public final class SectionManager {
         ingestQueue.offer(PendingIngest.eviction(sectionPosKey));
     }
 
+    /**
+     * Queue eviction of every live section. Used by the F3+A path so hitting "clear chunks"
+     * flushes vulkium's view in addition to MC's. Processed on the render thread via the
+     * normal {@link #drainPending} pump — same code path as per-section eviction, so region
+     * ledger + arena slots get released cleanly.
+     */
+    public void queueFlushAll() {
+        long[] keys = live.keySet().toLongArray();
+        for (long key : keys) {
+            ingestQueue.offer(PendingIngest.eviction(key));
+        }
+        LOGGER.info("Queued flush of {} live sections (F3+A).", keys.length);
+    }
+
     private void evictLive(long key) {
         SectionEntry prev = live.remove(key);
         if (prev != null) freeEntry(prev);
