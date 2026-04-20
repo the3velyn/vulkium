@@ -209,7 +209,9 @@ public final class PrimaryTerrainPass implements AutoCloseable {
     public void record(VkCommandBuffer cmd,
                        SceneUniform sceneUniform,
                        int visibleRegionCount,
-                       boolean renderFog) {
+                       boolean renderFog,
+                       long atlasView,
+                       long atlasSampler) {
         if (closed) throw new IllegalStateException("PrimaryTerrainPass is closed");
         if (cmd == null) throw new NullPointerException("cmd");
         if (sceneUniform == null) throw new NullPointerException("sceneUniform");
@@ -220,8 +222,8 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         long pipeline = (renderFog ? pipelineFog : pipelineNoFog).handle();
         VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        // set=0 binding=0: scene UBO. Covers the full SCENE_UBO_SIZE range — the GLSL block is
-        // std140-aligned to match. Pushed on the graphics bind point since this is a mesh draw.
+        // Both descriptor sets pushed AFTER vkCmdBindPipeline so the driver applies them to the
+        // now-bound pipeline's layout, not to stale state from a prior pipeline.
         PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 0)
                 .uniformBuffer(0,
                         sceneUniform.buffer().handle(),
@@ -229,15 +231,19 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                         SceneUniform.SCENE_UBO_SIZE)
                 .push(cmd);
 
-        // Early-out after the bind but before the draw: callers still want the pipeline bound
-        // (and UBO pushed, for consistency) for any follow-up draws or validation-layer state,
-        // but dispatching zero workgroups via vkCmdDrawMeshTasksEXT is redundant work.
+        if (atlasView != 0L && atlasSampler != 0L) {
+            PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 1)
+                    .combinedImageSampler(0, atlasView, atlasSampler,
+                            VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .combinedImageSampler(1, atlasView, atlasSampler,
+                            VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .push(cmd);
+        }
+
         if (visibleRegionCount == 0) {
             return;
         }
 
-        // Use the EXT (not the NV) entry point. Vulkium's feature gate requires
-        // VK_EXT_mesh_shader, so this function pointer is always resolved on enabled clients.
         EXTMeshShader.vkCmdDrawMeshTasksEXT(cmd, visibleRegionCount, 1, 1);
     }
 
