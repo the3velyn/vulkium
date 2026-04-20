@@ -344,15 +344,22 @@ public final class FrameDriver {
             me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
             var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
             if (scene != null && camState != null) {
-                // mvp = projection × bobPose × viewRotation — matches vanilla renderLevel's
-                // `projCopy.mul(pose.last().pose())` followed by LevelRenderer applying camera
-                // rotation downstream. Portal/nausea/screenEffect distortion isn't captured
-                // by the bob mixin and is a known gap.
-                org.joml.Matrix4f bob = new org.joml.Matrix4f();
-                boolean haveBob = me.cortex.vulkium.blaze3d.BobViewTap.read(bob);
-                org.joml.Matrix4f mvp = new org.joml.Matrix4f(camState.projectionMatrix);
-                if (haveBob) mvp.mul(bob);
-                mvp.mul(camState.viewRotationMatrix);
+                // Prefer the catch-all projection capture from LevelRendererProjMixin — that
+                // single Matrix4fc has bob + portal + nausea + screen-effect + mod distortions
+                // all composed in by MC. Fall back to `projection × pose × viewRotation` using
+                // the bob-only PoseStack capture if the LevelRenderer inject didn't apply at
+                // runtime for mapping reasons.
+                org.joml.Matrix4f mvp;
+                org.joml.Matrix4f captured = new org.joml.Matrix4f();
+                if (me.cortex.vulkium.blaze3d.BobViewTap.readProjection(captured)) {
+                    mvp = captured.mul(camState.viewRotationMatrix);
+                } else {
+                    org.joml.Matrix4f pose = new org.joml.Matrix4f();
+                    boolean havePose = me.cortex.vulkium.blaze3d.BobViewTap.readPose(pose);
+                    mvp = new org.joml.Matrix4f(camState.projectionMatrix);
+                    if (havePose) mvp.mul(pose);
+                    mvp.mul(camState.viewRotationMatrix);
+                }
                 scene.mvp(mvp);
                 scene.flush();
             }

@@ -4,48 +4,71 @@ import org.joml.Matrix4f;
 import org.joml.Matrix4fc;
 
 /**
- * Stores the bob-and-hurt pose matrix captured from {@code GameRenderer.bobHurt/bobView} via
- * {@link me.cortex.vulkium.mixin.camera.GameRendererBobMixin}. FrameDriver composes MVP as
- * {@code projection × pose × viewRotation}, matching vanilla's composition in
- * {@code renderLevel} — {@code projCopy.mul(pose.last().pose())} then the downstream
- * {@code LevelRenderer.renderLevel} receives that already-composed projection.
+ * Stores view-space matrices captured from MC's render pipeline for vulkium's MVP composition.
  *
- * <p>Does NOT yet cover portal-effect warp or nausea distortion; those get applied further
- * downstream in {@code GameRenderer.renderLevel} after the bobs. Both the @Inject and
- * @ModifyArg attempts to catch the final fully-composed projection on MC 26.2 Fabric dev
- * failed mixin target resolution ("Scanned 0 target(s)" despite byte-accurate descriptors).
- * Treated as a follow-up.
+ * <p>Two capture points:
+ * <ul>
+ *   <li>{@link #setPose(Matrix4fc)} — {@code GameRenderer.bobHurt/bobView} mixin captures the
+ *       PoseStack matrix after walking-bob + hurt-shake. Pose-only, no projection.</li>
+ *   <li>{@link #setProjection(Matrix4fc)} — {@code LevelRenderer.render/renderLevel} mixin
+ *       captures the FULL view-space projection argument. Already has bob + portal warp +
+ *       nausea + screen-effect-scale + any mod-injected distortion baked in. This is the
+ *       catch-all for every view-space effect; we prefer it when present.</li>
+ * </ul>
+ *
+ * <p>FrameDriver.onEndMain checks {@link #readProjection} first (catch-all). If that's not
+ * populated (mixin didn't apply on this runtime — e.g. because the method name / descriptor
+ * didn't resolve), it falls back to {@link #readPose} composed with camState.projectionMatrix.
  */
 public final class BobViewTap {
-    private static final Matrix4f MATRIX = new Matrix4f();
-    private static volatile boolean valid = false;
+    private static final Matrix4f POSE = new Matrix4f();
+    private static final Matrix4f PROJECTION = new Matrix4f();
+    private static volatile boolean poseValid = false;
+    private static volatile boolean projectionValid = false;
 
     private BobViewTap() {}
 
-    /** Called at the TAIL of bobHurt / bobView with the mutated PoseStack's top matrix. */
     public static void setPose(Matrix4fc source) {
-        synchronized (MATRIX) {
-            MATRIX.set(source);
-            valid = true;
+        synchronized (POSE) {
+            POSE.set(source);
+            poseValid = true;
         }
     }
 
-    /** @return the captured matrix copied into {@code dst}, or {@code false} if nothing's
-     *  been captured yet (first frame before any bob hook fired). */
-    public static boolean read(Matrix4f dst) {
-        if (!valid) return false;
-        synchronized (MATRIX) {
-            dst.set(MATRIX);
+    public static void setProjection(Matrix4fc source) {
+        synchronized (PROJECTION) {
+            PROJECTION.set(source);
+            projectionValid = true;
+        }
+    }
+
+    public static boolean readPose(Matrix4f dst) {
+        if (!poseValid) return false;
+        synchronized (POSE) {
+            dst.set(POSE);
         }
         return true;
     }
 
-    public static boolean hasValue() { return valid; }
+    public static boolean readProjection(Matrix4f dst) {
+        if (!projectionValid) return false;
+        synchronized (PROJECTION) {
+            dst.set(PROJECTION);
+        }
+        return true;
+    }
+
+    /** Back-compat: legacy {@code read} maps to the pose matrix. */
+    public static boolean read(Matrix4f dst) {
+        return readPose(dst);
+    }
+
+    public static boolean hasValue() { return poseValid || projectionValid; }
 
     public static void invalidate() {
-        synchronized (MATRIX) {
-            MATRIX.identity();
-            valid = false;
+        synchronized (POSE) {
+            POSE.identity();
+            poseValid = false;
         }
     }
 }
