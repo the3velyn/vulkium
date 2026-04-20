@@ -172,43 +172,66 @@ public final class UploadStream implements AutoCloseable {
         pending.clear();
 
         CommandRecorder.recordAndSubmit(cmd -> {
-            try (MemoryStack stack = MemoryStack.stackPush()) {
-                // Group copies by destination buffer so we issue one vkCmdCopyBuffer per target.
-                // Command buffers scale poorly with per-copy overhead; batching is free here.
-                int i = 0;
-                while (i < snapshot.size()) {
-                    long dst = snapshot.get(i).dstBuffer;
-                    int j = i;
-                    while (j < snapshot.size() && snapshot.get(j).dstBuffer == dst) j++;
-                    int run = j - i;
+            // Group copies by destination buffer — one vkCmdCopyBuffer per target. The copy
+            // array is allocated on the HEAP (not MemoryStack) because during heavy ingest a
+            // single frame can accumulate 10k+ pending copies (drainPerFrame=4096 × 2-3 copies
+            // per section + region meta slabs), and VkBufferCopy.SIZEOF × that count easily
+            // blows past LWJGL's 64 KB stack. Heap alloc is negligible cost at this rate.
+            int i = 0;
+            while (i < snapshot.size()) {
+                long dst = snapshot.get(i).dstBuffer;
+                int j = i;
+                while (j < snapshot.size() && snapshot.get(j).dstBuffer == dst) j++;
+                int run = j - i;
 
-                    VkBufferCopy.Buffer regions = VkBufferCopy.calloc(run, stack);
+                VkBufferCopy.Buffer regions = VkBufferCopy.calloc(run);
+                try {
                     for (int k = 0; k < run; k++) {
                         PendingCopy p = snapshot.get(i + k);
                         regions.get(k).srcOffset(p.srcOffset).dstOffset(p.dstOffset).size(p.byteCount);
                     }
                     VK10.vkCmdCopyBuffer(cmd, staging.handle(), dst, regions);
-                    i = j;
+                } finally {
+                    regions.free();
                 }
+                i = j;
             }
         });
 
-        // 3. Signal this section's timeline value via an empty queue submit. Queue submits are
+        // 3. Signal this frame's timeline value via an empty queue submit. Queue submits are
         // strictly ordered on the graphics queue, so this fences *after* the copy submit
-        // Mojang just issued. Consumers that later block on awaitUntil(sig) see the copy as
-        // complete.
+        // just issued. Consumers that later block on awaitUntil(sig) see the copy as complete.
         long sig = timeline.nextSignalValue();
         submitSignalOnly(sig);
-        sectionSignalValue[currentSection] = sig;
 
-        // 4. Reset per-section flush range (we've flushed everything) and advance.
-        resetSectionWriteRange(currentSection);
+        // Stamp EVERY section that received host writes this frame with `sig`. Mid-frame
+        // advances can touch multiple sections in a single commit (heavy ingest bursts like
+        // F3+A) — stamping only `currentSection` would leave the earlier sections with
+        // signalValue=0, so when the ring loops back `advanceSection` wouldn't wait, racing
+        // the GPU still reading those sections' staging bytes. Staging corruption under
+        // that race manifested as "reload breaks existing and new chunks". All writes this
+        // frame go into the same submit, so they all retire at the same timeline value.
+        for (int i = 0; i < sectionCount; i++) {
+            if (flushLo[i] != -1L) {
+                sectionSignalValue[i] = sig;
+                resetSectionWriteRange(i);
+            }
+        }
+
         advanceSection();
     }
 
     /** Advance {@link #currentSection}; waits for and resets the next section if it's busy. */
     private void advanceSection() {
         int next = (currentSection + 1) % sectionCount;
+        // If the next section has host writes from THIS frame that haven't been committed yet,
+        // we must flush + submit the pending copies before reusing the staging bytes. Otherwise
+        // the next writes clobber bytes that the still-queued vkCmdCopyBuffer is about to copy.
+        // Without this, heavy ingest bursts (render-distance change → thousands of sections in
+        // one frame) corrupt the uploaded arena data.
+        if (flushLo[next] != -1L) {
+            midFrameCommit();
+        }
         long waitValue = sectionSignalValue[next];
         if (waitValue > 0L) {
             // The next slot is pinned to a previous submit that hasn't retired yet. Block.
@@ -225,6 +248,55 @@ public final class UploadStream implements AutoCloseable {
         currentSection = next;
         cursor = 0L;
         resetSectionWriteRange(next);
+    }
+
+    /** Flush + submit currently-pending copies, signal, then stamp ALL touched sections with
+     *  the signal value. Used when {@link #advanceSection()} needs to recycle a section that
+     *  still has uncommitted host writes queued from earlier in the same frame. Does NOT call
+     *  advanceSection itself — the caller continues the wrap-around wait after this returns. */
+    private void midFrameCommit() {
+        if (pending.isEmpty()) return; // nothing to flush; flushLo != -1 but no queued copy — safe to reuse
+
+        // 1. Flush host writes for every section we've touched so far.
+        for (int i = 0; i < sectionCount; i++) {
+            if (flushLo[i] != -1L) {
+                staging.flush(flushLo[i], flushHi[i] - flushLo[i]);
+            }
+        }
+
+        // 2. Record + submit copies.
+        final java.util.List<PendingCopy> snapshot = new java.util.ArrayList<>(pending);
+        pending.clear();
+        CommandRecorder.recordAndSubmit(cmd -> {
+            int i = 0;
+            while (i < snapshot.size()) {
+                long dst = snapshot.get(i).dstBuffer;
+                int j = i;
+                while (j < snapshot.size() && snapshot.get(j).dstBuffer == dst) j++;
+                int run = j - i;
+                VkBufferCopy.Buffer regions = VkBufferCopy.calloc(run);
+                try {
+                    for (int k = 0; k < run; k++) {
+                        PendingCopy p = snapshot.get(i + k);
+                        regions.get(k).srcOffset(p.srcOffset).dstOffset(p.dstOffset).size(p.byteCount);
+                    }
+                    VK10.vkCmdCopyBuffer(cmd, staging.handle(), dst, regions);
+                } finally {
+                    regions.free();
+                }
+                i = j;
+            }
+        });
+
+        // 3. Signal and stamp every touched section.
+        long sig = timeline.nextSignalValue();
+        submitSignalOnly(sig);
+        for (int i = 0; i < sectionCount; i++) {
+            if (flushLo[i] != -1L) {
+                sectionSignalValue[i] = sig;
+                resetSectionWriteRange(i);
+            }
+        }
     }
 
     private void resetSectionWriteRange(int idx) {
