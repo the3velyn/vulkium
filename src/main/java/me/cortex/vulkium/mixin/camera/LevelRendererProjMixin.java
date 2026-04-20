@@ -40,7 +40,17 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(LevelRenderer.class)
 public abstract class LevelRendererProjMixin {
 
-    @Inject(method = "renderLevel", at = @At("HEAD"))
+    @Inject(
+        method = "renderLevel(Lcom/mojang/blaze3d/resource/GraphicsResourceAllocator;"
+               + "Lnet/minecraft/client/DeltaTracker;"
+               + "Z"
+               + "Lnet/minecraft/client/renderer/state/level/CameraRenderState;"
+               + "Lorg/joml/Matrix4fc;"
+               + "Lcom/mojang/blaze3d/buffers/GpuBufferSlice;"
+               + "Lorg/joml/Vector4f;"
+               + "Z"
+               + "Lnet/minecraft/client/renderer/chunk/ChunkSectionsToRender;)V",
+        at = @At("HEAD"))
     private void vulkium$captureFinalProjection(GraphicsResourceAllocator allocator,
                                                  DeltaTracker delta,
                                                  boolean cullSpectator,
