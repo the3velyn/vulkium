@@ -67,6 +67,7 @@ void main() {
     vec2 uv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
             + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
             + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
-    vec4 albedo = texture(tex_diffuse, uv);
-    colour = vec4(albedo.rgb, 1.0);
+    // Texture-sampling path temporarily disabled while the atlas binding/layout path is
+    // being figured out. Keep magenta so the block outlines remain visible against sky.
+    colour = vec4(1.0, 0.0, 1.0, 1.0);
 }
