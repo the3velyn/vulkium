@@ -1,11 +1,22 @@
 package me.cortex.vulkium.blaze3d;
 
 import org.joml.Matrix4f;
+import org.joml.Matrix4fc;
 
 /**
- * Stores the bobbed modelview matrix captured from {@code GameRenderer.bobHurt/bobView} via
- * the {@code GameRendererBobMixin}. Consumed by {@code FrameDriver.onEndMain} when composing
- * the vulkium MVP so terrain matches vanilla camera bob + damage/nausea distortion.
+ * Stores the fully-composed view-space projection matrix captured from the parameter that
+ * {@code GameRenderer.renderLevel} hands to {@code LevelRenderer.renderLevel}. That matrix
+ * already has bob, portal-effect, nausea, screen-effect-scale and any other view-space
+ * distortions baked in by MC, so a single capture covers every vanilla view effect.
+ *
+ * <p>Populated by {@link me.cortex.vulkium.mixin.camera.LevelRendererProjMixin} at that
+ * method's HEAD. Consumed by {@code FrameDriver.onEndMain} which composes
+ * {@code mvp = capturedProjection × viewRotation} — the viewRotation stays separate because
+ * MC's LevelRenderer applies rotation downstream of this projection.
+ *
+ * <p>The class name is historical — it started as a bob-only capture hooked on
+ * {@code GameRenderer.bobView/bobHurt}, but was broadened to cover all view-space effects.
+ * Keeping the name for now to avoid mixin-path churn.
  */
 public final class BobViewTap {
     private static final Matrix4f MATRIX = new Matrix4f();
@@ -13,26 +24,16 @@ public final class BobViewTap {
 
     private BobViewTap() {}
 
-    private static final org.slf4j.Logger LOGGER = org.slf4j.LoggerFactory.getLogger("vulkium/bob");
-    private static final java.util.concurrent.atomic.AtomicLong CAPTURES = new java.util.concurrent.atomic.AtomicLong();
-
-    public static void set(Matrix4f source) {
+    /** Called at the HEAD of LevelRenderer.renderLevel with MC's final view-space projection. */
+    public static void setProjection(Matrix4fc source) {
         synchronized (MATRIX) {
             MATRIX.set(source);
             valid = true;
         }
-        long n = CAPTURES.incrementAndGet();
-        // Periodic diagnostic: show a telltale element so we can tell identity vs active bob.
-        // m30 (translation x) and m31 (translation y) are near-zero for identity, non-zero when
-        // bobView is applying walk-cycle translation.
-        if (n <= 4 || n % 300 == 0) {
-            LOGGER.info("BobViewTap capture #{} m30={} m31={} m32={} identity={}",
-                n, source.m30(), source.m31(), source.m32(), source.equals(new Matrix4f()));
-        }
     }
 
-    /** @return the captured matrix copied into {@code dst}, or {@code false} if nothing's been
-     *  captured yet (render before first bob hook fired). */
+    /** @return the captured projection copied into {@code dst}, or {@code false} if nothing's
+     *  been captured yet (first frame before LevelRenderer.renderLevel has fired). */
     public static boolean read(Matrix4f dst) {
         if (!valid) return false;
         synchronized (MATRIX) {
@@ -43,8 +44,9 @@ public final class BobViewTap {
 
     public static boolean hasValue() { return valid; }
 
-    /** Call at the start of each frame so early-returning bobHurt/bobView (which skip our
-     *  @At("TAIL") inject) don't leave a stale matrix from the previous frame in place. */
+    /** Invalidate so a subsequent read returns false. Not used on the hot path — the
+     *  capture runs every frame, so the stored matrix stays fresh — but kept for explicit
+     *  reset scenarios (init teardown, etc.). */
     public static void invalidate() {
         synchronized (MATRIX) {
             MATRIX.identity();

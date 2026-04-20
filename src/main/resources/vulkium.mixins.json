@@ -11,7 +11,7 @@
     "chunk.RenderSectionMixin",
     "chunk.ChunkSectionsToRenderMixin",
     "gui.VideoSettingsScreenMixin",
-    "camera.GameRendererBobMixin"
+    "camera.LevelRendererProjMixin"
   ],
   "injectors": {
     "defaultRequire": 1

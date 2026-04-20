@@ -344,21 +344,17 @@ public final class FrameDriver {
             me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
             var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
             if (scene != null && camState != null) {
-                // Match vanilla's renderLevel composition:
-                //     projCopy = projection.clone()
-                //     projCopy.mul(pose.last().pose())   // pose = hurtBob from bobHurt+bobView
-                //     mvp = projCopy * viewRotation
-                // Equivalent to: mvp = projection * hurtBob * viewRotation.
-                //
-                // BobViewTap is populated at the TAIL of each bob method earlier in this frame
-                // (both methods run before this hook fires). Its invalidate() at onStartMain
-                // ensures we don't carry stale bobs from a previous frame through an
-                // early-returning bob method on the current frame.
-                org.joml.Matrix4f bob = new org.joml.Matrix4f();
-                boolean haveBob = me.cortex.vulkium.blaze3d.BobViewTap.read(bob);
-                org.joml.Matrix4f mvp = new org.joml.Matrix4f(camState.projectionMatrix);
-                if (haveBob) mvp.mul(bob);
-                mvp.mul(camState.viewRotationMatrix);
+                // LevelRendererProjMixin captures MC's fully-composed projection at the HEAD of
+                // LevelRenderer.renderLevel — bob + portal-effect + nausea + screen-effect-scale
+                // are all already baked into it. Use it directly and compose with the camera
+                // rotation separately (LevelRenderer applies rotation downstream of this proj).
+                // Fallback to camState.projectionMatrix on the very first frame before the
+                // capture fires.
+                org.joml.Matrix4f proj = new org.joml.Matrix4f();
+                if (!me.cortex.vulkium.blaze3d.BobViewTap.read(proj)) {
+                    proj.set(camState.projectionMatrix);
+                }
+                org.joml.Matrix4f mvp = proj.mul(camState.viewRotationMatrix);
                 scene.mvp(mvp);
                 scene.flush();
             }
