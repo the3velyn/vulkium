@@ -103,14 +103,8 @@ public final class FrameDriver {
         if (scene != null && camState != null) {
             updateMvpFromCamera(scene, camState);
         }
-        me.cortex.vulkium.vk.UploadStream stream = r.uploadStream();
-        if (stream != null) {
-            try {
-                stream.commitFrame();
-            } catch (Throwable t) {
-                LOGGER.warn("UploadStream.commitFrame failed (opaque)", t);
-            }
-        }
+        // commitFrame moved to the end of Renderer.prepareFrame (START_MAIN) — submitting
+        // earlier overlaps the copies with MC's sky / opaque / entities / clouds pass.
         dispatchTerrainDraw(true, false);
     }
 

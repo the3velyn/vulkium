@@ -214,6 +214,18 @@ public final class Renderer {
             .regionCount(regionCount)
             .frameId((int) (FrameDriver.frameCount() & 0xFF));
         sceneUniform.flush();
+
+        // Submit staging copies NOW (at START_MAIN), not at AFTER_OPAQUE_TERRAIN. This gives
+        // the GPU MC's sky / opaque-terrain / entities / clouds rendering window to chew
+        // through our arena + region/section-header uploads in parallel, so by the time our
+        // dispatch records at AFTER_OPAQUE_TERRAIN the copies are already in flight or done.
+        if (uploadStream != null) {
+            try {
+                uploadStream.commitFrame();
+            } catch (Throwable t) {
+                LOGGER.warn("UploadStream.commitFrame failed (prepareFrame)", t);
+            }
+        }
     }
 
     public SceneUniform sceneUniform() { return sceneUniform; }
