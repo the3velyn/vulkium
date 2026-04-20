@@ -270,26 +270,16 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         long pipeline = (renderFog ? pipelineFog : pipelineNoFog).handle();
         VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        // BOTH sets via allocated descriptor pool — no push descriptor. Scene UBO uses
-        // StagingBuffer (now has UNIFORM_BUFFER_BIT). Atlas+lightmap uses Mojang's sampler
-        // so layout/format/sampler are all known-valid.
-        bindSceneBuffer(sceneUniform.buffer().handle(), 0L, SceneUniform.SCENE_UBO_SIZE);
-        boolean atlasReady = atlasView != 0L && atlasSampler != 0L;
-        if (atlasReady) {
-            updateTextureDescriptors(atlasView, atlasSampler);
-        }
-
-        try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-            java.nio.LongBuffer pSets = atlasReady
-                ? stack.longs(sceneDescriptorSet, textureDescriptorSet)
-                : stack.longs(sceneDescriptorSet);
-            VK10.vkCmdBindDescriptorSets(cmd,
-                VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                pipelineLayout.handle(),
-                0 /* firstSet */,
-                pSets,
-                null);
-        }
+        // Stable magenta-milestone path: scene UBO via push-descriptor only. Atlas binding
+        // disabled pending proper diagnosis — tried: push+alloc, alloc+alloc, Mojang sampler,
+        // UNIFORM_BUFFER_BIT, atlas layout barrier. All hang the GPU at submit time without
+        // validation-layer error messages. Next attempt needs validation layers installed.
+        PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 0)
+                .uniformBuffer(0,
+                        sceneUniform.buffer().handle(),
+                        0L,
+                        SceneUniform.SCENE_UBO_SIZE)
+                .push(cmd);
 
         if (visibleRegionCount == 0) {
             return;

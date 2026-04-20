@@ -67,7 +67,6 @@ void main() {
     vec2 sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
                   + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
                   + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
-    vec4 albedo = texture(tex_diffuse, sampleUv);
-    // DIAG: force alpha=1, no discard.
-    colour = vec4(albedo.rgb, 1.0);
+    // Atlas sampling blocked — keep magenta so terrain stays visible.
+    colour = vec4(1.0, 0.0, 1.0, 1.0);
 }
