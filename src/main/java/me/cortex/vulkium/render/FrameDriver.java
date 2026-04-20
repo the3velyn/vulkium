@@ -63,6 +63,12 @@ public final class FrameDriver {
         // this is the only path from MC's worker-thread captures to our live state.
         SectionManager.get().drainPending(DRAIN_PER_FRAME);
 
+        // Translucent POV-resort drain: MC's ResortTransparencyTask produces new sorted index
+        // buffers each time the camera crosses a sub-chunk boundary. Our resort mixin copies
+        // those into a queue; here we apply them to the arena by permuting the cached unsorted
+        // translucent bytes. Cap liberally — resort batches are typically tens of sections.
+        SectionManager.get().drainResorts(2048);
+
         // prepareFrame runs the frustum cull + writes the scene UBO (+visibility pointers).
         // Only needed if we're drawing OR if F3 is shown (so the HUD overlay's visible-region
         // count stays fresh). When F3 is hidden AND draws are off, the idle frame cost is just

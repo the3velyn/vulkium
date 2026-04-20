@@ -9,6 +9,7 @@
     "chunk.CompiledSectionMeshMixin",
     "chunk.SectionCompilerMixin",
     "chunk.RenderSectionMixin",
+    "chunk.RenderSectionResortMixin",
     "chunk.ChunkSectionsToRenderMixin",
     "gui.VideoSettingsScreenMixin",
     "camera.GameRendererBobMixin",

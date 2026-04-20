@@ -50,6 +50,12 @@ public final class SectionManager {
     /** Worker → render hand-off. Unbounded; trimmed per frame by drainPending(). */
     private final ConcurrentLinkedQueue<PendingIngest> ingestQueue = new ConcurrentLinkedQueue<>();
 
+    /** Separate queue for POV-driven translucent resorts captured from MC's
+     *  {@code ResortTransparencyTask} via {@code RenderSectionResortMixin}. Processed each
+     *  frame alongside the main ingest drain. Kept separate so the per-frame drain cap on
+     *  ingests doesn't starve resorts (they're cheaper — just a permutation + re-upload). */
+    private final ConcurrentLinkedQueue<PendingResort> resortQueue = new ConcurrentLinkedQueue<>();
+
     /** Lazy-initialized on the render thread the first time we drain. */
     private RegionManager regionManager;
 
@@ -283,5 +289,41 @@ public final class SectionManager {
     private record PendingIngest(long key, SectionEntry entry) {
         /** Sentinel: entry=null means "drop this section from the live table". */
         static PendingIngest eviction(long key) { return new PendingIngest(key, null); }
+    }
+
+    /** Worker-thread hand-off of a POV-resorted translucent index buffer. The raw bytes
+     *  are a COPY (MC's ByteBuffer is closed right after our mixin returns, so we must
+     *  snapshot before queueing). */
+    private record PendingResort(long key, byte[] indexBytes) {}
+
+    /** Called by RenderSectionResortMixin on the worker thread. Copies the bytes so MC can
+     *  close its own buffer immediately. */
+    public void offerResort(long sectionPosKey, byte[] indexBytesCopy) {
+        if (sectionPosKey == SectionCapture.UNKNOWN_SECTION) return;
+        resortQueue.offer(new PendingResort(sectionPosKey, indexBytesCopy));
+    }
+
+    /** Render-thread pass at frame start. Walks any queued resorts and applies them to the
+     *  arena via {@code TerrainUploader.resortTranslucent}. Cheap — at most one staging-ring
+     *  upload per resort, bounded by the number of translucent sections that MC re-sorted
+     *  this frame (typically 0-few dozen on POV threshold crossings). */
+    public int drainResorts(int limit) {
+        me.cortex.vulkium.render.Renderer renderer = me.cortex.vulkium.render.Renderer.get();
+        me.cortex.vulkium.render.TerrainUploader uploader = renderer.terrainUploader();
+        me.cortex.vulkium.vk.UploadStream stream = renderer.uploadStream();
+        if (uploader == null || stream == null) return 0;
+        int n = 0;
+        while (n < limit) {
+            PendingResort p = resortQueue.poll();
+            if (p == null) break;
+            try {
+                uploader.resortTranslucent(p.key, p.indexBytes, stream);
+            } catch (RuntimeException ex) {
+                LOGGER.warn("Translucent resort failed for section 0x{} (continuing): {}",
+                    Long.toHexString(p.key), ex.getMessage());
+            }
+            n++;
+        }
+        return n;
     }
 }

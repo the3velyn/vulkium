@@ -61,12 +61,24 @@ public final class TerrainUploader implements AutoCloseable {
     /** sectionPosKey (SectionPos.asLong) → quad-address in the arena. */
     private final Long2IntOpenHashMap sectionToAddr = new Long2IntOpenHashMap();
 
+    /** sectionPosKey → UNSORTED compact-format (16-byte/vert) translucent bytes, laid out as
+     *  consecutive {@code qCount × 64B} quads in MC's build-order (no permutation applied).
+     *  Needed so we can apply a fresh index-buffer sort later without going back to MC's
+     *  already-freed MeshData.vertexBuffer — see {@link #resortTranslucent}. */
+    private final it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<byte[]> translucentUnsortedCache =
+        new it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap<>();
+
+    /** sectionPosKey → opaqueQuadCount at last upload. Needed to offset the translucent
+     *  sub-range when resorting (arena slot layout is [opaque][translucent]). */
+    private final Long2IntOpenHashMap sectionOpaqueQuads = new Long2IntOpenHashMap();
+
     private boolean closed;
 
     public TerrainUploader() {
         // SIZE_LIMIT == -1 is the sentinel returned by allocQuads when full; use it as the
         // Long2IntOpenHashMap "missing" default so a raw get() disambiguates naturally.
         this.sectionToAddr.defaultReturnValue((int) SegmentedManager.SIZE_LIMIT);
+        this.sectionOpaqueQuads.defaultReturnValue(-1);
         long arenaSize = FALLBACK_ARENA_SIZE;
         try {
             int mb = me.cortex.vulkium.VulkiumConfig.get().terrainArenaMb;
@@ -196,29 +208,43 @@ public final class TerrainUploader implements AutoCloseable {
                 opaqueVerts += vCount;
             }
             // Pass 2: translucent layer — appended right after opaque so translucent draws
-            // index [addr + opaqueQuads, addr + totalQuads). When MC built this section it
-            // also sort-wrote an index buffer ordering quads back-to-front for the POV of the
-            // build. Our mesh shader can't easily consume a custom index buffer (it reads 4
-            // consecutive verts per quad from terrainData), so we *permute* the verts here —
-            // writing them out in sorted quad-order. Result: blending order matches vanilla's
-            // for the POV that built this section (drifts only as player moves beyond MC's
-            // re-sort threshold, at which point MC rebuilds and we ingest a fresh sort).
+            // index [addr + opaqueQuads, addr + totalQuads).
+            //
+            // Two-step:
+            //   1. Always build an UNSORTED compact-byte array (repackMcToCompact) → cache by
+            //      sectionKey. This is the "source of truth" for later POV resorts when MC's
+            //      ResortTransparencyTask fires and our mixin hands us a new index buffer —
+            //      we permute these cached bytes into the new order and re-upload to arena.
+            //   2. If MC already handed us a build-time sort index buffer, apply it as a
+            //      permutation to produce SORTED arena bytes; else memcpy the unsorted bytes.
             SectionEntry.LayerGeometry trans = entry.layers.get(ChunkSectionLayer.TRANSLUCENT);
             if (trans != null && trans.vertexBytes != null && trans.vertexBytes.remaining() > 0
                     && trans.vertexCount > 0) {
                 int vCount = trans.vertexCount;
                 int outBytes = vCount * VERTEX_STRIDE;
-                long dstPtr = stream.upload(arena.buffer(), dstByteOffset, outBytes);
-                // Eligible for sorted-repack when we have an index buffer AND it's sized as
-                // MC's "6 indices per quad" layout. Fall back to linear repack otherwise.
                 int qCount = vCount / 4;
+
+                // Step 1 — build unsorted cache via a temporary native scratch buffer.
+                byte[] unsorted = new byte[outBytes];
+                long tmp = MemoryUtil.nmemAlloc(outBytes);
+                try {
+                    repackMcToCompact(trans.vertexBytes, tmp, vCount);
+                    MemoryUtil.memByteBuffer(tmp, outBytes).get(unsorted);
+                } finally {
+                    MemoryUtil.nmemFree(tmp);
+                }
+                translucentUnsortedCache.put(sectionPosKey, unsorted);
+
+                // Step 2 — arena write. Prefer MC's build-time sort if present; else just
+                // memcpy the already-built unsorted bytes from `unsorted` into the staging slot.
+                long dstPtr = stream.upload(arena.buffer(), dstByteOffset, outBytes);
                 ByteBuffer ib = trans.indexBytes;
                 if (ib != null && trans.indexCount == qCount * 6 && ib.remaining() >= trans.indexCount * 2) {
                     int indexBytesPerElem = ib.remaining() / trans.indexCount;
                     repackMcToCompactSortedByIndex(trans.vertexBytes, ib, qCount,
                             indexBytesPerElem, dstPtr);
                 } else {
-                    repackMcToCompact(trans.vertexBytes, dstPtr, vCount);
+                    MemoryUtil.memByteBuffer(dstPtr, outBytes).put(unsorted);
                 }
                 dstByteOffset += outBytes;
                 translucentVerts += vCount;
@@ -232,6 +258,8 @@ public final class TerrainUploader implements AutoCloseable {
         }
 
         sectionToAddr.put(sectionPosKey, addr);
+        sectionOpaqueQuads.put(sectionPosKey, opaqueVerts / 4);
+        if (translucentVerts == 0) translucentUnsortedCache.remove(sectionPosKey);
         return new UploadResult(addr, opaqueVerts / 4, translucentVerts / 4);
     }
 
@@ -241,6 +269,58 @@ public final class TerrainUploader implements AutoCloseable {
         int addr = sectionToAddr.remove(sectionPosKey);
         if (addr != (int) SegmentedManager.SIZE_LIMIT) {
             arena.free(addr);
+        }
+        translucentUnsortedCache.remove(sectionPosKey);
+        sectionOpaqueQuads.remove(sectionPosKey);
+    }
+
+    /**
+     * Apply a POV-resorted translucent index buffer (produced by MC's
+     * {@code ResortTransparencyTask}) to our already-cached unsorted translucent bytes, and
+     * upload the re-permuted vertex data back to the arena's translucent sub-range.
+     *
+     * <p>{@code indexBytes} is MC's freshly-built sorted index buffer, 6 indices per quad.
+     * For each sorted quad position q, {@code indexBytes[q*6*bytesPerIdx]} is {@code 4*k}
+     * where {@code k} is the original (build-order) quad index. We copy that quad's 4
+     * consecutive 16-byte verts from the cache to the arena at the new position q.
+     *
+     * <p>No-ops if the cache is missing (resort arrived before initial ingest, or section
+     * was evicted). No-ops if quad counts don't line up.
+     */
+    public void resortTranslucent(long sectionPosKey, byte[] indexBytes, UploadStream stream) {
+        if (closed) return;
+        byte[] unsorted = translucentUnsortedCache.get(sectionPosKey);
+        if (unsorted == null) return;
+        int addr = sectionToAddr.get(sectionPosKey);
+        if (addr == (int) SegmentedManager.SIZE_LIMIT) return;
+        int opaqueQuads = sectionOpaqueQuads.get(sectionPosKey);
+        if (opaqueQuads < 0) return;
+
+        int qCount = unsorted.length / (4 * VERTEX_STRIDE);
+        if (qCount == 0) return;
+        int expectedIndexCount = qCount * 6;
+        int bytesPerIdx = indexBytes.length / expectedIndexCount;
+        if (bytesPerIdx != 2 && bytesPerIdx != 4) return;
+
+        // Translucent quads live at [addr + opaqueQuads, addr + opaqueQuads + qCount) in the
+        // arena, each quad = 4 verts × 16 B = 64 B.
+        long translucentByteOffset = arena.byteOffsetOf(addr) + (long) opaqueQuads * 4L * VERTEX_STRIDE;
+        int outBytes = qCount * 4 * VERTEX_STRIDE;
+        long dstPtr = stream.upload(arena.buffer(), translucentByteOffset, outBytes);
+
+        // Stream sorted quads into staging. indexBytes[q*6*bytesPerIdx] = 4 * originalQuad.
+        java.nio.ByteBuffer dstBuf = MemoryUtil.memByteBuffer(dstPtr, outBytes);
+        int quadSize = 4 * VERTEX_STRIDE;
+        java.nio.ByteBuffer ib = java.nio.ByteBuffer.wrap(indexBytes).order(java.nio.ByteOrder.LITTLE_ENDIAN);
+        for (int q = 0; q < qCount; q++) {
+            int idxOff = q * 6 * bytesPerIdx;
+            int firstIdx = (bytesPerIdx == 2)
+                    ? (ib.getShort(idxOff) & 0xFFFF)
+                    : ib.getInt(idxOff);
+            int origQuad = firstIdx >>> 2;
+            if (origQuad < 0 || origQuad >= qCount) return; // malformed index — bail
+            dstBuf.position(q * quadSize);
+            dstBuf.put(unsorted, origQuad * quadSize, quadSize);
         }
     }
 
