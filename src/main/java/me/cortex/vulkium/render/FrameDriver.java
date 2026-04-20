@@ -265,6 +265,12 @@ public final class FrameDriver {
                     pass.record(cmd, scene, dispatchCount, false /* renderFog */,
                                 atlasViewFinal, atlasSamplerFinal,
                                 lightmapViewFinal, lightmapSamplerFinal);
+                    // Translucent pass — same dispatch count, different pipeline (blend on,
+                    // depth write off). Task shader emits only for sections with >0 translucent
+                    // quads.
+                    pass.recordTranslucent(cmd, scene, dispatchCount,
+                                atlasViewFinal, atlasSamplerFinal,
+                                lightmapViewFinal, lightmapSamplerFinal);
                     logDispatchThrottled("draw: pass.record() issued pipeline={} dispatchCount={} atlas={}",
                         Long.toHexString(pass.pipelineLayout().handle()), dispatchCount, atlasViewFinal != 0L);
 

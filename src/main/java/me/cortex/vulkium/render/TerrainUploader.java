@@ -85,7 +85,27 @@ public final class TerrainUploader implements AutoCloseable {
      * @return the quad-address in the arena, or {@link SegmentedManager#SIZE_LIMIT} if the arena
      *         is full (caller must evict or reject)
      */
+    /** Out-parameter returned by {@link #uploadSection}: base quad address plus the split
+     *  between opaque and translucent quads in that range. Opaque quads occupy [addr, addr+opaque),
+     *  translucent quads occupy [addr+opaque, addr+opaque+translucent). */
+    public static final class UploadResult {
+        public final int addr;
+        public final int opaqueQuadCount;
+        public final int translucentQuadCount;
+        public UploadResult(int addr, int opaque, int translucent) {
+            this.addr = addr;
+            this.opaqueQuadCount = opaque;
+            this.translucentQuadCount = translucent;
+        }
+        public static final UploadResult FULL =
+            new UploadResult((int) SegmentedManager.SIZE_LIMIT, 0, 0);
+    }
+
     public int uploadSection(long sectionPosKey, SectionEntry entry, UploadStream stream) {
+        return uploadSectionSplit(sectionPosKey, entry, stream).addr;
+    }
+
+    public UploadResult uploadSectionSplit(long sectionPosKey, SectionEntry entry, UploadStream stream) {
         if (closed) throw new IllegalStateException("TerrainUploader closed");
 
         // 1. Sum vertex count + byte total across all present layers. Use DrawState.vertexCount
@@ -105,7 +125,7 @@ public final class TerrainUploader implements AutoCloseable {
         if (totalVerts == 0) {
             // Empty section — release any prior allocation and stop.
             releaseSection(sectionPosKey);
-            return (int) SegmentedManager.SIZE_LIMIT;
+            return UploadResult.FULL;
         }
 
         // Terrain is quad-indexed: 4 verts per quad. Round DOWN if MC occasionally produces a
@@ -113,7 +133,7 @@ public final class TerrainUploader implements AutoCloseable {
         int quadCount = totalVerts / 4;
         if (quadCount == 0) {
             releaseSection(sectionPosKey);
-            return (int) SegmentedManager.SIZE_LIMIT;
+            return UploadResult.FULL;
         }
 
         // 2. Reuse existing slot if the quad count matches, else free + re-alloc.
@@ -128,8 +148,7 @@ public final class TerrainUploader implements AutoCloseable {
             }
             addr = arena.allocQuads(quadCount);
             if (addr == (int) SegmentedManager.SIZE_LIMIT) {
-                // Arena full. Caller's problem.
-                return (int) SegmentedManager.SIZE_LIMIT;
+                return UploadResult.FULL;
             }
         }
 
@@ -143,8 +162,12 @@ public final class TerrainUploader implements AutoCloseable {
         long baseByteOffset = arena.byteOffsetOf(addr);
         long dstByteOffset = baseByteOffset;
         boolean newAlloc = existing != addr;
+        int opaqueVerts = 0;
+        int translucentVerts = 0;
         try {
+            // Pass 1: opaque + cutout layers first — these go at addr.
             for (Map.Entry<ChunkSectionLayer, SectionEntry.LayerGeometry> e : entry.layers.entrySet()) {
+                if (e.getKey() == ChunkSectionLayer.TRANSLUCENT) continue;
                 SectionEntry.LayerGeometry geom = e.getValue();
                 if (geom == null) continue;
                 ByteBuffer src = geom.vertexBytes;
@@ -156,12 +179,20 @@ public final class TerrainUploader implements AutoCloseable {
                 long dstPtr = stream.upload(arena.buffer(), dstByteOffset, outBytes);
                 repackMcToCompact(src, dstPtr, vCount);
                 dstByteOffset += outBytes;
+                opaqueVerts += vCount;
+            }
+            // Pass 2: translucent layer — appended right after opaque.
+            SectionEntry.LayerGeometry trans = entry.layers.get(ChunkSectionLayer.TRANSLUCENT);
+            if (trans != null && trans.vertexBytes != null && trans.vertexBytes.remaining() > 0
+                    && trans.vertexCount > 0) {
+                int vCount = trans.vertexCount;
+                int outBytes = vCount * VERTEX_STRIDE;
+                long dstPtr = stream.upload(arena.buffer(), dstByteOffset, outBytes);
+                repackMcToCompact(trans.vertexBytes, dstPtr, vCount);
+                dstByteOffset += outBytes;
+                translucentVerts += vCount;
             }
         } catch (RuntimeException ex) {
-            // Roll back: if we just allocated for this call, release it so the arena doesn't leak
-            // the slot. Copies already queued in UploadStream for earlier layers will still fire,
-            // but they'll target a freed region — the next allocation will overwrite it before
-            // any draw reads it (draws consult sectionToAddr, which we're also clearing).
             if (newAlloc) {
                 arena.free(addr);
             }
@@ -169,9 +200,8 @@ public final class TerrainUploader implements AutoCloseable {
             throw ex;
         }
 
-        // 4. Record the (possibly reused) slot for future frames.
         sectionToAddr.put(sectionPosKey, addr);
-        return addr;
+        return new UploadResult(addr, opaqueVerts / 4, translucentVerts / 4);
     }
 
     /** Drop a section from the arena. Called when a section is evicted from the live table. */

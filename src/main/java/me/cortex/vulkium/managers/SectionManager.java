@@ -140,7 +140,9 @@ public final class SectionManager {
         me.cortex.vulkium.vk.UploadStream stream = renderer.uploadStream();
         if (uploader != null && stream != null && p.key != SectionCapture.UNKNOWN_SECTION) {
             try {
-                int addr = uploader.uploadSection(p.key, p.entry, stream);
+                me.cortex.vulkium.render.TerrainUploader.UploadResult up =
+                    uploader.uploadSectionSplit(p.key, p.entry, stream);
+                int addr = up.addr;
                 if (addr == me.cortex.vulkium.managers.util.SegmentedManager.SIZE_LIMIT) {
                     if (drained <= 8 || drained % 4096 == 0) {
                         LOGGER.warn("Terrain arena full — upload skipped for section 0x{} (drained={})",
@@ -162,23 +164,20 @@ public final class SectionManager {
                     int sz = SectionPos.z(p.key);
                     int ref = sectionToRegionRef.get(p.key);
                     if (ref != -1) {
-                        int quadCount = 0;
-                        for (SectionEntry.LayerGeometry g : p.entry.layers.values()) {
-                            quadCount += g.vertexCount / 4;
-                        }
+                        int opaqueQuads = Math.min(up.opaqueQuadCount, 0xFFFF);
+                        int translucentQuads = Math.min(up.translucentQuadCount, 0xFFFF);
                         long ptr = regionManager.setSectionData(ref);
-                        // Full-section AABB (offsets=0, sizes=15 = covers 0..15). Per-face tight
-                        // bounds are a V7 polish pass — conservative AABB is correct, just skips
-                        // a GPU occlusion win.
+                        // Full-section AABB (offsets=0, sizes=15 = covers 0..15).
                         MemoryUtil.memPutInt(ptr,      (sx << 8) | 0xF0);
                         MemoryUtil.memPutInt(ptr +  4, (sz << 8) | 0xF0);
                         MemoryUtil.memPutInt(ptr +  8, (sy << 8) | 0xF0);
                         MemoryUtil.memPutInt(ptr + 12, addr);
-                        // renderRanges — all quads in one "unsigned" bin in .w low 16 bits.
+                        // renderRanges — .w low 16 = opaque quads, .w high 16 = translucent quads.
+                        // Translucent quads begin at (addr + opaqueQuads) in the arena.
                         MemoryUtil.memPutInt(ptr + 16, 0);
                         MemoryUtil.memPutInt(ptr + 20, 0);
                         MemoryUtil.memPutInt(ptr + 24, 0);
-                        MemoryUtil.memPutInt(ptr + 28, Math.min(quadCount, 0xFFFF));
+                        MemoryUtil.memPutInt(ptr + 28, opaqueQuads | (translucentQuads << 16));
                     }
                 }
             } catch (RuntimeException e) {

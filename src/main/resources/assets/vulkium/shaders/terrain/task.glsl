@@ -27,10 +27,6 @@ void main() {
         return;
     }
 
-    #ifdef STATISTICS_SECTIONS
-    atomicAdd(statistics_buffer.data[1], 1);
-    #endif
-
     ivec4 header = sectionData.data[sectionId].header;
     ivec3 chunk = ivec3(header.xyz) >> 8;
     chunk.y &= 0x1ff;
@@ -41,13 +37,33 @@ void main() {
     chunk -= unpackOriginOffsetId(payload.transformationId);
 
     payload.origin = vec3(chunk << 4);
-    payload.baseOffset = uint(header.w);
 
-    uint taskCount = populateTasks(chunk, uvec4(sectionData.data[sectionId].renderRanges));
+    // renderRanges.w: low 16 = opaque quad count, high 16 = translucent quad count.
+    // Translucent quads are stored in the arena immediately after opaque quads, so
+    // translucent baseOffset = header.w + opaqueCount.
+    uvec4 ranges = uvec4(sectionData.data[sectionId].renderRanges);
+    uint opaqueQuads = ranges.w & 0xFFFFu;
+    uint translucentQuads = (ranges.w >> 16) & 0xFFFFu;
 
-    #ifdef STATISTICS_QUADS
-    atomicAdd(statistics_buffer.data[2], payload.quadCount);
-    #endif
-
+    #ifdef TRANSLUCENT_PASS
+    payload.baseOffset = uint(header.w) + opaqueQuads;
+    payload.quadCount = translucentQuads;
+    payload.binIa = uvec4(0);
+    payload.binIb = uvec4(0);
+    payload.binVa = uvec4(0);
+    payload.binVb = uvec4(0);
+    // Single bin covering the whole translucent range.
+    payload.binIa.x = translucentQuads;
+    payload.binVa.x = 0u;
+    uint taskCount = (translucentQuads + MESH_WORKLOAD_PER_INVOCATION - 1u)
+                      / MESH_WORKLOAD_PER_INVOCATION;
     EmitMeshTasksEXT(taskCount, 1, 1);
+    #else
+    payload.baseOffset = uint(header.w);
+    // Opaque path — existing populateTasks handles binning from renderRanges.xyz.
+    // Replace ranges.w with opaque-only low 16 (high 16 = translucent not relevant here).
+    uvec4 opaqueRanges = uvec4(ranges.x, ranges.y, ranges.z, opaqueQuads);
+    uint taskCount = populateTasks(chunk, opaqueRanges);
+    EmitMeshTasksEXT(taskCount, 1, 1);
+    #endif
 }

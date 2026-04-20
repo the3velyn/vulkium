@@ -25,7 +25,9 @@ public final class ShaderSanityCheck {
 
     private static final List<Entry> SHADERS = List.of(
         new Entry("terrain/task.glsl", ShaderStage.TASK, Map.of()),
+        new Entry("terrain/task.glsl", ShaderStage.TASK, Map.of("TRANSLUCENT_PASS", "1")),
         new Entry("terrain/mesh.glsl", ShaderStage.MESH, Map.of()),
+        new Entry("terrain/mesh.glsl", ShaderStage.MESH, Map.of("TRANSLUCENT_PASS", "1")),
         new Entry("terrain/mesh.glsl", ShaderStage.MESH, Map.of("RENDER_FOG", "1")),
         new Entry("terrain/frag.frag", ShaderStage.FRAGMENT, Map.of()),
         new Entry("terrain/frag.frag", ShaderStage.FRAGMENT, Map.of("RENDER_FOG", "1")),

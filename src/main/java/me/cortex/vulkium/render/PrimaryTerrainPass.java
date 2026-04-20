@@ -66,6 +66,11 @@ public final class PrimaryTerrainPass implements AutoCloseable {
 
     private final MeshPipeline pipelineNoFog;
     private final MeshPipeline pipelineFog;
+    /** Translucent variant: blend on, depth write off, task shader uses the high-16 of
+     *  renderRanges.w (translucent quad count) and offset = header.w + opaque count. */
+    private final MeshPipeline pipelineTranslucent;
+    private final ShaderModule taskTranslucentModule;
+    private final ShaderModule meshTranslucentModule;
 
     // Unified descriptor pool + sets for BOTH scene UBO (set=0) and textures (set=1). Push
     // descriptor interacted badly (set=0 push silently invalidated set=1 binding → textureSize
@@ -99,6 +104,9 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         PipelineLayout pLayout = null;
         MeshPipeline pipeNo = null;
         MeshPipeline pipeFog = null;
+        MeshPipeline pipeTrans = null;
+        ShaderModule taskTrans = null;
+        ShaderModule meshTrans = null;
         try {
             Map<String, String> noDefines = Map.of();
             Map<String, String> fogDefines = Map.of("RENDER_FOG", "1");
@@ -156,14 +164,33 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .blend(false)
                     .cullMode(VK10.VK_CULL_MODE_FRONT_BIT)
                     .build();
+
+            // Translucent variant: compile task+mesh with TRANSLUCENT_PASS=1. Task emits from
+            // the high-16 of renderRanges.w. Mesh reads with baseOffset shifted past opaque
+            // quads. Pipeline has blend on, depth write off (read-only against opaque depth).
+            Map<String, String> transDefines = Map.of("TRANSLUCENT_PASS", "1");
+            taskTrans = ShaderModule.compileFromResource("terrain/task.glsl", ShaderStage.TASK, transDefines);
+            meshTrans = ShaderModule.compileFromResource("terrain/mesh.glsl", ShaderStage.MESH, transDefines);
+            pipeTrans = MeshPipeline.builder(pLayout)
+                    .task(taskTrans)
+                    .mesh(meshTrans)
+                    .fragment(fragNo)
+                    .colorFormat(COLOR_FORMAT)
+                    .depthFormat(DEPTH_FORMAT)
+                    .depthTest(true)
+                    .depthWrite(false)
+                    .blend(true)
+                    .cullMode(VK10.VK_CULL_MODE_FRONT_BIT)
+                    .build();
         } catch (RuntimeException e) {
-            // Rollback in reverse construction order. close() is null-safe per se (its checks
-            // happen inside the object), but we only call close() on non-null references.
+            if (pipeTrans != null)   pipeTrans.close();
             if (pipeFog != null)     pipeFog.close();
             if (pipeNo != null)      pipeNo.close();
             if (pLayout != null)     pLayout.close();
-            if (texLayout != null)   texLayout.close();
+            if (texLayout != null && texLayout != sceneLayout) texLayout.close();
             if (sceneLayout != null) sceneLayout.close();
+            if (meshTrans != null)   meshTrans.close();
+            if (taskTrans != null)   taskTrans.close();
             if (fragFog != null)     fragFog.close();
             if (fragNo != null)      fragNo.close();
             if (meshFog != null)     meshFog.close();
@@ -182,6 +209,9 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         this.pipelineLayout = pLayout;
         this.pipelineNoFog = pipeNo;
         this.pipelineFog = pipeFog;
+        this.pipelineTranslucent = pipeTrans;
+        this.taskTranslucentModule = taskTrans;
+        this.meshTranslucentModule = meshTrans;
 
         // Allocate a pool sized for 2 sets: 1 UBO (scene) + 2 combined-image-samplers (texture).
         this.descriptorPool = me.cortex.vulkium.vk.DescriptorPool.forTypes(
@@ -262,6 +292,31 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                        long atlasSampler,
                        long lightmapView,
                        long lightmapSampler) {
+        recordWithPipeline(cmd, sceneUniform, visibleRegionCount,
+            (renderFog ? pipelineFog : pipelineNoFog).handle(),
+            atlasView, atlasSampler, lightmapView, lightmapSampler);
+    }
+
+    /** Translucent pass: same dispatch count but a blend-enabled pipeline driven by a task
+     *  shader that reads the high-16 quad count from renderRanges.w. Call AFTER {@link #record}. */
+    public void recordTranslucent(VkCommandBuffer cmd,
+                                  SceneUniform sceneUniform,
+                                  int visibleRegionCount,
+                                  long atlasView, long atlasSampler,
+                                  long lightmapView, long lightmapSampler) {
+        recordWithPipeline(cmd, sceneUniform, visibleRegionCount,
+            pipelineTranslucent.handle(),
+            atlasView, atlasSampler, lightmapView, lightmapSampler);
+    }
+
+    private void recordWithPipeline(VkCommandBuffer cmd,
+                                    SceneUniform sceneUniform,
+                                    int visibleRegionCount,
+                                    long pipeline,
+                                    long atlasView,
+                                    long atlasSampler,
+                                    long lightmapView,
+                                    long lightmapSampler) {
         if (closed) throw new IllegalStateException("PrimaryTerrainPass is closed");
         if (cmd == null) throw new NullPointerException("cmd");
         if (sceneUniform == null) throw new NullPointerException("sceneUniform");
@@ -269,7 +324,6 @@ public final class PrimaryTerrainPass implements AutoCloseable {
             throw new IllegalArgumentException("visibleRegionCount < 0: " + visibleRegionCount);
         }
 
-        long pipeline = (renderFog ? pipelineFog : pipelineNoFog).handle();
         VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
         // Single combined descriptor set (set=0) pushed in one go: UBO + atlas + lightmap.
@@ -307,6 +361,7 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         closed = true;
         // Reverse construction order: pool → pipelines → pipeline layout → set layouts → modules.
         descriptorPool.close();
+        pipelineTranslucent.close();
         pipelineFog.close();
         pipelineNoFog.close();
         pipelineLayout.close();
@@ -314,6 +369,8 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         sceneUboSetLayout.close();
         fragModuleFog.close();
         fragModuleNoFog.close();
+        meshTranslucentModule.close();
+        taskTranslucentModule.close();
         meshModuleFog.close();
         meshModuleNoFog.close();
         taskModule.close();
