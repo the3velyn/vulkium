@@ -24,7 +24,7 @@ layout(location = 1) in Interpolants {
 #endif
 
 
-layout(set = 1, binding = 1) uniform sampler2D tex_light;
+layout(set = 0, binding = 2) uniform sampler2D tex_light;
 
 vec4 sampleLight(vec2 uv) {
     //Its divided by 16 to match sodium/vanilla (it can never be 1 which is funny)
@@ -56,7 +56,7 @@ void applyFog(inout vec3 colour) {
 #endif
 
 
-layout(set = 1, binding = 0) uniform sampler2D tex_diffuse;
+layout(set = 0, binding = 1) uniform sampler2D tex_diffuse;
 
 void main() {
     uint quadId = uint(gl_PrimitiveID) >> 4;
@@ -67,6 +67,7 @@ void main() {
     vec2 sampleUv = gl_BaryCoordEXT.x * decodeVertexUV(Vq0)
                   + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
                   + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
-    // Atlas sampling blocked — keep magenta so terrain stays visible.
-    colour = vec4(1.0, 0.0, 1.0, 1.0);
+    vec4 albedo = texture(tex_diffuse, sampleUv);
+    // DIAG: alpha forced 1 to confirm sampling is now working through the unified set.
+    colour = vec4(albedo.rgb, 1.0);
 }

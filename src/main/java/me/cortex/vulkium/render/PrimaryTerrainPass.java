@@ -110,25 +110,25 @@ public final class PrimaryTerrainPass implements AutoCloseable {
             fragNo = ShaderModule.compileFromResource("terrain/frag.frag", ShaderStage.FRAGMENT, noDefines);
             fragFog = ShaderModule.compileFromResource("terrain/frag.frag", ShaderStage.FRAGMENT, fogDefines);
 
-            // Descriptor set 0: scene UBO at binding 0, visible to task+mesh+fragment.
+            // Single combined descriptor set (set=0): scene UBO at binding=0 + atlas sampler
+            // at binding=1 + lightmap sampler at binding=2. Vulkan allows only ONE set per
+            // pipeline layout with PUSH_DESCRIPTOR; combining everything into one set means we
+            // can push everything as a coherent unit, avoiding cross-set invalidation.
             sceneLayout = DescriptorSetLayout.builder()
                     .binding(0, VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1, SCENE_UBO_STAGES)
-                    .build();
-
-            // Descriptor set 1: fragment-only combined-image-samplers for the terrain atlas and
-            // light texture. Traditional (non-push) layout — bound via vkCmdBindDescriptorSets.
-            // Push-descriptor hangs the GPU when set=0 is also push-pushed (even without the
-            // flag due to driver leniency), so set=1 goes through a real descriptor pool.
-            texLayout = DescriptorSetLayout.builder()
-                    .binding(0, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
-                            VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
                     .binding(1, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
                             VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
+                    .binding(2, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1,
+                            VK10.VK_SHADER_STAGE_FRAGMENT_BIT)
+                    .pushDescriptor(true)
                     .build();
+            // Kept for API compatibility — points at the same layout now. Texture bindings
+            // moved into sceneLayout so pipelineLayout has exactly one set.
+            texLayout = sceneLayout;
 
-            // Pipeline layout: both sets, no push constants (scene data travels via the UBO).
+            // Pipeline layout: single combined set, no push constants.
             pLayout = PipelineLayout.builder()
-                    .setLayouts(sceneLayout, texLayout)
+                    .setLayouts(sceneLayout)
                     .build();
 
             // Two pipelines, same layout. The only differences are the mesh + fragment
@@ -270,16 +270,23 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         long pipeline = (renderFog ? pipelineFog : pipelineNoFog).handle();
         VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        // Stable magenta-milestone path: scene UBO via push-descriptor only. Atlas binding
-        // disabled pending proper diagnosis — tried: push+alloc, alloc+alloc, Mojang sampler,
-        // UNIFORM_BUFFER_BIT, atlas layout barrier. All hang the GPU at submit time without
-        // validation-layer error messages. Next attempt needs validation layers installed.
-        PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 0)
+        // Single combined descriptor set (set=0) pushed in one go: UBO + atlas + lightmap.
+        // Push-descriptor is only legal on one set per pipeline layout per the Vulkan spec;
+        // unifying everything into one set avoids the cross-set invalidation that was breaking
+        // the shader's texture binding.
+        PushDescriptor pd = PushDescriptor.builder(pipelineLayout.handle(),
+                VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 0)
                 .uniformBuffer(0,
                         sceneUniform.buffer().handle(),
                         0L,
-                        SceneUniform.SCENE_UBO_SIZE)
-                .push(cmd);
+                        SceneUniform.SCENE_UBO_SIZE);
+        if (atlasView != 0L && atlasSampler != 0L) {
+            pd.combinedImageSampler(1, atlasView, atlasSampler,
+                    VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            pd.combinedImageSampler(2, atlasView, atlasSampler,
+                    VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+        }
+        pd.push(cmd);
 
         if (visibleRegionCount == 0) {
             return;
@@ -297,7 +304,7 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         pipelineFog.close();
         pipelineNoFog.close();
         pipelineLayout.close();
-        textureSetLayout.close();
+        // sceneUboSetLayout == textureSetLayout now (combined into one set). Close once.
         sceneUboSetLayout.close();
         fragModuleFog.close();
         fragModuleNoFog.close();
