@@ -130,7 +130,7 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .depthTest(true)
                     .depthWrite(true)
                     .blend(false)
-                    .cullMode(VK10.VK_CULL_MODE_BACK_BIT)
+                    .cullMode(VK10.VK_CULL_MODE_NONE)
                     .build();
 
             pipeFog = MeshPipeline.builder(pLayout)
@@ -142,7 +142,7 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .depthTest(true)
                     .depthWrite(true)
                     .blend(false)
-                    .cullMode(VK10.VK_CULL_MODE_BACK_BIT)
+                    .cullMode(VK10.VK_CULL_MODE_NONE)
                     .build();
         } catch (RuntimeException e) {
             // Rollback in reverse construction order. close() is null-safe per se (its checks
