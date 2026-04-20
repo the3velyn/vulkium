@@ -198,6 +198,10 @@ public final class PrimaryTerrainPass implements AutoCloseable {
             .update();
         lastBoundAtlasView = atlasView;
         lastBoundAtlasSampler = atlasSampler;
+        org.slf4j.LoggerFactory.getLogger("vulkium/descriptor").info(
+            "Updated texture descriptor set: view=0x{} sampler=0x{} set=0x{} layout=0x{}",
+            Long.toHexString(atlasView), Long.toHexString(atlasSampler),
+            Long.toHexString(textureDescriptorSet), Long.toHexString(pipelineLayout.handle()));
     }
 
     /** The shared {@link PipelineLayout} both variants are built against. */
