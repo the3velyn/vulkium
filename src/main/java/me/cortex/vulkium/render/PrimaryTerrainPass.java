@@ -234,14 +234,12 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                         SceneUniform.SCENE_UBO_SIZE)
                 .push(cmd);
 
-        if (atlasView != 0L && atlasSampler != 0L) {
-            PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 1)
-                    .combinedImageSampler(0, atlasView, atlasSampler,
-                            VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                    .combinedImageSampler(1, atlasView, atlasSampler,
-                            VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                    .push(cmd);
-        }
+        // TODO(vulkium): texture sampling via push-descriptor for set=1 hangs the GPU on NVIDIA
+        // (semaphore timeout at submit). Suspect: Vulkan disallows multiple sets with the
+        // push flag in one pipeline layout, and/or the atlas image isn't in the expected
+        // SHADER_READ_ONLY_OPTIMAL layout at END_MAIN. Migrating to a traditional descriptor
+        // set (allocated from a pool) for textures is the cleaner long-term fix. For now
+        // frag stays hardcoded and we keep the rest of the pipeline healthy.
 
         if (visibleRegionCount == 0) {
             return;
