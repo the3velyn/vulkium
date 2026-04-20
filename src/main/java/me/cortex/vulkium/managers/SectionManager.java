@@ -175,8 +175,11 @@ public final class SectionManager {
                         MemoryUtil.memPutInt(ptr +  4, (sz << 8) | 0xF0);
                         // header.z bits 8-16 = chunk.y (sign-extended 9-bit); bit 17 = hide-bit.
                         // Translucent count occupies bits 18-31 (14 bits, max 16383 quads/section).
+                        // MUST mask (sy<<8) to bits 8-16 only — negative sy sign-extends into the
+                        // high bits and corrupts the translucent-count pack.
+                        int syBits = (sy << 8) & 0x0001FF00;
                         MemoryUtil.memPutInt(ptr +  8,
-                            ((sy << 8) | 0xF0) | ((translucentQuads & 0x3FFF) << 18));
+                            0xF0 | syBits | ((translucentQuads & 0x3FFF) << 18));
                         MemoryUtil.memPutInt(ptr + 12, addr);
                         // renderRanges.w low 16 = opaque quads (the existing semantic —
                         // unsigned-bin quad count). High 16 stays 0 so populateTasks' `fr`
