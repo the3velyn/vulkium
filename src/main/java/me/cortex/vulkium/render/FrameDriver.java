@@ -171,13 +171,11 @@ public final class FrameDriver {
         try {
             me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {
                 try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-                    // Color + depth + atlas barriers. Atlas bar forces SHADER_READ_ONLY_OPTIMAL
-                    // so our fragment samples legally — Mojang may leave the atlas in a
-                    // different layout by our render time and sampling an image with
-                    // mismatched layout hangs the GPU on NVIDIA.
+                    // Color + depth barriers only. Atlas barrier was disrupting Mojang's layout
+                    // tracking for the block atlas, causing GPU hangs — Mojang keeps the atlas
+                    // in SHADER_READ_ONLY_OPTIMAL anyway for its own terrain pass.
                     int barrierCount = 1
-                        + (depthViewHandle != 0L ? 1 : 0)
-                        + (atlasImageFinal != 0L ? 1 : 0);
+                        + (depthViewHandle != 0L ? 1 : 0);
                     org.lwjgl.vulkan.VkImageMemoryBarrier2.Buffer bars = org.lwjgl.vulkan.VkImageMemoryBarrier2.calloc(barrierCount, stack);
                     bars.position(0).sType$Default()
                         .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
@@ -211,26 +209,6 @@ public final class FrameDriver {
                         bars.position(barIdx).subresourceRange()
                             .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_DEPTH_BIT)
                             .baseMipLevel(0).levelCount(1)
-                            .baseArrayLayer(0).layerCount(1);
-                        barIdx++;
-                    }
-                    if (atlasImageFinal != 0L) {
-                        // Atlas: force SHADER_READ_ONLY_OPTIMAL layout so our fragment sample is
-                        // defined. oldLayout=UNDEFINED means we don't care what Mojang left it
-                        // in — contents are preserved in practice on NVIDIA for this transition.
-                        bars.position(barIdx).sType$Default()
-                            .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT)
-                            .srcAccessMask(0)
-                            .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT)
-                            .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_SAMPLED_READ_BIT)
-                            .oldLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_UNDEFINED)
-                            .newLayout(org.lwjgl.vulkan.VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-                            .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
-                            .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
-                            .image(atlasImageFinal);
-                        bars.position(barIdx).subresourceRange()
-                            .aspectMask(org.lwjgl.vulkan.VK10.VK_IMAGE_ASPECT_COLOR_BIT)
-                            .baseMipLevel(0).levelCount(atlasMipFinal)
                             .baseArrayLayer(0).layerCount(1);
                         barIdx++;
                     }
