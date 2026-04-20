@@ -234,17 +234,14 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                         SceneUniform.SCENE_UBO_SIZE)
                 .push(cmd);
 
-        // DIAG: atlas push disabled. Without it the sampler returns undefined which on some
-        // drivers hangs the GPU. First confirming whether push-with-SHADER_READ_ONLY is the
-        // hang cause; if no hang without push, the issue is specifically the atlas binding.
-        // if (atlasView != 0L && atlasSampler != 0L) {
-        //     PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 1)
-        //             .combinedImageSampler(0, atlasView, atlasSampler,
-        //                     VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-        //             .combinedImageSampler(1, atlasView, atlasSampler,
-        //                     VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-        //             .push(cmd);
-        // }
+        if (atlasView != 0L && atlasSampler != 0L) {
+            PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 1)
+                    .combinedImageSampler(0, atlasView, atlasSampler,
+                            VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .combinedImageSampler(1, atlasView, atlasSampler,
+                            VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
+                    .push(cmd);
+        }
 
         if (visibleRegionCount == 0) {
             return;
