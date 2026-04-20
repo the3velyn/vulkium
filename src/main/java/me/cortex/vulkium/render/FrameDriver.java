@@ -145,6 +145,8 @@ public final class FrameDriver {
 
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
         long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
+        long atlasImage = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImage();
+        int atlasMipLevels = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasMipLevels();
 
         final int fbW = rt.width;
         final int fbH = rt.height;
@@ -155,6 +157,8 @@ public final class FrameDriver {
         final int depthFormatFinal = depthFormat;
         final long atlasViewFinal = atlasView;
         final long atlasSamplerFinal = atlasSampler;
+        final long atlasImageFinal = atlasImage;
+        final int atlasMipFinal = atlasMipLevels;
 
         try {
             me.cortex.vulkium.vk.CommandRecorder.recordAndSubmit(cmd -> {

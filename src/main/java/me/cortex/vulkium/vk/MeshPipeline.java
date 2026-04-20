@@ -115,7 +115,8 @@ public final class MeshPipeline implements AutoCloseable {
                     .sType$Default()
                     .polygonMode(VK10.VK_POLYGON_MODE_FILL)
                     .cullMode(cullMode)
-                    .frontFace(VK10.VK_FRONT_FACE_COUNTER_CLOCKWISE)
+                    // MC/nvidium quad winding is clockwise; COUNTER_CLOCKWISE would cull outer faces.
+                    .frontFace(VK10.VK_FRONT_FACE_CLOCKWISE)
                     .lineWidth(1.0f);
 
                 VkPipelineMultisampleStateCreateInfo msaa = VkPipelineMultisampleStateCreateInfo.calloc(stack)

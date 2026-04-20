@@ -50,6 +50,36 @@ public final class MojangAtlasTap {
         return vkv.vkImageView();
     }
 
+    /** Underlying atlas VkImage handle (needed for layout-transition barriers). */
+    public static long blockAtlasImage() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) return VK10.VK_NULL_HANDLE;
+        TextureAtlas atlas;
+        try {
+            atlas = mc.getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS);
+        } catch (RuntimeException e) {
+            return VK10.VK_NULL_HANDLE;
+        }
+        GpuTextureView view = atlas.getTextureView();
+        if (!(view instanceof VulkanGpuTextureView vkv)) return VK10.VK_NULL_HANDLE;
+        return vkv.texture().vkImage();
+    }
+
+    /** Mip-level count of the block atlas, for barrier subresource ranges. */
+    public static int blockAtlasMipLevels() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) return 1;
+        TextureAtlas atlas;
+        try {
+            atlas = mc.getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS);
+        } catch (RuntimeException e) {
+            return 1;
+        }
+        GpuTextureView view = atlas.getTextureView();
+        if (!(view instanceof VulkanGpuTextureView vkv)) return 1;
+        return Math.max(1, vkv.texture().getMipLevels());
+    }
+
     /**
      * Returns (and lazily creates) a vulkium-owned sampler configured like vanilla MC's
      * terrain sampler: nearest mag/min, linear mipmap, clamp-to-edge, anisotropy disabled.
