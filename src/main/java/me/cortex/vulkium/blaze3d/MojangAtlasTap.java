@@ -36,18 +36,35 @@ public final class MojangAtlasTap {
      * @return the {@code VkImageView} handle of Mojang's block atlas texture, or
      *         {@code VK_NULL_HANDLE} if the atlas isn't ready or not backed by Vulkan.
      */
+    private static int probeFailureLogged = 0;
+
     public static long blockAtlasImageView() {
         Minecraft mc = Minecraft.getInstance();
-        if (mc == null) return VK10.VK_NULL_HANDLE;
+        if (mc == null) { logProbeOnce("mc=null"); return VK10.VK_NULL_HANDLE; }
         TextureAtlas atlas;
         try {
             atlas = mc.getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS);
         } catch (RuntimeException e) {
+            logProbeOnce("getAtlasOrThrow threw: " + e);
             return VK10.VK_NULL_HANDLE;
         }
+        if (atlas == null) { logProbeOnce("atlas null"); return VK10.VK_NULL_HANDLE; }
         GpuTextureView view = atlas.getTextureView();
-        if (!(view instanceof VulkanGpuTextureView vkv)) return VK10.VK_NULL_HANDLE;
-        return vkv.vkImageView();
+        if (view == null) { logProbeOnce("getTextureView=null"); return VK10.VK_NULL_HANDLE; }
+        if (!(view instanceof VulkanGpuTextureView vkv)) {
+            logProbeOnce("view not VulkanGpuTextureView, got " + view.getClass().getName());
+            return VK10.VK_NULL_HANDLE;
+        }
+        long handle = vkv.vkImageView();
+        if (handle == 0L) logProbeOnce("vkImageView=0");
+        return handle;
+    }
+
+    private static void logProbeOnce(String msg) {
+        if (probeFailureLogged < 3) {
+            probeFailureLogged++;
+            LOGGER.warn("blockAtlasImageView failed: {}", msg);
+        }
     }
 
     /** Underlying atlas VkImage handle (needed for layout-transition barriers). */
