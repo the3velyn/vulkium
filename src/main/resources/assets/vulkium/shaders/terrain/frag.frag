@@ -68,6 +68,8 @@ void main() {
             + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
             + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
     vec4 albedo = texture(tex_diffuse, uv);
-    // DIAG: force alpha=1, no discard, raw rgb.
-    colour = vec4(albedo.rgb, 1.0);
+    // DIAG: sample at a hardcoded center — if this returns non-zero but `uv` sample is zero,
+    // it's UV-range related. If BOTH are zero, descriptor binding is broken.
+    vec4 fixedSample = texture(tex_diffuse, vec2(0.25, 0.25));
+    colour = vec4(fixedSample.rgb + vec3(0.2), 1.0);
 }
