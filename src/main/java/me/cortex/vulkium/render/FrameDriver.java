@@ -76,6 +76,7 @@ public final class FrameDriver {
     }
 
     private static long lastDispatchLog = 0L;
+    private static boolean depthFormatLogged = false;
 
     private static void dispatchTerrainDraw() {
         Renderer r = Renderer.get();
@@ -136,7 +137,10 @@ public final class FrameDriver {
             depthView = vkDepth.vkImageView();
             depthImage = vkDepth.texture().vkImage();
             depthFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkDepth.texture().getFormat());
-            logDispatchThrottled("Mojang depth: VkFormat={} view=0x{}", depthFormat, Long.toHexString(depthView));
+            if (!depthFormatLogged) {
+                depthFormatLogged = true;
+                LOGGER.info("Mojang depth attachment: VkFormat={} view=0x{}", depthFormat, Long.toHexString(depthView));
+            }
         }
 
         long atlasView = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImageView();
