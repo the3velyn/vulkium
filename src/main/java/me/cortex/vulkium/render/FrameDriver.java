@@ -77,6 +77,7 @@ public final class FrameDriver {
 
     private static long lastDispatchLog = 0L;
     private static boolean depthFormatLogged = false;
+    private static boolean atlasInfoLogged = false;
 
     private static void dispatchTerrainDraw() {
         Renderer r = Renderer.get();
@@ -147,6 +148,13 @@ public final class FrameDriver {
         long atlasSampler = me.cortex.vulkium.blaze3d.MojangAtlasTap.sampler();
         long atlasImage = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasImage();
         int atlasMipLevels = me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasMipLevels();
+        if (atlasView != 0L && !atlasInfoLogged) {
+            atlasInfoLogged = true;
+            LOGGER.info("Atlas: view=0x{} image=0x{} format=VkFormat({}) mipLevels={} sampler=0x{}",
+                Long.toHexString(atlasView), Long.toHexString(atlasImage),
+                me.cortex.vulkium.blaze3d.MojangAtlasTap.blockAtlasVkFormat(),
+                atlasMipLevels, Long.toHexString(atlasSampler));
+        }
 
         final int fbW = rt.width;
         final int fbH = rt.height;

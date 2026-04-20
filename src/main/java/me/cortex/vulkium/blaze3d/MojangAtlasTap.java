@@ -65,6 +65,21 @@ public final class MojangAtlasTap {
         return vkv.texture().vkImage();
     }
 
+    /** Format (VkFormat int) of the atlas image — useful for diagnosing sampler mismatches. */
+    public static int blockAtlasVkFormat() {
+        Minecraft mc = Minecraft.getInstance();
+        if (mc == null) return 0;
+        TextureAtlas atlas;
+        try {
+            atlas = mc.getAtlasManager().getAtlasOrThrow(TextureAtlas.LOCATION_BLOCKS);
+        } catch (RuntimeException e) {
+            return 0;
+        }
+        GpuTextureView view = atlas.getTextureView();
+        if (!(view instanceof VulkanGpuTextureView vkv)) return 0;
+        return com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkv.texture().getFormat());
+    }
+
     /** Mip-level count of the block atlas, for barrier subresource ranges. */
     public static int blockAtlasMipLevels() {
         Minecraft mc = Minecraft.getInstance();
