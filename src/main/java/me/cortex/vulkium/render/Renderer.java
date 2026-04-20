@@ -45,6 +45,7 @@ public final class Renderer {
      *  once V8 HZB-based section culling lands. */
     private me.cortex.vulkium.vk.DeviceBuffer sectionVisibilityBuffer;
     private me.cortex.vulkium.vk.DeviceBuffer regionVisibilityBuffer;
+    private TranslucentSectionSorter translucentSorter;
     private int hzbWidth;
     private int hzbHeight;
     private long hzbLastBuildNs;
@@ -88,6 +89,15 @@ public final class Renderer {
         long sectionPtr = rm != null ? rm.sectionBufferAddress() : 0L;
         int regionCount = rm != null ? rm.regionCount() : 0;
         long terrainPtr = terrainUploader != null ? terrainUploader.arenaBuffer().deviceAddress() : 0L;
+        // Translucent back-to-front section sort — CPU builds a per-frame list the translucent
+        // task shader indexes in place of gl_WorkGroupID.x. Far sections dispatch first so
+        // their blended pixels land before closer sections blend over them.
+        long translucentSortPtr = 0L;
+        if (translucentSorter != null) {
+            me.cortex.vulkium.managers.SectionManager smgr = me.cortex.vulkium.managers.SectionManager.get();
+            translucentSorter.sort(smgr.liveView(), rm, smgr, cx, cy, cz);
+            translucentSortPtr = translucentSorter.deviceAddress();
+        }
         long sortListPtr = regionSorter != null && uploadStream != null
             ? regionSorter.uploadVisibleList(uploadStream, visibility)
             : 0L;
@@ -148,7 +158,10 @@ public final class Renderer {
             .sectionVisibilityPtr(sectionVisibilityBuffer != null ? sectionVisibilityBuffer.deviceAddress() : 0L)
             .terrainCmdPtr(0L)
             .translucencyCmdPtr(0L)
-            .sortingRegionListPtr(sortListPtr)
+            // Repurposed: this pointer now carries the translucent-section sort list for the
+            // translucent task shader (far-to-near section IDs as uint16). RegionSorter's
+            // region-level list isn't wired into any draw path yet.
+            .sortingRegionListPtr(translucentSortPtr)
             .terrainDataPtr(terrainPtr)
             .transformationArrPtr(transformationBuffer != null ? transformationBuffer.deviceAddress() : 0L)
             .originArrPtr(originBuffer != null ? originBuffer.deviceAddress() : 0L)
@@ -232,6 +245,8 @@ public final class Renderer {
             // first-draw crash mid-frame. Construct failure disables the whole Renderer
             // (leaves vulkium flag enabled but render paths no-op so the game still runs).
             regionSorter = new RegionSorter();
+            translucentSorter = new TranslucentSectionSorter(
+                me.cortex.vulkium.VulkiumConfig.get().maxRegions);
             primaryTerrain = new PrimaryTerrainPass();
             terrainUploader = new TerrainUploader();
 
@@ -313,6 +328,10 @@ public final class Renderer {
         }
         if (regionSorter != null) {
             try { regionSorter.close(); } catch (Throwable t) { LOGGER.warn("RegionSorter close failed", t); }
+        }
+        if (translucentSorter != null) {
+            try { translucentSorter.close(); } catch (Throwable t) { LOGGER.warn("TranslucentSectionSorter close failed", t); }
+            translucentSorter = null;
             regionSorter = null;
         }
         if (uploadStream != null) {

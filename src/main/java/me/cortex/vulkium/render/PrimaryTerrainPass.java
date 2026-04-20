@@ -180,11 +180,7 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .depthTest(true)
                     .depthWrite(false)
                     .blend(true)
-                    // No cull on translucent — glass/ice panes need both faces visible,
-                    // and with depth-write off back-face culling can hide the closer face
-                    // of a glass block that draws before the one behind it. Double-draw cost
-                    // is small vs. the visual improvement for most overlapping translucents.
-                    .cullMode(VK10.VK_CULL_MODE_NONE)
+                    .cullMode(VK10.VK_CULL_MODE_FRONT_BIT)
                     .build();
         } catch (RuntimeException e) {
             if (pipeTrans != null)   pipeTrans.close();
