@@ -29,7 +29,7 @@ import org.spongepowered.asm.mixin.injection.ModifyArg;
 public abstract class LevelRendererProjMixin {
 
     @ModifyArg(
-        method = "renderLevel",
+        method = "renderLevel(Lnet/minecraft/client/DeltaTracker;)V",
         at = @At(value = "INVOKE",
                  target = "Lnet/minecraft/client/renderer/LevelRenderer;renderLevel"
                         + "(Lcom/mojang/blaze3d/resource/GraphicsResourceAllocator;"
