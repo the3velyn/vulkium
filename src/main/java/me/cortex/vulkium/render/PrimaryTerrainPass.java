@@ -67,11 +67,14 @@ public final class PrimaryTerrainPass implements AutoCloseable {
     private final MeshPipeline pipelineNoFog;
     private final MeshPipeline pipelineFog;
 
-    // Traditional (non-push) descriptor pool + set for texture bindings. Push-descriptor path
-    // hangs the GPU on NVIDIA when used for set=1 in a pipeline that also pushes set=0, so we
-    // allocate a real set and update it once when the atlas becomes available.
-    private final me.cortex.vulkium.vk.DescriptorPool textureDescriptorPool;
+    // Unified descriptor pool + sets for BOTH scene UBO (set=0) and textures (set=1). Push
+    // descriptor interacted badly (set=0 push silently invalidated set=1 binding → textureSize
+    // returned 0). Both sets allocated from this pool; scene UBO binding updated at init from
+    // the StagingBuffer backing it (fixed buffer handle, mutable data per-frame).
+    private final me.cortex.vulkium.vk.DescriptorPool descriptorPool;
+    private final long sceneDescriptorSet;
     private final long textureDescriptorSet;
+    private long sceneDescriptorBoundBuffer = 0L;
     private long lastBoundAtlasView = 0L;
     private long lastBoundAtlasSampler = 0L;
 
@@ -180,10 +183,23 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         this.pipelineNoFog = pipeNo;
         this.pipelineFog = pipeFog;
 
-        // Allocate the texture descriptor pool + set. Single set, two combined-image-samplers
-        // (block atlas + lightmap). Populated lazily once the atlas is ready.
-        this.textureDescriptorPool = me.cortex.vulkium.vk.DescriptorPool.forCombinedImageSampler(1, 2);
-        this.textureDescriptorSet = textureDescriptorPool.allocateSet(this.textureSetLayout);
+        // Allocate a pool sized for 2 sets: 1 UBO (scene) + 2 combined-image-samplers (texture).
+        this.descriptorPool = me.cortex.vulkium.vk.DescriptorPool.forTypes(
+            2,
+            new int[] { VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+                        VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER },
+            new int[] { 1, 2 });
+        this.sceneDescriptorSet = descriptorPool.allocateSet(this.sceneUboSetLayout);
+        this.textureDescriptorSet = descriptorPool.allocateSet(this.textureSetLayout);
+    }
+
+    /** Called once the scene UBO's backing buffer is known (per-frame data changes, buffer is stable). */
+    public void bindSceneBuffer(long uboBuffer, long offset, long range) {
+        if (uboBuffer == sceneDescriptorBoundBuffer) return;
+        new me.cortex.vulkium.vk.DescriptorSetWriter(sceneDescriptorSet)
+            .uniformBuffer(0, uboBuffer, offset, range)
+            .update();
+        sceneDescriptorBoundBuffer = uboBuffer;
     }
 
     /** Rebuild the texture descriptor set when the atlas view or sampler changes. Cheap no-op
@@ -254,28 +270,23 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         long pipeline = (renderFog ? pipelineFog : pipelineNoFog).handle();
         VK10.vkCmdBindPipeline(cmd, VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
 
-        // Both descriptor sets pushed AFTER vkCmdBindPipeline so the driver applies them to the
-        // now-bound pipeline's layout, not to stale state from a prior pipeline.
-        PushDescriptor.builder(pipelineLayout.handle(), VK10.VK_PIPELINE_BIND_POINT_GRAPHICS, 0)
-                .uniformBuffer(0,
-                        sceneUniform.buffer().handle(),
-                        0L,
-                        SceneUniform.SCENE_UBO_SIZE)
-                .push(cmd);
-
-        // Bind the texture descriptor set (allocated, non-push). Update it first if the atlas
-        // view/sampler changed (happens once when the atlas becomes available mid-session).
+        // Bind both descriptor sets (allocated from pool, non-push). Update them first if
+        // their underlying resources changed — cheap no-op when stable.
+        bindSceneBuffer(sceneUniform.buffer().handle(), 0L, SceneUniform.SCENE_UBO_SIZE);
         if (atlasView != 0L && atlasSampler != 0L) {
             updateTextureDescriptors(atlasView, atlasSampler);
-            try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
-                java.nio.LongBuffer pSet = stack.longs(textureDescriptorSet);
-                VK10.vkCmdBindDescriptorSets(cmd,
-                    VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
-                    pipelineLayout.handle(),
-                    1 /* firstSet */,
-                    pSet,
-                    null /* pDynamicOffsets */);
-            }
+        }
+
+        try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+            java.nio.LongBuffer pSets = (atlasView != 0L && atlasSampler != 0L)
+                ? stack.longs(sceneDescriptorSet, textureDescriptorSet)
+                : stack.longs(sceneDescriptorSet);
+            VK10.vkCmdBindDescriptorSets(cmd,
+                VK10.VK_PIPELINE_BIND_POINT_GRAPHICS,
+                pipelineLayout.handle(),
+                0 /* firstSet */,
+                pSets,
+                null /* pDynamicOffsets */);
         }
 
         if (visibleRegionCount == 0) {
@@ -290,7 +301,7 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         if (closed) return;
         closed = true;
         // Reverse construction order: pool → pipelines → pipeline layout → set layouts → modules.
-        textureDescriptorPool.close();
+        descriptorPool.close();
         pipelineFog.close();
         pipelineNoFog.close();
         pipelineLayout.close();

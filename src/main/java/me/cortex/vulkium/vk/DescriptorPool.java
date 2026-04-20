@@ -26,15 +26,21 @@ public final class DescriptorPool implements AutoCloseable {
 
     public long handle() { return handle; }
 
-    /**
-     * Allocate a pool with one combined-image-sampler entry of {@code maxSets} capacity.
-     * Tuned for vulkium's terrain-texture set (atlas + lightmap, bindings 0+1).
-     */
     public static DescriptorPool forCombinedImageSampler(int maxSets, int bindingsPerSet) {
+        return forTypes(maxSets,
+            new int[] { VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER },
+            new int[] { maxSets * bindingsPerSet });
+    }
+
+    /** Generic pool builder — N descriptor types with matching counts, {@code maxSets} total. */
+    public static DescriptorPool forTypes(int maxSets, int[] types, int[] counts) {
+        if (types.length != counts.length) throw new IllegalArgumentException();
         try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(1, stack)
-                .type(VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER)
-                .descriptorCount(maxSets * bindingsPerSet);
+            VkDescriptorPoolSize.Buffer sizes = VkDescriptorPoolSize.calloc(types.length, stack);
+            for (int i = 0; i < types.length; i++) {
+                sizes.position(i).type(types[i]).descriptorCount(counts[i]);
+            }
+            sizes.position(0);
 
             VkDescriptorPoolCreateInfo info = VkDescriptorPoolCreateInfo.calloc(stack)
                 .sType$Default()
