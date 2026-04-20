@@ -88,12 +88,12 @@ public final class Renderer {
         long sectionPtr = rm != null ? rm.sectionBufferAddress() : 0L;
         int regionCount = rm != null ? rm.regionCount() : 0;
         long terrainPtr = terrainUploader != null ? terrainUploader.arenaBuffer().deviceAddress() : 0L;
+        // Translucent section sort is currently disabled — the 0.5 MB DeviceBuffer write via
+        // UploadStream disrupted terrain uploads (arena offsets shifted by ~one chunk).
+        // Proper fix needs a host-visible persistent-mapped buffer with SHADER_DEVICE_ADDRESS
+        // that bypasses the staging ring entirely. Until then, translucent quads render in
+        // per-section arena order — acceptable artifacts at close-range overlapping glass.
         long translucentSortPtr = 0L;
-        if (translucentSorter != null && uploadStream != null) {
-            me.cortex.vulkium.managers.SectionManager smgr = me.cortex.vulkium.managers.SectionManager.get();
-            translucentSorter.sort(smgr.liveView(), rm, smgr, uploadStream, cx, cy, cz);
-            translucentSortPtr = translucentSorter.deviceAddress();
-        }
         long sortListPtr = regionSorter != null && uploadStream != null
             ? regionSorter.uploadVisibleList(uploadStream, visibility)
             : 0L;

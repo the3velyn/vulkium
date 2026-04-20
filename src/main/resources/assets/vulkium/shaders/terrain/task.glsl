@@ -20,17 +20,9 @@ bool shouldRenderVisible(uint sectionId) {
 #include <vulkium:terrain/task_common.glsl>
 
 void main() {
-    #ifdef TRANSLUCENT_PASS
-    // Translucent pass reads section IDs from the CPU-populated back-to-front sort list.
-    // Entry 0xFFFF is the sentinel marking unused tail — emit zero mesh workgroups.
-    uint sectionId = uint(sortingRegionList.data[gl_WorkGroupID.x]);
-    if (sectionId == 0xFFFFu) {
-        EmitMeshTasksEXT(0, 1, 1);
-        return;
-    }
-    #else
     uint sectionId = gl_WorkGroupID.x;
-    #endif
+    // Translucent back-to-front sort is disabled until the host-visible BDA path lands;
+    // translucent pass uses direct section order for now (same as opaque dispatch).
 
     if (!shouldRenderVisible(sectionId)) {
         EmitMeshTasksEXT(0, 1, 1);
