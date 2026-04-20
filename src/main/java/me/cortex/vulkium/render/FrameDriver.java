@@ -161,19 +161,42 @@ public final class FrameDriver {
         // land on screen.
         net.minecraft.client.Minecraft mc2 = net.minecraft.client.Minecraft.getInstance();
         if (mc2 == null || mc2.gameRenderer == null || mc2.gameRenderer.mainRenderTarget() == null) return;
-        com.mojang.blaze3d.pipeline.RenderTarget rt = mc2.gameRenderer.mainRenderTarget();
-        com.mojang.blaze3d.textures.GpuTextureView gpuView2 = rt.getColorTextureView();
+        com.mojang.blaze3d.pipeline.RenderTarget mainRt = mc2.gameRenderer.mainRenderTarget();
+
+        // Color target: opaque writes to MAIN, translucent writes to TRANSLUCENT. Mirrors MC
+        // vanilla's per-layer target bundle — MC composites CLOUDS/TRANSLUCENT via PostChain in
+        // the right relative order, so vulkium writing to the same per-layer targets makes the
+        // final composite land water in front of clouds where closer.
+        //
+        // Depth: both layers depth-test against MAIN's depth view. MC's clouds/entities share
+        // this depth too, so depth-sort between vulkium's geometry and MC's world effects
+        // stays coherent.
+        com.mojang.blaze3d.pipeline.RenderTarget colorRt = mainRt;
+        if (includeTranslucent && !includeOpaque) {
+            try {
+                if (mc2.levelRenderer != null) {
+                    com.mojang.blaze3d.pipeline.RenderTarget tRt = mc2.levelRenderer.translucentTarget();
+                    if (tRt != null) {
+                        colorRt = tRt;
+                    }
+                }
+            } catch (Throwable ignored) {
+                // Some configurations (e.g. fabulous-graphics off) have a null translucent target.
+                // Fall through to main. Users get the pre-target behavior (cloud-over-water).
+            }
+        }
+        com.mojang.blaze3d.textures.GpuTextureView gpuView2 = colorRt.getColorTextureView();
         if (!(gpuView2 instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkView2)) return;
         long colorView = vkView2.vkImageView();
         int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView2.texture().getFormat());
         if (colorView == 0L) return;
 
-        // Grab Mojang's depth attachment so our draws can depth-test + depth-write into the
-        // same buffer vanilla uses. Falls back to no-depth if Mojang's target lacks depth.
+        // Depth always from the main render target — every MC world-render pass shares this
+        // depth buffer, so depth-tests against clouds/entities/etc. remain consistent.
         long depthView = 0L;
         long depthImage = 0L;
         int depthFormat = org.lwjgl.vulkan.VK10.VK_FORMAT_UNDEFINED;
-        com.mojang.blaze3d.textures.GpuTextureView depthGpuView = rt.getDepthTextureView();
+        com.mojang.blaze3d.textures.GpuTextureView depthGpuView = mainRt.getDepthTextureView();
         if (depthGpuView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkDepth) {
             depthView = vkDepth.vkImageView();
             depthImage = vkDepth.texture().vkImage();
@@ -198,8 +221,8 @@ public final class FrameDriver {
                 atlasMipLevels, Long.toHexString(atlasSampler));
         }
 
-        final int fbW = rt.width;
-        final int fbH = rt.height;
+        final int fbW = colorRt.width;
+        final int fbH = colorRt.height;
         final long colorViewHandle = colorView;
         final long colorImageHandle = vkView2.texture().vkImage();
         final long depthViewHandle = depthView;
