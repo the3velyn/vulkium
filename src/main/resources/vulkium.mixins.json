@@ -10,7 +10,8 @@
     "chunk.CompileTaskMixin",
     "chunk.RenderSectionMixin",
     "chunk.ChunkSectionsToRenderMixin",
-    "gui.VideoSettingsScreenMixin"
+    "gui.VideoSettingsScreenMixin",
+    "camera.GameRendererBobMixin"
   ],
   "injectors": {
     "defaultRequire": 1

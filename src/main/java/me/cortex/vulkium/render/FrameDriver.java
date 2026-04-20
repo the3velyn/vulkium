@@ -300,7 +300,14 @@ public final class FrameDriver {
             me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
             if (scene != null && ctx.levelState() != null && ctx.levelState().cameraRenderState != null) {
                 org.joml.Matrix4f proj = ctx.levelState().cameraRenderState.projectionMatrix;
-                org.joml.Matrix4f mv = com.mojang.blaze3d.systems.RenderSystem.getModelViewMatrixCopy();
+                // Prefer the bobbed modelview captured by GameRendererBobMixin (reflects
+                // bobHurt + bobView + any distortion applied to MC's local PoseStack).
+                // Falls back to RenderSystem's global modelView if bob hasn't been captured
+                // yet (first frame before player state updates).
+                org.joml.Matrix4f mv = new org.joml.Matrix4f();
+                if (!me.cortex.vulkium.blaze3d.BobViewTap.read(mv)) {
+                    mv.set(com.mojang.blaze3d.systems.RenderSystem.getModelViewMatrixCopy());
+                }
                 org.joml.Matrix4f mvp = new org.joml.Matrix4f(proj).mul(mv);
                 scene.mvp(mvp);
                 scene.flush();
