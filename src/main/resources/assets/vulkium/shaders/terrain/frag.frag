@@ -68,9 +68,7 @@ void main() {
             + gl_BaryCoordEXT.y * decodeVertexUV(VqP)
             + gl_BaryCoordEXT.z * decodeVertexUV(Vq2);
     vec4 albedo = texture(tex_diffuse, uv);
-    // Alpha cutoff (low 2 bits of gl_PrimitiveID encode the cutoff index).
-    uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
-    float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
-    if (albedo.a <= cut) discard;
-    colour = albedo;
+    // DIAG: no alpha-cutoff. If sample returns (0,0,0,0) we see black terrain; if sample is
+    // valid we see textured. Cyan tint added to distinguish "sampled zero" from "no draw".
+    colour = vec4(albedo.rgb + vec3(0.0, 0.1, 0.1), 1.0);
 }
