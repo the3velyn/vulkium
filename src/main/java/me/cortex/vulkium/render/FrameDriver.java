@@ -23,8 +23,10 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class FrameDriver {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/frame");
 
-    /** Max section-ingest drains per frame. */
-    private static final int DRAIN_PER_FRAME = 256;
+    /** Max section-ingest drains per frame. Vulkium suppresses vanilla terrain so any queued
+     *  (not yet ingested) section = invisible chunk. High cap keeps streaming smooth on RD
+     *  change or teleport. */
+    private static final int DRAIN_PER_FRAME = 4096;
 
     private static final AtomicLong FRAMES = new AtomicLong();
 
