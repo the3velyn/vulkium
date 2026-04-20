@@ -111,19 +111,25 @@ public final class Renderer {
         }
 
         // Section-keep-distance sweep. Runs every 60 frames to amortize the live-map walk.
-        // Matches nvidium's region_keep_distance semantics — config default (256) is a no-op.
+        // 256+ = keep all (no-op); any other value (including 32 = "Vanilla") actually sweeps.
+        // Vulkium doesn't inherit MC's unload path — the RenderSectionMixin deliberately skips
+        // eviction on the rotating-cache reassignment — so 32 = "Vanilla-ish" means *this*
+        // sweep runs at radius 32, not "let MC do it".
         int keepDist = me.cortex.vulkium.VulkiumConfig.get().regionKeepDistance;
-        if (keepDist != 256 && keepDist != 32 && (FrameDriver.frameCount() % 60L) == 0L) {
+        if (keepDist < 256 && (FrameDriver.frameCount() % 60L) == 0L) {
             me.cortex.vulkium.managers.SectionManager.get()
-                .sweepKeepDistance(cx, cz, keepDist, 128);
+                .sweepKeepDistance(cx, cz, keepDist, 256);
         }
         long sortListPtr = regionSorter != null && uploadStream != null
             ? regionSorter.uploadVisibleList(uploadStream, visibility)
             : 0L;
 
         // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
+        // Uses getEffectiveRenderDistance() (not the raw slider) so our OptionsRenderDistanceMixin
+        // bumps this radius too — otherwise extraRd would extend the frustum but vulkium's own
+        // region cull would still clip at vanilla RD.
         if (cam.cullFrustum != null && rm != null) {
-            int rd = net.minecraft.client.Minecraft.getInstance().options.renderDistance().get();
+            int rd = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
             visibility.update(cam.cullFrustum, cx, cy, cz, rd);
         }
 

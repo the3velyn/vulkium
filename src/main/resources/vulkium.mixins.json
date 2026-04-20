@@ -11,6 +11,7 @@
     "chunk.RenderSectionMixin",
     "chunk.RenderSectionResortMixin",
     "chunk.ChunkSectionsToRenderMixin",
+    "gui.OptionsRenderDistanceMixin",
     "gui.VideoSettingsScreenMixin",
     "camera.GameRendererBobMixin",
     "camera.LevelRendererProjMixin"

@@ -339,16 +339,21 @@ public final class SectionManager {
     }
 
     /**
-     * Region-keep-distance sweep. Matches nvidium's {@code region_keep_distance} semantics:
-     * evict live sections whose chunk X/Z is outside a square of radius {@code keepDistance+4}
-     * around {@code (cameraChunkX, cameraChunkZ)}. The +4 slack mirrors nvidium's
-     * {@code RenderPipeline.java:198} — it avoids evict-thrash at the exact RD boundary.
+     * Region-keep-distance sweep. Evict live sections outside a square of radius
+     * {@code keepDistance+4} around {@code (cameraChunkX, cameraChunkZ)}.
      *
-     * <p>Special values (same as nvidium):
+     * <p>Semantics differ from nvidium's in one place: nvidium's {@code 32} fell back to
+     * Sodium's own eviction (which is called from MC's chunk-unload path). Vulkium's
+     * {@code RenderSectionMixin} deliberately does <b>not</b> evict on MC's rotating-cache
+     * reassignment (it caused chunks to flicker out while still-loaded), so there's no MC-side
+     * eviction to fall back to. Here {@code 32} means "actually sweep at radius 32" —
+     * the closest thing to vanilla render-distance behavior vulkium can offer on its own.
+     *
+     * <p>Special values:
      * <ul>
-     *   <li>{@code 32} — rely on MC's own unload to evict (this method early-returns; MC's
-     *       RenderSection rotating cache handles it via CompiledSectionMesh replacement).</li>
-     *   <li>{@code 256} — keep-all: this method is a no-op.</li>
+     *   <li>{@code 256+} — keep-all: this method is a no-op (users opt into unbounded memory).</li>
+     *   <li>Anything else — sweep at (keepDistance + 4). The +4 slack mirrors nvidium's
+     *       {@code RenderPipeline.java:198} to avoid evict-thrash at the exact boundary.</li>
      * </ul>
      *
      * <p>Walks all live keys via a one-shot array snapshot (map-walk + evict would ConcurrentMod).
@@ -359,7 +364,7 @@ public final class SectionManager {
      */
     public int sweepKeepDistance(int cameraChunkX, int cameraChunkZ,
                                  int keepDistance, int maxEvictPerCall) {
-        if (keepDistance == 32 || keepDistance >= 256) return 0;
+        if (keepDistance >= 256) return 0;
         final int radius = keepDistance + 4;
         final int radiusSq = radius * radius;
         // Snapshot keys so eviction can safely mutate the live map inside the loop.

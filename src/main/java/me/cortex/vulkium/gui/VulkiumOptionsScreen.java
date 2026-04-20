@@ -108,10 +108,11 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                     + "the fixed \"Terrain arena (MB)\" slider above.",
                 cfg.automaticMemory, v -> cfg.automaticMemory = v),
             intSlider("Extra render distance",
-                "Chunks of additional view distance beyond MC's setting. SINGLEPLAYER ONLY — "
-                    + "servers don't send chunks past their own view-distance setting, so the "
-                    + "slider can't reach past that on multiplayer. Inert until the "
-                    + "GameRenderer.getRenderDistance mixin lands.",
+                "Chunks of additional view distance beyond MC's setting. Wired via "
+                    + "Options.getEffectiveRenderDistance mixin — extends MC's depthFar and "
+                    + "vulkium's region cull in lockstep. SINGLEPLAYER ONLY: on multiplayer the "
+                    + "server still caps how many chunks it sends, so the slider has no visible "
+                    + "effect past the server's view-distance setting.",
                 0, 96, cfg.extraRd, v -> cfg.extraRd = v));
     }
 
