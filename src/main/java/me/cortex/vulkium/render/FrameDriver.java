@@ -134,15 +134,20 @@ public final class FrameDriver {
             return;
         }
 
-        // Dispatch count semantics: task shader uses gl_WorkGroupID.x AS a section ID, indexing
-        // sectionData.data[sectionId]. So dispatch count must cover the whole addressable section
-        // range (regionId<<8 | posInRegion), not just regionCount. Iterating all allocated regions
-        // × 256 slots/region means empty slots no-op (renderRanges.w=0 → task emits 0 mesh
-        // workgroups) and populated slots emit real geometry. Gives us ~40×256=10240 task
-        // workgroups for a typical scene — fine for mesh-shader dispatch limits (65535+).
+        // Dispatch count: when the compact opaque dispatch list is populated, use its entry
+        // count — task shader redirects gl_WorkGroupID.x through it and no-ops on the
+        // 0xFFFFFFFF sentinel. Fall back to the brute-force maxRegionIndex*256 sweep if the
+        // list is missing or empty (startup, or this frame had no visible sections).
         me.cortex.vulkium.managers.RegionManager rm = me.cortex.vulkium.Vulkium.regionManager();
-        int dispatchCount = rm == null ? visibleRegionCount
-            : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION;
+        int dispatchCount;
+        OpaqueDispatchList list = r.opaqueDispatchList();
+        int listCount = list != null ? list.count() : 0;
+        if (includeOpaque && !includeTranslucent && listCount > 0) {
+            dispatchCount = listCount;
+        } else {
+            dispatchCount = rm == null ? visibleRegionCount
+                : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION;
+        }
         if (dispatchCount == 0) return;
 
         logDispatchThrottled("draw: visibleRegions={} dispatchSections={} fbW={} fbH={}",

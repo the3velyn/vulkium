@@ -46,6 +46,7 @@ public final class Renderer {
     private me.cortex.vulkium.vk.DeviceBuffer sectionVisibilityBuffer;
     private me.cortex.vulkium.vk.DeviceBuffer regionVisibilityBuffer;
     private TranslucentSectionSorter translucentSorter;
+    private OpaqueDispatchList opaqueDispatchList;
     private int hzbWidth;
     private int hzbHeight;
     private long hzbLastBuildNs;
@@ -133,6 +134,16 @@ public final class Renderer {
             visibility.update(cam.cullFrustum, cx, cy, cz, rd);
         }
 
+        // Build the compact opaque dispatch list AFTER visibility has been updated — it
+        // filters to live-and-visible sections. FrameDriver consumes opaqueDispatchList.count()
+        // as the task-shader dispatch width, replacing the old maxRegionIndex*256 brute-force
+        // sweep.
+        if (opaqueDispatchList != null && rm != null) {
+            opaqueDispatchList.build(
+                me.cortex.vulkium.managers.SectionManager.get(),
+                rm, visibility);
+        }
+
         // Drain dirty regions into the GPU-side regionBuffer + sectionBuffer. SectionManager
         // marks regions dirty whenever it populates a section header — without this upload
         // step our CPU-side writes never reach shader visibility.
@@ -191,6 +202,7 @@ public final class Renderer {
             .transformationArrPtr(transformationBuffer != null ? transformationBuffer.deviceAddress() : 0L)
             .originArrPtr(originBuffer != null ? originBuffer.deviceAddress() : 0L)
             .statisticsPtr(0L)
+            .opaqueDispatchListPtr(opaqueDispatchList != null ? opaqueDispatchList.deviceAddress() : 0L)
             // nvidium convention: screenSize is HALF the framebuffer resolution in pixels.
             // Mesh shader bbox cull does `((pos.xy/pos.w)+1) * screenSize` → NDC [-1..1] +1 = [0..2]
             // then × (W/2, H/2) = [0..W, 0..H] pixel coords. Use MC's window — MojangColorFormat
@@ -208,6 +220,7 @@ public final class Renderer {
     public VisibilityTracker visibility() { return visibility; }
     public RegionSorter regionSorter() { return regionSorter; }
     public PrimaryTerrainPass primaryTerrain() { return primaryTerrain; }
+    public OpaqueDispatchList opaqueDispatchList() { return opaqueDispatchList; }
     public TerrainUploader terrainUploader() { return terrainUploader; }
     public UploadStream uploadStream() { return uploadStream; }
 
@@ -280,6 +293,8 @@ public final class Renderer {
             // (leaves vulkium flag enabled but render paths no-op so the game still runs).
             regionSorter = new RegionSorter();
             translucentSorter = new TranslucentSectionSorter(
+                me.cortex.vulkium.VulkiumConfig.get().maxRegions);
+            opaqueDispatchList = new OpaqueDispatchList(
                 me.cortex.vulkium.VulkiumConfig.get().maxRegions);
             primaryTerrain = new PrimaryTerrainPass();
             terrainUploader = new TerrainUploader();
@@ -368,6 +383,10 @@ public final class Renderer {
             try { translucentSorter.close(); } catch (Throwable t) { LOGGER.warn("TranslucentSectionSorter close failed", t); }
             translucentSorter = null;
             regionSorter = null;
+        }
+        if (opaqueDispatchList != null) {
+            try { opaqueDispatchList.close(); } catch (Throwable t) { LOGGER.warn("OpaqueDispatchList close failed", t); }
+            opaqueDispatchList = null;
         }
         if (uploadStream != null) {
             try { uploadStream.close(); } catch (Throwable t) { LOGGER.warn("UploadStream close failed", t); }

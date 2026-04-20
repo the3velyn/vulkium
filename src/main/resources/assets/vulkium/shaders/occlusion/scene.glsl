@@ -142,6 +142,12 @@ layout(std140, binding=0) uniform SceneData {
     uint16_t regionCount;
     // align(1)
     uint8_t frameId;
+
+    // align(8) — appended at 232 (filling what was tail padding before the 240-byte UBO
+    // boundary). Compact opaque-dispatch list: task shader redirects gl_WorkGroupID.x
+    // through it when pointer is non-null, otherwise falls back to the original
+    // one-workgroup-per-section-slot dispatch. See OpaqueDispatchList.java.
+    SortingRegionListPtr opaqueDispatchList;
 };
 
 // -----------------------------------------------------------------------------

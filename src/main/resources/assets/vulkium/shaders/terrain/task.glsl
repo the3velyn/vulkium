@@ -34,6 +34,21 @@ void main() {
         }
         sectionId = redirected;
     }
+    #else
+    // Opaque compact-dispatch redirect: the CPU fills `opaqueDispatchList` with GPU-compact
+    // section IDs for all live-and-visible sections (any order; opaque depth-test handles
+    // sorting). If the pointer is null the dispatch reverts to the legacy
+    // one-workgroup-per-slot pattern and sectionId = gl_WorkGroupID.x stays. With the list
+    // populated, dispatch count drops from maxRegionIndex*256 to the populated-section
+    // count — ~6-12× reduction in task-shader launches on typical scenes.
+    if (uint64_t(opaqueDispatchList) != 0ul) {
+        uint redirected = opaqueDispatchList.data[sectionId];
+        if (redirected == 0xFFFFFFFFu) {
+            EmitMeshTasksEXT(0, 1, 1);
+            return;
+        }
+        sectionId = redirected;
+    }
     #endif
 
     if (!shouldRenderVisible(sectionId)) {

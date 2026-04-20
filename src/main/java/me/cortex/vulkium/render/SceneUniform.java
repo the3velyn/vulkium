@@ -45,6 +45,11 @@ public final class SceneUniform implements AutoCloseable {
     public static final int OFFSET_IS_CYLINDRICAL_FOG      = 224;
     public static final int OFFSET_REGION_COUNT            = 228;   // uint16
     public static final int OFFSET_FRAME_ID                = 230;   // uint8
+    // New 8-byte BDA pointer tucked into what was padding between frameId@230 and the
+    // 240-byte block boundary. std140 aligns buffer_reference at 8 — offset 232 qualifies.
+    // Points at the compact opaque-dispatch list; task shader redirects through it to cut
+    // ~6-12× of wasted task-shader launches on full-RD scenes.
+    public static final int OFFSET_OPAQUE_DISPATCH_LIST_PTR = 232;
     /** Round up to 16-byte multiple for UBO binding. */
     public static final int SCENE_UBO_SIZE                 = 240;
 
@@ -102,6 +107,7 @@ public final class SceneUniform implements AutoCloseable {
     public SceneUniform transformationArrPtr(long ptr)  { view.putLong(OFFSET_TRANSFORMATION_ARR_PTR, ptr);  return this; }
     public SceneUniform originArrPtr(long ptr)          { view.putLong(OFFSET_ORIGIN_ARR_PTR, ptr);          return this; }
     public SceneUniform statisticsPtr(long ptr)         { view.putLong(OFFSET_STATISTICS_PTR, ptr);          return this; }
+    public SceneUniform opaqueDispatchListPtr(long ptr) { view.putLong(OFFSET_OPAQUE_DISPATCH_LIST_PTR, ptr); return this; }
 
     public SceneUniform screenSize(float w, float h) {
         view.putFloat(OFFSET_SCREEN_SIZE,     w);
