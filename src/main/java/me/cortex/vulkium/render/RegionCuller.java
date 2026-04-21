@@ -134,8 +134,16 @@ public final class RegionCuller implements AutoCloseable {
                 .sType$Default()
                 .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
                 .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                .dstStageMask(0x00000040L /* TASK_SHADER_BIT_EXT */
-                            | 0x00000080L /* MESH_SHADER_BIT_EXT */)
+                // VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT = 0x00080000 (bit 19)
+                // VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT = 0x00100000 (bit 20).
+                // DO NOT confuse with VK_SHADER_STAGE_TASK_BIT_EXT=0x40 / MESH=0x80 — those
+                // are descriptor/pipeline-layout bits and carry different semantics. Using
+                // 0x40/0x80 here incorrectly scopes the barrier to VERTEX_INPUT + VERTEX_SHADER
+                // instead of task/mesh, so compute writes to regionVisibility aren't made
+                // visible to the task-shader reads that actually gate on them. Silent on
+                // permissive drivers (NVIDIA Ampere); GPU hang on stricter drivers
+                // (NVIDIA Blackwell / RTX 5080 crash 2026-04-21 13:07:58).
+                .dstStageMask(0x00080000L | 0x00100000L)
                 .dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT);
             VkDependencyInfo dep = VkDependencyInfo.calloc(stack)
                 .sType$Default()

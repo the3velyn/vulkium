@@ -113,8 +113,12 @@ public final class SectionCuller implements AutoCloseable {
                 .sType$Default()
                 .srcStageMask(VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
                 .srcAccessMask(VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
-                .dstStageMask(0x00000040L /* TASK_SHADER_BIT_EXT */
-                            | 0x00000080L /* MESH_SHADER_BIT_EXT */
+                // VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT = 0x00080000,
+                // VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT = 0x00100000. See note in
+                // RegionCuller: prior values 0x40/0x80 were the VkShaderStageFlagBits for
+                // task/mesh, NOT the pipeline-stage bits, and scoped this barrier to the
+                // wrong stages — OK on Ampere, GPU-hang on Blackwell.
+                .dstStageMask(0x00080000L | 0x00100000L
                             | VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
                 .dstAccessMask(VK13.VK_ACCESS_2_SHADER_READ_BIT
                              | VK13.VK_ACCESS_2_TRANSFER_READ_BIT);

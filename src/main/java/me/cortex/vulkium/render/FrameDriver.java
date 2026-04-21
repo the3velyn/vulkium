@@ -318,8 +318,16 @@ public final class FrameDriver {
                                     | org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_HOST_BIT)
                         .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT
                                      | org.lwjgl.vulkan.VK13.VK_ACCESS_2_HOST_WRITE_BIT)
-                        .dstStageMask(0x00000040 /* TASK_SHADER_BIT_EXT */
-                                    | 0x00000080 /* MESH_SHADER_BIT_EXT */
+                        // VK_PIPELINE_STAGE_2_TASK_SHADER_BIT_EXT = 0x00080000,
+                        // VK_PIPELINE_STAGE_2_MESH_SHADER_BIT_EXT = 0x00100000.
+                        // DO NOT confuse with VK_SHADER_STAGE_TASK_BIT_EXT=0x40 / MESH=0x80 —
+                        // different enum; those are descriptor/pipeline-layout bits. Using
+                        // 0x40/0x80 here silently scopes the barrier to VERTEX_INPUT +
+                        // VERTEX_SHADER and lets task/mesh reads race ahead of upload writes.
+                        // Bit-value confusion, not symbol: VK13 doesn't alias the EXT mesh
+                        // pipeline stages as constants, so we spell them out.
+                        .dstStageMask(0x00080000L /* TASK_SHADER_BIT_EXT */
+                                    | 0x00100000L /* MESH_SHADER_BIT_EXT */
                                     | org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_FRAGMENT_SHADER_BIT
                                     | org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_VERTEX_SHADER_BIT)
                         .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_READ_BIT
