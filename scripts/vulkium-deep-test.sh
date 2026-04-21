@@ -77,6 +77,7 @@ LOG="$LOG_DIR/run-$TS.log"
 SS_TRIGGER="/tmp/vulkium-screenshot"
 LA_TRIGGER="/tmp/vulkium-lookaround"
 ROT_TRIGGER="/tmp/vulkium-rotate-90"
+LOOKAT_TRIGGER="/tmp/vulkium-lookat"
 
 echo "[deep-test] repo=$REPO"
 echo "[deep-test] log=$LOG"
@@ -151,13 +152,20 @@ touch "$LA_TRIGGER"
 sleep "$LOOKAROUND_WAIT"
 [[ -f "$LA_TRIGGER" ]] && { echo "[deep-test] WARN: lookaround trigger not consumed"; rm -f "$LA_TRIGGER"; }
 
-# --- 4. four screenshots at 90° increments ------------------------------------
-# After the 360° spin player faces whatever the starting yaw was. Screenshots are
-# taken at that yaw (call it N), then at +90° (E), +180° (S), +270° (W). The
-# instant-rotate trigger snaps yaw without the motion-blur window you'd get from
-# smooth rotation.
+# --- 4. four screenshots at CARDINAL view directions --------------------------
+# The previous "+90° relative" approach was unreliable: the LOOKAROUND spin does
+# not always land exactly back at its starting yaw (poll/tick timing), so after
+# a 360° sweep the "N" screenshot was actually at some unknown direction ~N and
+# the four labels drifted by the same offset. Use the absolute lookat trigger
+# instead — yaw is set to a KNOWN MC-convention value before each screenshot:
+#   MC yaw convention (yaw measured clockwise from +Z viewed from above):
+#     yaw=0   → facing +Z = SOUTH
+#     yaw=90  → facing -X = WEST
+#     yaw=180 → facing -Z = NORTH
+#     yaw=270 → facing +X = EAST
+# Pitch is reset to 0 (horizon). Pair format: "yaw_value:label".
 SS_DIR="$REPO/run/screenshots"
-LABELS=(N E S W)
+VIEW_PAIRS=("180:N" "270:E" "0:S" "90:W")
 take_labeled_screenshot() {
     local label="$1"
     # Clear any stale screenshots-newer-than markers by taking a timestamp before.
@@ -187,19 +195,15 @@ take_labeled_screenshot() {
     return 0
 }
 
-for i in 0 1 2 3; do
-    label="${LABELS[$i]}"
-    if [[ $i -gt 0 ]]; then
-        echo "[deep-test] rotating +90° → $label"
-        touch "$ROT_TRIGGER"
-        # Small wait for the trigger poll to fire + let MC draw the new view +
-        # any freshly-visible chunks that escaped the initial lookaround (e.g.
-        # very near chunks whose quads ingest in a second wave) to compile.
-        sleep "$SCREENSHOT_SETTLE"
-        [[ -f "$ROT_TRIGGER" ]] && { echo "[deep-test] WARN: rotate trigger not consumed"; rm -f "$ROT_TRIGGER"; }
-    else
-        echo "[deep-test] screenshot $label (initial view)"
-    fi
+for pair in "${VIEW_PAIRS[@]}"; do
+    yaw="${pair%%:*}"
+    label="${pair##*:}"
+    echo "[deep-test] lookat yaw=$yaw → $label"
+    # Write the absolute yaw as the trigger-file contents. VulkiumKeys.maybeLookAt
+    # reads, sets yaw on the next 4 Hz poll, resets pitch to 0, deletes the file.
+    printf '%s' "$yaw" > "$LOOKAT_TRIGGER"
+    sleep "$SCREENSHOT_SETTLE"
+    [[ -f "$LOOKAT_TRIGGER" ]] && { echo "[deep-test] WARN: lookat trigger not consumed"; rm -f "$LOOKAT_TRIGGER"; }
     take_labeled_screenshot "$label"
 done
 

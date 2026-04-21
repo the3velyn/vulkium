@@ -68,6 +68,18 @@ public final class VulkiumKeys {
     private static final Path QUARTER_TURN_TRIGGER = Path.of("/tmp/vulkium-rotate-90");
     // END DEV_ONLY_QUARTER_TURN
 
+    // DEV_ONLY_LOOKAT — remove before release.
+    // Absolute yaw-set trigger for the deep-test script: write the target yaw (degrees,
+    // MC convention — 0=S, 90=W, 180=N, 270=E) as plain text to the trigger file, and
+    // on the next 4 Hz poll the player's yaw is snapped to that value with pitch reset
+    // to 0. Replaces the relative QUARTER_TURN_TRIGGER for cardinal-direction shots so
+    // the labels N/E/S/W actually correspond to the claimed direction — QUARTER_TURN
+    // couldn't guarantee that because the starting yaw after LOOKAROUND depends on tick
+    // timing and may be off by a few degrees (reported by user as ~270° sweep instead
+    // of 360° when diagnosing misoriented screenshots).
+    private static final Path LOOKAT_TRIGGER = Path.of("/tmp/vulkium-lookat");
+    // END DEV_ONLY_LOOKAT
+
     private VulkiumKeys() {}
 
     public static void register() {
@@ -92,6 +104,7 @@ public final class VulkiumKeys {
             maybeTakeTriggeredScreenshot(mc);
             maybeStartLookaround(mc);
             maybeQuarterTurn(mc);
+            maybeLookAt(mc);
         }
         stepLookaround(mc); // runs every tick, not throttled
         // END DEV_ONLY_SCREENSHOT_HOOK / DEV_ONLY_LOOKAROUND
@@ -137,6 +150,46 @@ public final class VulkiumKeys {
         LOGGER.info("[vulkium-test] quarter-turn: yaw {} → {}", prevYaw, newYaw);
     }
     // END DEV_ONLY_QUARTER_TURN
+
+    // DEV_ONLY_LOOKAT — remove before release.
+    private static void maybeLookAt(Minecraft mc) {
+        if (!Files.exists(LOOKAT_TRIGGER)) return;
+        String content;
+        try {
+            content = java.nio.file.Files.readString(LOOKAT_TRIGGER).trim();
+        } catch (Exception e) {
+            LOGGER.warn("Could not read lookat trigger {}: {} — skipping",
+                LOOKAT_TRIGGER, e.getMessage());
+            try { Files.deleteIfExists(LOOKAT_TRIGGER); } catch (Exception ignored) {}
+            return;
+        }
+        try {
+            Files.deleteIfExists(LOOKAT_TRIGGER);
+        } catch (Exception e) {
+            LOGGER.warn("Could not delete lookat trigger {}: {} — skipping",
+                LOOKAT_TRIGGER, e.getMessage());
+            return;
+        }
+        if (mc.player == null) {
+            LOGGER.warn("Lookat trigger fired but mc.player is null (world not loaded?)");
+            return;
+        }
+        float yaw;
+        try {
+            yaw = Float.parseFloat(content);
+        } catch (NumberFormatException nfe) {
+            LOGGER.warn("Lookat trigger content '{}' is not a float: {}", content, nfe.getMessage());
+            return;
+        }
+        float prevYaw = mc.player.getYRot();
+        float prevPitch = mc.player.getXRot();
+        mc.player.yRotO = prevYaw;
+        mc.player.xRotO = prevPitch;
+        mc.player.setYRot(yaw);
+        mc.player.setXRot(0f);
+        LOGGER.info("[vulkium-test] lookat: yaw {} → {} (pitch → 0)", prevYaw, yaw);
+    }
+    // END DEV_ONLY_LOOKAT
 
     private static void stepLookaround(Minecraft mc) {
         if (lookaroundTicksRemaining <= 0) return;
