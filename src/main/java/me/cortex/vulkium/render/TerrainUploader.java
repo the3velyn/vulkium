@@ -105,14 +105,17 @@ public final class TerrainUploader implements AutoCloseable {
      */
     /** Out-parameter returned by {@link #uploadSection}: base quad address, the split between
      *  opaque and translucent, and — within the opaque range — the split across the 6
-     *  axis-aligned face-direction bins plus an unsigned tail bin. Arena layout:
+     *  axis-aligned face-direction bins plus an unsigned tail bin. Bin order matches
+     *  {@code task_common.glsl}'s populateTasks read order, which is driven by the
+     *  nvidium-style axis-swap (chunkX, chunkZ, chunkY) used throughout the shaders. Arena
+     *  layout:
      *  <pre>
      *    [addr                                    ] bin0 (+X east face)
-     *    [addr + bin[0]                           ] bin1 (+Y top)
-     *    [addr + bin[0]+bin[1]                    ] bin2 (+Z south face)
+     *    [addr + bin[0]                           ] bin1 (+Z south face)
+     *    [addr + bin[0]+bin[1]                    ] bin2 (+Y top)
      *    [addr + sum(bin[0..2])                   ] bin3 (-X west face)
-     *    [addr + sum(bin[0..3])                   ] bin4 (-Y bottom)
-     *    [addr + sum(bin[0..4])                   ] bin5 (-Z north face)
+     *    [addr + sum(bin[0..3])                   ] bin4 (-Z north face)
+     *    [addr + sum(bin[0..4])                   ] bin5 (-Y bottom)
      *    [addr + sum(bin[0..5])                   ] unsigned tail (plants/cross-quads/non-aligned)
      *    [addr + opaqueQuadCount                  ] translucent
      *    [addr + opaqueQuadCount + translucentQuadCount) end
@@ -123,8 +126,9 @@ public final class TerrainUploader implements AutoCloseable {
         public final int opaqueQuadCount;
         public final int translucentQuadCount;
         /** Per-face-direction quad counts, in task_common.glsl's populateTasks read order
-         *  (which defines the bin semantics via the emit conditions):
-         *  [0]=+X east, [1]=+Y top, [2]=+Z south, [3]=-X west, [4]=-Y bottom, [5]=-Z north.
+         *  (which defines the bin semantics via the emit conditions AND the nvidium axis
+         *  swap where relChunkPos.y is actually rel-Z and relChunkPos.z is actually rel-Y):
+         *  [0]=+X east, [1]=+Z south, [2]=+Y top, [3]=-X west, [4]=-Z north, [5]=-Y bottom.
          *  Unsigned tail size = opaqueQuadCount - sum(faceBinCounts). */
         public final int[] faceBinCounts;
         public UploadResult(int addr, int opaque, int translucent, int[] faceBinCounts) {
@@ -214,8 +218,9 @@ public final class TerrainUploader implements AutoCloseable {
             // quad is classified by its outward face normal (±X, ±Y, ±Z); non-axis-aligned
             // quads (plant cross-geometry, slab/stair slopes, non-block shapes) land in an
             // unsigned tail bin. Output order, matching task_common.glsl's populateTasks
-            // bin read order (which defines bin semantics via the emit conditions):
-            //   [+X east][+Y top][+Z south][-X west][-Y bottom][-Z north][unsigned]
+            // bin read order (which defines bin semantics via the emit conditions AND the
+            // nvidium axis swap — relChunkPos.y is actually rel-Z, .z is actually rel-Y):
+            //   [+X east][+Z south][+Y top][-X west][-Z north][-Y bottom][unsigned]
             // This unlocks a big backface meshlet-style cull in the task shader: the 3 face
             // bins pointing AWAY from the camera get skipped and no mesh workgroups dispatch
             // for them — ~35% reduction in emitted opaque quads on typical scenes.
@@ -503,20 +508,24 @@ public final class TerrainUploader implements AutoCloseable {
      * +Z = south}. Standard CCW-from-outside winding means the cross product
      * {@code (v1-v0) × (v2-v0)} points along the outward face normal.
      *
-     * <p>Bin semantics are DEFINED BY task_common.glsl's populateTasks emit conditions.
-     * Each bin is emitted when the camera sits on the side that can SEE the bin's
-     * outward face direction. Getting these bin labels backwards is what produced the
-     * "missing +X face quads when looking west" bug in the first draft — the labels
-     * below are the canonical ones:
+     * <p><b>nvidium axis swap, critical:</b> {@code scene.glsl}'s Section header packs
+     * chunk coords in order {@code (chunkX, chunkZ, chunkY)} — Y and Z are swapped. The
+     * task shader's {@code relChunkPos} therefore has components {@code (relX, relZ, relY)}.
+     * Consequence: bins 1/4 (gated on {@code relChunkPos.y}) are the Z faces, and bins
+     * 2/5 (gated on {@code relChunkPos.z}) are the Y faces. The first-draft labels had
+     * Y and Z swapped, which dropped +Z (south) quads into bin 2 (which only emits when
+     * camera is ABOVE the section) and +Y (top) quads into bin 1 (which only emits when
+     * camera is SOUTH of the section). Looking north at ground-level northern sections
+     * failed both conditions → "missing faces along NS axis and Y axis" symptom.
      *
      * <table>
      *   <tr><th>bin</th><th>task-shader condition</th><th>outward normal</th><th>face direction</th></tr>
      *   <tr><td>0</td><td>{@code relChunkPos.x <= 0} (camera east of section)</td><td>+X</td><td>east face</td></tr>
-     *   <tr><td>1</td><td>{@code relChunkPos.y <= 0} (camera above section)</td><td>+Y</td><td>top</td></tr>
-     *   <tr><td>2</td><td>{@code relChunkPos.z <= 0} (camera south of section)</td><td>+Z</td><td>south face</td></tr>
+     *   <tr><td>1</td><td>{@code relChunkPos.y <= 0} (rel-Z; camera south of section)</td><td>+Z</td><td>south face</td></tr>
+     *   <tr><td>2</td><td>{@code relChunkPos.z <= 0} (rel-Y; camera above section)</td><td>+Y</td><td>top</td></tr>
      *   <tr><td>3</td><td>{@code relChunkPos.x >= 0} (camera west of section)</td><td>-X</td><td>west face</td></tr>
-     *   <tr><td>4</td><td>{@code relChunkPos.y >= 0} (camera below section)</td><td>-Y</td><td>bottom</td></tr>
-     *   <tr><td>5</td><td>{@code relChunkPos.z >= 0} (camera north of section)</td><td>-Z</td><td>north face</td></tr>
+     *   <tr><td>4</td><td>{@code relChunkPos.y >= 0} (rel-Z; camera north of section)</td><td>-Z</td><td>north face</td></tr>
+     *   <tr><td>5</td><td>{@code relChunkPos.z >= 0} (rel-Y; camera below section)</td><td>-Y</td><td>bottom</td></tr>
      *   <tr><td>6</td><td>always</td><td>n/a</td><td>unsigned tail (plants, cross-geometry)</td></tr>
      * </table>
      *
@@ -560,8 +569,9 @@ public final class TerrainUploader implements AutoCloseable {
             float z1 = src.getFloat(v1 + 8);
             float z2 = src.getFloat(v2 + 8);
             float ny = (z1 - z0) * (x2 - x0) - (x1 - x0) * (z2 - z0);
-            // ny > 0 → outward +Y (top) → bin 1. ny < 0 → -Y (bottom) → bin 4.
-            return ny > 0f ? 1 : 4;
+            // ny > 0 → outward +Y (top) → bin 2 (nvidium-order gate: camera above section,
+            // which populateTasks reads as relChunkPos.z <= 0). ny < 0 → -Y (bottom) → bin 5.
+            return ny > 0f ? 2 : 5;
         }
 
         float z0 = src.getFloat(v0Off + 8);
@@ -570,8 +580,10 @@ public final class TerrainUploader implements AutoCloseable {
         float z3 = src.getFloat(v3 + 8);
         if (z0 == z1 && z1 == z2 && z2 == z3) {
             float nz = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
-            // nz > 0 → outward +Z (south) → bin 2. nz < 0 → -Z (north) → bin 5.
-            return nz > 0f ? 2 : 5;
+            // nz > 0 → outward +Z (south face) → bin 1 (nvidium-order gate: camera south of
+            // section, which populateTasks reads as relChunkPos.y <= 0).
+            // nz < 0 → -Z (north face) → bin 4.
+            return nz > 0f ? 1 : 4;
         }
 
         return 6; // unsigned tail (cross-geometry, rotated slopes, etc.)
