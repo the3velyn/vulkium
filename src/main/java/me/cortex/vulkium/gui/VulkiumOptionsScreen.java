@@ -40,14 +40,28 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                     + "immediately; no restart needed). Default: ON.",
                 !cfg.forceDisable, v -> {
                     cfg.forceDisable = !v;
-                    // Force MC to re-mark every section dirty and recompile. Without this,
-                    // sections that were already compiled while vulkium was suppressing MC's
-                    // draws don't re-render properly when MC takes over — MC's uber-buffer
-                    // still has their data but the dispatch path had stale state from our
-                    // renderGroup-cancel. The allChanged call on LevelExtractor forces a
-                    // full vanilla recompile, which both refills MC's state and triggers our
-                    // capture mixin on the way through (so vulkium gets fresh data too when
-                    // re-enabled).
+                    // Full teardown + rebuild on every transition. Without this, flipping
+                    // off→on in-session left vulkium's renderer state stale — per the 2026-04-20
+                    // memory, FPS would drop to vanilla baseline and not recover until a full
+                    // client restart. Tearing down everything and letting the next prepareFrame
+                    // re-run ensureInit() matches the boot-path exactly.
+                    //
+                    // Safe to call synchronously from the click handler: OptionInstance's
+                    // onValueUpdate fires on the main/render thread between frames, not mid-draw,
+                    // so VK resource teardown doesn't race with recording.
+                    try {
+                        me.cortex.vulkium.render.Renderer.get().shutdown();
+                    } catch (Throwable t) {
+                        // Don't block the toggle; log and continue to allChanged.
+                        org.slf4j.LoggerFactory.getLogger("vulkium/toggle")
+                            .warn("Renderer shutdown on toggle failed", t);
+                    }
+                    me.cortex.vulkium.managers.SectionManager.get().queueFlushAll();
+                    // Force MC to re-mark every section dirty and recompile. When vulkium
+                    // re-enables, MC's section compile path re-triggers our capture mixin so
+                    // vulkium gets fresh data. When vulkium disables, it re-primes MC's own
+                    // uber-buffer draw path with valid state instead of whatever it had while
+                    // we were cancelling its renderGroup.
                     net.minecraft.client.Minecraft mc =
                         net.minecraft.client.Minecraft.getInstance();
                     if (mc != null && mc.levelExtractor != null) {

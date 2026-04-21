@@ -397,11 +397,11 @@ public final class Renderer {
         }
         if (regionSorter != null) {
             try { regionSorter.close(); } catch (Throwable t) { LOGGER.warn("RegionSorter close failed", t); }
+            regionSorter = null;
         }
         if (translucentSorter != null) {
             try { translucentSorter.close(); } catch (Throwable t) { LOGGER.warn("TranslucentSectionSorter close failed", t); }
             translucentSorter = null;
-            regionSorter = null;
         }
         if (opaqueDispatchList != null) {
             try { opaqueDispatchList.close(); } catch (Throwable t) { LOGGER.warn("OpaqueDispatchList close failed", t); }
