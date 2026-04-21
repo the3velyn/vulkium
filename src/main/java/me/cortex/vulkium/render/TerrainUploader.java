@@ -72,6 +72,30 @@ public final class TerrainUploader implements AutoCloseable {
      *  sub-range when resorting (arena slot layout is [opaque][translucent]). */
     private final Long2IntOpenHashMap sectionOpaqueQuads = new Long2IntOpenHashMap();
 
+    // --- per-ingest scratch (render-thread-only reuse) ------------------------
+    // Reused across all uploadSectionSplit calls to avoid allocating ~4×totalOpaqueQuads
+    // arrays per section. At 10k sections on boot, the per-section allocation pattern
+    // was pushing hundreds of MB of short-lived garbage through the young-gen collector,
+    // producing GC-induced ingest stalls that left recently-compiled close sections
+    // waiting in the queue while earlier (further) sections had already uploaded —
+    // matching the "far chunks render while close don't" symptom. Growable arrays keep
+    // the worst-case alloc cost at O(log N) over the whole session.
+    private ByteBuffer[] scratchQSrc = new ByteBuffer[0];
+    private int[] scratchQOff = new int[0];
+    private int[] scratchQCut = new int[0];
+    private byte[] scratchQBin = new byte[0];
+
+    private void ensureScratchCapacity(int n) {
+        if (scratchQSrc.length >= n) return;
+        int newSize = Math.max(n, scratchQSrc.length * 2);
+        // Allocate only as much as needed; for typical section workloads this stabilizes
+        // within a handful of sections and never reallocates again.
+        scratchQSrc = new ByteBuffer[newSize];
+        scratchQOff = new int[newSize];
+        scratchQCut = new int[newSize];
+        scratchQBin = new byte[newSize];
+    }
+
     private boolean closed;
 
     public TerrainUploader() {
@@ -242,14 +266,14 @@ public final class TerrainUploader implements AutoCloseable {
                 }
 
                 if (totalOpaqueQuads > 0) {
-                    // Classify every opaque quad. Arrays hold per-quad source references +
-                    // bin id. Cost: 4*N allocations but all primitive arrays (no GC pressure
-                    // per quad, just one-shot scratch).
-                    ByteBuffer[] qSrc = new ByteBuffer[totalOpaqueQuads];
-                    int[] qOff = new int[totalOpaqueQuads];
-                    int[] qCut = new int[totalOpaqueQuads];
-                    byte[] qBin = new byte[totalOpaqueQuads];
-                    int[] binCount = new int[7]; // 6 faces + unsigned
+                    // Classify every opaque quad into the reusable render-thread scratch
+                    // arrays (see ensureScratchCapacity — no per-section allocations).
+                    ensureScratchCapacity(totalOpaqueQuads);
+                    ByteBuffer[] qSrc = scratchQSrc;
+                    int[] qOff = scratchQOff;
+                    int[] qCut = scratchQCut;
+                    byte[] qBin = scratchQBin;
+                    int[] binCount = new int[7]; // 6 faces + unsigned (cheap; stays as-is)
                     int qi = 0;
                     for (Map.Entry<ChunkSectionLayer, SectionEntry.LayerGeometry> e : entry.layers.entrySet()) {
                         if (e.getKey() == ChunkSectionLayer.TRANSLUCENT) continue;
@@ -298,6 +322,14 @@ public final class TerrainUploader implements AutoCloseable {
                     }
                     dstByteOffset += opaqueBytes;
                     opaqueVerts += totalOpaqueQuads * 4;
+
+                    // Null out the ByteBuffer references we just consumed so the scratch
+                    // array doesn't pin MC vertex buffers that SectionManager.freeEntry is
+                    // about to return to the native allocator. Primitive-array slots need
+                    // no cleanup (int/byte = no refs).
+                    for (int i = 0; i < totalOpaqueQuads; i++) {
+                        qSrc[i] = null;
+                    }
                 }
             }
             // Pass 2: translucent layer — appended right after opaque so translucent draws
