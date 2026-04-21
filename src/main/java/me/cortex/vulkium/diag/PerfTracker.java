@@ -59,11 +59,23 @@ public final class PerfTracker {
     public static void end(String phase, long start) {
         if (!enabled) return;
         long elapsed = System.nanoTime() - start;
+        recordElapsed(phase, elapsed);
+    }
+
+    /**
+     * Record a pre-computed elapsed time. For timers whose units are already in ns but whose
+     * start/end aren't wallclock — e.g. GPU timestamp queries resolved on a frame-delayed
+     * readback by {@link GpuTimerPool}. Same accumulator path as {@link #end}, so GPU and
+     * CPU phases render into the same flush log with the convention that GPU phases carry
+     * a {@code "gpu."} prefix in their name.
+     */
+    public static void recordElapsed(String phase, long elapsedNs) {
+        if (!enabled) return;
         int slot = findSlot(phase);
-        totals[slot] += elapsed;
+        totals[slot] += elapsedNs;
         counts[slot]++;
-        if (elapsed < mins[slot]) mins[slot] = elapsed;
-        if (elapsed > maxes[slot]) maxes[slot] = elapsed;
+        if (elapsedNs < mins[slot]) mins[slot] = elapsedNs;
+        if (elapsedNs > maxes[slot]) maxes[slot] = elapsedNs;
         maybeFlush();
     }
 

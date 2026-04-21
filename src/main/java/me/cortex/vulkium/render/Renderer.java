@@ -34,6 +34,7 @@ public final class Renderer {
     private HzbBuilder hzbBuilder;
     private HzbTexture hzbTexture;
     private RegionCuller regionCuller;
+    private me.cortex.vulkium.diag.GpuTimerPool gpuTimers;
     /** True if a previous frame ran region_cull; used to decide when to re-seed
      *  {@link #regionVisibilityBuffer} back to all-0xFF after the user toggles cull off. */
     private boolean lastFrameRanCull;
@@ -236,6 +237,9 @@ public final class Renderer {
     public SceneUniform sceneUniform() { return sceneUniform; }
     public VisibilityTracker visibility() { return visibility; }
     public PrimaryTerrainPass primaryTerrain() { return primaryTerrain; }
+    /** @return the GPU timer pool, or {@code null} when the hardware doesn't support
+     *  timestamp queries. Callers must null-check every access. */
+    public me.cortex.vulkium.diag.GpuTimerPool gpuTimers() { return gpuTimers; }
     public OpaqueDispatchList opaqueDispatchList() { return opaqueDispatchList; }
     public TranslucentSectionSorter translucentSorter() { return translucentSorter; }
     public TerrainUploader terrainUploader() { return terrainUploader; }
@@ -286,12 +290,15 @@ public final class Renderer {
         try {
             final HzbTexture hzb = this.hzbTexture;
             final HzbBuilder builder = this.hzbBuilder;
+            final me.cortex.vulkium.diag.GpuTimerPool gpu = this.gpuTimers;
             CommandRecorder.recordAndSubmit(cmd -> {
                 if (!MojangDepthTap.copyDepthToMip0(cmd, hzb)) {
                     // Depth not tappable this frame — skip build; mip 0 is not in the expected layout.
                     return;
                 }
+                if (gpu != null) gpu.begin(cmd, "hzbBuild");
                 builder.recordBuildChain(cmd, hzb);
+                if (gpu != null) gpu.end(cmd, "hzbBuild");
             });
         } catch (Throwable t) {
             LOGGER.warn("HZB build failed (continuing without occlusion this frame)", t);
@@ -339,6 +346,7 @@ public final class Renderer {
         final RegionCuller culler = regionCuller;
         final SceneUniform scene = sceneUniform;
         final HzbTexture hzb = hzbTexture;
+        final me.cortex.vulkium.diag.GpuTimerPool gpu = this.gpuTimers;
         // Dispatch over [0, maxRegionIndex): every allocated region ID falls in this range.
         // idProvider recycles released IDs so live slots can be anywhere in this span — we
         // must cull them all, not just map.size() threads' worth (that would skip the high
@@ -346,7 +354,11 @@ public final class Renderer {
         final int upperBound = rm.maxRegionIndex();
         if (upperBound <= 0) return;
         try {
-            CommandRecorder.recordAndSubmit(cmd -> culler.record(cmd, scene, hzb, upperBound));
+            CommandRecorder.recordAndSubmit(cmd -> {
+                if (gpu != null) gpu.begin(cmd, "regionCull");
+                culler.record(cmd, scene, hzb, upperBound);
+                if (gpu != null) gpu.end(cmd, "regionCull");
+            });
             lastFrameRanCull = true;
         } catch (Throwable t) {
             LOGGER.warn("Region-cull dispatch failed (continuing without occlusion this frame)", t);
@@ -369,6 +381,10 @@ public final class Renderer {
             primaryTerrain = new PrimaryTerrainPass();
             terrainUploader = new TerrainUploader();
             regionCuller = new RegionCuller();
+            // GPU-side timers are optional — createOrNull gracefully returns null on hardware
+            // that doesn't expose timestamp queries. We want these active whenever possible
+            // since CPU timers only cover ~5% of the frame at 500+ FPS.
+            gpuTimers = me.cortex.vulkium.diag.GpuTimerPool.createOrNull();
 
             // Seed transformationArray[0] with an identity mat4 so sections whose
             // transformationId=0 transform as identity (no-op). Without this, the mesh shader
@@ -418,6 +434,10 @@ public final class Renderer {
         if (regionCuller != null) {
             try { regionCuller.close(); } catch (Throwable t) { LOGGER.warn("RegionCuller close failed", t); }
             regionCuller = null;
+        }
+        if (gpuTimers != null) {
+            try { gpuTimers.close(); } catch (Throwable t) { LOGGER.warn("GpuTimerPool close failed", t); }
+            gpuTimers = null;
         }
         if (hzbTexture != null) {
             try { hzbTexture.close(); } catch (Throwable t) { LOGGER.warn("HzbTexture close failed", t); }

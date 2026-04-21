@@ -15,6 +15,10 @@ import org.lwjgl.vulkan.VkQueue;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import org.lwjgl.system.MemoryStack;
+import org.lwjgl.vulkan.VK10;
+import org.lwjgl.vulkan.VkPhysicalDeviceProperties;
+
 import java.util.Collections;
 import java.util.Set;
 
@@ -80,6 +84,23 @@ public final class MojangVulkanBridge {
 
     /** @return the set of device extensions Mojang enabled on creation (from the mixin). */
     public static Set<String> enabledDeviceExtensions() { return enabledDeviceExtensions; }
+
+    /**
+     * @return {@code VkPhysicalDeviceLimits.timestampPeriod} — ns per timestamp tick, used to
+     *     convert {@code vkCmdWriteTimestamp2} values to wall-clock nanoseconds. Returns 0 if
+     *     the physical device isn't captured yet (pre-backend-init) or the device doesn't
+     *     expose timestamp queries. Queries the device properties each call; GPU timers only
+     *     read this once at {@code createOrNull}, so amortized cost is irrelevant.
+     */
+    public static float timestampPeriod() {
+        VkPhysicalDevice pd = vkPhysicalDevice();
+        if (pd == null) return 0f;
+        try (MemoryStack stack = MemoryStack.stackPush()) {
+            VkPhysicalDeviceProperties props = VkPhysicalDeviceProperties.calloc(stack);
+            VK10.vkGetPhysicalDeviceProperties(pd, props);
+            return props.limits().timestampPeriod();
+        }
+    }
 
     public static VulkanQueue graphicsQueue() { return require().graphicsQueue(); }
     public static VulkanQueue computeQueue()  { return require().computeQueue(); }

@@ -44,6 +44,12 @@ public final class FrameDriver {
         long tTotal = me.cortex.vulkium.diag.PerfTracker.begin();
         FRAMES.incrementAndGet();
 
+        // GPU timer rotation: resolve ready pools (pushes gpu.* samples into PerfTracker) and
+        // pick the next recording pool. Safe to call every frame whether or not any phase
+        // records into it — begin()/end() are caller-side no-ops when activePool is -1.
+        me.cortex.vulkium.diag.GpuTimerPool gpu = Renderer.get().gpuTimers();
+        if (gpu != null) gpu.beginFrame();
+
         // NB: the BobViewTap reset lives in GameRendererBobMixin at bobHurt HEAD, NOT here.
         // Fabric's LevelRenderEvents.START_MAIN fires from inside LevelRenderer.renderLevel,
         // which GameRenderer.renderLevel calls AFTER bobHurt+bobView have already captured this
@@ -364,15 +370,20 @@ public final class FrameDriver {
                     sc.extent().set(fbW, fbH);
                     org.lwjgl.vulkan.VK10.vkCmdSetScissor(cmd, 0, sc);
 
+                    me.cortex.vulkium.diag.GpuTimerPool gpu = Renderer.get().gpuTimers();
                     if (includeOpaque) {
+                        if (gpu != null) gpu.begin(cmd, "opaqueDraw");
                         pass.record(cmd, scene, dispatchCount, false /* renderFog */,
                                     atlasViewFinal, atlasSamplerFinal,
                                     lightmapViewFinal, lightmapSamplerFinal);
+                        if (gpu != null) gpu.end(cmd, "opaqueDraw");
                     }
                     if (includeTranslucent) {
+                        if (gpu != null) gpu.begin(cmd, "translucentDraw");
                         pass.recordTranslucent(cmd, scene, dispatchCount,
                                     atlasViewFinal, atlasSamplerFinal,
                                     lightmapViewFinal, lightmapSamplerFinal);
+                        if (gpu != null) gpu.end(cmd, "translucentDraw");
                     }
                     logDispatchThrottled("draw: opaque={} translucent={} dispatchCount={} atlas={}",
                         includeOpaque, includeTranslucent, dispatchCount, atlasViewFinal != 0L);
@@ -450,6 +461,10 @@ public final class FrameDriver {
             Renderer.get().buildHzb();
             me.cortex.vulkium.diag.PerfTracker.end("buildHzb", tHzb);
         }
+
+        // Mark this frame's GPU timer pool ready for the next frame's beginFrame() to resolve.
+        me.cortex.vulkium.diag.GpuTimerPool gpu = Renderer.get().gpuTimers();
+        if (gpu != null) gpu.endFrame();
     }
 
     public static long frameCount() { return FRAMES.get(); }
