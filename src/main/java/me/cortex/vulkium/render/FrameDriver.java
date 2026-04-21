@@ -175,8 +175,11 @@ public final class FrameDriver {
         if (dispatchCount == 0) return;
 
         int liveSections = me.cortex.vulkium.managers.SectionManager.get().liveView().size();
-        logDispatchThrottled("draw: visibleRegions={} dispatchSections={} liveSections={} fbW={} fbH={}",
+        long captured = me.cortex.vulkium.managers.SectionCapture.sectionsCaptured();
+        long drained = me.cortex.vulkium.managers.SectionManager.get().drainedCount();
+        logDispatchThrottled("draw: visRegions={} dispatch={} live={} captured={} drained={} queueLag={} fbW={} fbH={}",
             visibleRegionCount, dispatchCount, liveSections,
+            captured, drained, (captured - drained),
             me.cortex.vulkium.blaze3d.MojangColorFormat.width(),
             me.cortex.vulkium.blaze3d.MojangColorFormat.height());
 
