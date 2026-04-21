@@ -236,7 +236,9 @@ public final class Renderer {
             .transformationArrPtr(transformationBuffer != null ? transformationBuffer.deviceAddress() : 0L)
             .originArrPtr(originBuffer != null ? originBuffer.deviceAddress() : 0L)
             .statisticsPtr(0L)
-            .opaqueDispatchListPtr(opaqueDispatchList != null ? opaqueDispatchList.deviceAddress() : 0L)
+            .opaqueDispatchListPtr(opaqueDispatchList != null
+                && VulkiumConfig.get().enableOpaqueDispatchList
+                ? opaqueDispatchList.deviceAddress() : 0L)
             // nvidium convention: screenSize is HALF the framebuffer resolution in pixels.
             // Mesh shader bbox cull does `((pos.xy/pos.w)+1) * screenSize` → NDC [-1..1] +1 = [0..2]
             // then × (W/2, H/2) = [0..W, 0..H] pixel coords. Use MC's window — MojangColorFormat

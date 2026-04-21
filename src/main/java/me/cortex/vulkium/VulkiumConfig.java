@@ -80,6 +80,18 @@ public final class VulkiumConfig {
      *  flip on if your typical scenes lean dense. Costs ~13µs CPU on opaqueList.build. */
     public boolean enableFrontToBackSort = false;
 
+    /** Diagnostic toggle — when false, the CPU-side {@code OpaqueDispatchList} compaction is
+     *  bypassed (scene UBO's opaqueDispatchListPtr is written as 0). The task shader then
+     *  reverts to its legacy one-workgroup-per-section-slot linear dispatch over
+     *  {@code maxRegionIndex × 256} IDs with per-thread sectionEmpty no-ops.
+     *
+     *  <p>Use to isolate "missing-close-chunks" regressions: if bypassing fixes them, the
+     *  bug lives in {@link me.cortex.vulkium.render.OpaqueDispatchList#build} or its
+     *  {@link me.cortex.vulkium.render.VisibilityTracker} feed (region-level frustum cull
+     *  over-aggressive). If bypassing does NOT fix them, the bug is upstream of dispatch
+     *  (ingest / region allocation / section ingest race). Default on; toggle for A/B only. */
+    public boolean enableOpaqueDispatchList = true;
+
     /** Max sections the render thread drains from the ingest queue per frame. Vulkium
      *  suppresses MC's own terrain draw, so any queued-but-not-yet-ingested section is an
      *  invisible chunk. High default (4096) avoids visible gaps on RD change / first join.

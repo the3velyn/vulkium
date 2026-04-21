@@ -150,7 +150,13 @@ public final class FrameDriver {
         int dispatchCount;
         if (includeOpaque && !includeTranslucent) {
             OpaqueDispatchList list = r.opaqueDispatchList();
-            int n = list != null ? list.count() : 0;
+            // Diagnostic: when enableOpaqueDispatchList=false we want the legacy linear
+            // dispatch width regardless of whether the list itself got built this frame
+            // (Renderer also writes 0 to the scene-UBO's opaqueDispatchListPtr so the task
+            // shader uses its fallback path).
+            boolean useCompact = list != null
+                && me.cortex.vulkium.VulkiumConfig.get().enableOpaqueDispatchList;
+            int n = useCompact ? list.count() : 0;
             dispatchCount = n > 0 ? n : (rm == null ? visibleRegionCount
                 : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION);
         } else if (includeTranslucent && !includeOpaque) {
@@ -168,8 +174,9 @@ public final class FrameDriver {
         }
         if (dispatchCount == 0) return;
 
-        logDispatchThrottled("draw: visibleRegions={} dispatchSections={} fbW={} fbH={}",
-            visibleRegionCount, dispatchCount,
+        int liveSections = me.cortex.vulkium.managers.SectionManager.get().liveView().size();
+        logDispatchThrottled("draw: visibleRegions={} dispatchSections={} liveSections={} fbW={} fbH={}",
+            visibleRegionCount, dispatchCount, liveSections,
             me.cortex.vulkium.blaze3d.MojangColorFormat.width(),
             me.cortex.vulkium.blaze3d.MojangColorFormat.height());
 
