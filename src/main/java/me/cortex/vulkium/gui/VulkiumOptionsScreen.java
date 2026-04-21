@@ -69,8 +69,15 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                     }
                 }),
             boolOption("HZB occlusion",
-                "Build the Hi-Z occlusion buffer each frame. No-op until depth tap lands.",
+                "Build the Hi-Z pyramid at END_MAIN from the finished depth buffer. Required "
+                    + "by HZB region-cull; a no-op on its own.",
                 cfg.enableHzb, v -> cfg.enableHzb = v));
+
+        this.list.addSmall(
+            boolOption("HZB region cull",
+                "Sample the previous frame's HZB to skip occluded regions at the task-shader "
+                    + "gate. Needs HZB build on. 1-frame lag; conservative under motion.",
+                cfg.enableHzbRegionCull, v -> cfg.enableHzbRegionCull = v));
 
         this.list.addSmall(
             boolOption("Boot shader check",

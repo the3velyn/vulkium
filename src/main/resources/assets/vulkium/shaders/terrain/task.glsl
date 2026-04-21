@@ -14,6 +14,12 @@
 layout(local_size_x=1) in;
 
 bool shouldRenderVisible(uint sectionId) {
+    // Region-level gate (populated by occlusion/region_cull.comp when cfg.enableHzbRegionCull
+    // is on; stays all-0xFF otherwise). Cheap early-out: one buffer read, one AND, one branch.
+    if ((regionVisibility.data[sectionId >> 8] & uint8_t(1)) == uint8_t(0)) {
+        return false;
+    }
+    // Section-level gate (reserved for finer-grain culling; currently all-0xFF seeded).
     return (sectionVisibility.data[sectionId] & uint8_t(1)) != uint8_t(0);
 }
 

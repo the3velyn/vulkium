@@ -18,7 +18,11 @@ layout(local_size_x=1) in;
 #include <vulkium:terrain/translucent/task_common.glsl>
 
 bool shouldRender(uint sectionId) {
-    //Check visibility
+    // Region-level HZB gate (populated by region_cull.comp when enableHzbRegionCull is on;
+    // all-0xFF seeded otherwise so this is a no-op early-out in that case).
+    if ((regionVisibility.data[sectionId >> 8] & uint8_t(1)) == uint8_t(0)) {
+        return false;
+    }
     return (sectionVisibility.data[sectionId]&uint8_t(1)) != uint8_t(0);
 }
 

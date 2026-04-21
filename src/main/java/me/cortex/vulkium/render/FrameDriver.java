@@ -84,12 +84,18 @@ public final class FrameDriver {
         long tTotal = me.cortex.vulkium.diag.PerfTracker.begin();
         VulkiumConfig cfg = VulkiumConfig.get();
 
-        // HZB build: tap Mojang's depth attachment (now fully populated after opaque terrain) +
-        // run the downsample chain.
-        if (cfg.enableHzb) {
-            long tHzb = me.cortex.vulkium.diag.PerfTracker.begin();
-            Renderer.get().buildHzb();
-            me.cortex.vulkium.diag.PerfTracker.end("buildHzb", tHzb);
+        // Region-cull uses the HZB built at END_MAIN of the previous frame. It must run
+        // BEFORE the opaque dispatch so the task shader's gate on regionVisibility sees the
+        // updated bits. No-op when cfg.enableHzbRegionCull is false or the HZB doesn't exist
+        // yet (first frame after enable, or HZB allocation failed — see Renderer.buildHzb).
+        if (cfg.enableHzb && cfg.enableHzbRegionCull) {
+            long tCull = me.cortex.vulkium.diag.PerfTracker.begin();
+            Renderer.get().runRegionCull();
+            me.cortex.vulkium.diag.PerfTracker.end("regionCull", tCull);
+        } else {
+            // Handle toggle-off transition: Renderer re-seeds regionVisibility to all-0xFF
+            // if the previous frame ran cull and this frame won't. Cheap no-op otherwise.
+            Renderer.get().runRegionCull();
         }
 
         if (!cfg.drawTerrain) {
@@ -434,7 +440,16 @@ public final class FrameDriver {
     private static void onEndMain(LevelRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
         // Draws moved to per-phase hooks: opaque at AFTER_OPAQUE_TERRAIN, translucent at
-        // AFTER_TRANSLUCENT_TERRAIN. END_MAIN is now just a tail-end anchor — no draws here.
+        // AFTER_TRANSLUCENT_TERRAIN. END_MAIN is where we build the HZB from the NOW-complete
+        // depth buffer (sky + vulkium's opaque terrain + entities + translucent). That HZB is
+        // read by next frame's region_cull at AFTER_OPAQUE_TERRAIN. Frame-late by one frame —
+        // stale HZB over-reports visibility under camera motion, which is conservative.
+        VulkiumConfig cfg = VulkiumConfig.get();
+        if (cfg.enableHzb) {
+            long tHzb = me.cortex.vulkium.diag.PerfTracker.begin();
+            Renderer.get().buildHzb();
+            me.cortex.vulkium.diag.PerfTracker.end("buildHzb", tHzb);
+        }
     }
 
     public static long frameCount() { return FRAMES.get(); }

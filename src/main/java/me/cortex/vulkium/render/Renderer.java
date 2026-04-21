@@ -33,6 +33,10 @@ public final class Renderer {
     private UploadStream uploadStream;
     private HzbBuilder hzbBuilder;
     private HzbTexture hzbTexture;
+    private RegionCuller regionCuller;
+    /** True if a previous frame ran region_cull; used to decide when to re-seed
+     *  {@link #regionVisibilityBuffer} back to all-0xFF after the user toggles cull off. */
+    private boolean lastFrameRanCull;
     /** Small device buffer holding {@link RegionManager#MAX_TRANSFORMATION_COUNT} mat4 entries;
      *  index 0 seeded with identity so sections with transformationId=0 transform as no-op. */
     private me.cortex.vulkium.vk.DeviceBuffer transformationBuffer;
@@ -295,6 +299,60 @@ public final class Renderer {
         hzbLastBuildNs = System.nanoTime() - t0;
     }
 
+    /**
+     * Dispatch the region-cull compute shader. Called from {@code FrameDriver} at
+     * {@code AFTER_OPAQUE_TERRAIN}, BEFORE the vulkium opaque draw. Uses the HZB built at
+     * the end of the previous frame (see {@link #buildHzb}).
+     *
+     * <p>No-op when (a) cull is disabled in config, (b) HZB doesn't exist yet (first frame
+     * post-enable), or (c) there are no live regions to cull. The task shader's new gate on
+     * {@code regionVisibility} will see the all-0xFF boot seed in those cases and treat every
+     * region as visible — identical to pre-P0-2 behavior.
+     *
+     * <p>Also handles the cull-toggled-off transition: if cull was running last frame and is
+     * off this frame, re-seed {@code regionVisibilityBuffer} to all-0xFF so residual zeros
+     * from the prior enabled window don't stick.
+     */
+    public void runRegionCull() {
+        if (initFailed) return;
+        me.cortex.vulkium.managers.RegionManager rm = me.cortex.vulkium.Vulkium.regionManager();
+        boolean configOn = VulkiumConfig.get().enableHzbRegionCull;
+        boolean canRun = configOn && regionCuller != null && hzbTexture != null
+            && sceneUniform != null && rm != null && rm.regionCount() > 0;
+
+        if (!canRun) {
+            if (lastFrameRanCull) {
+                // Transitioning OFF: wipe residual zeros written by prior frames so the task
+                // shader's regionVisibility gate stops culling geometry that's actually visible.
+                if (regionVisibilityBuffer != null && uploadStream != null) {
+                    try {
+                        seedFillByte(regionVisibilityBuffer, (byte) 0xFF);
+                    } catch (Throwable t) {
+                        LOGGER.warn("Region-visibility reseed failed on cull toggle-off", t);
+                    }
+                }
+                lastFrameRanCull = false;
+            }
+            return;
+        }
+
+        final RegionCuller culler = regionCuller;
+        final SceneUniform scene = sceneUniform;
+        final HzbTexture hzb = hzbTexture;
+        // Dispatch over [0, maxRegionIndex): every allocated region ID falls in this range.
+        // idProvider recycles released IDs so live slots can be anywhere in this span — we
+        // must cull them all, not just map.size() threads' worth (that would skip the high
+        // slots on a sparse ledger).
+        final int upperBound = rm.maxRegionIndex();
+        if (upperBound <= 0) return;
+        try {
+            CommandRecorder.recordAndSubmit(cmd -> culler.record(cmd, scene, hzb, upperBound));
+            lastFrameRanCull = true;
+        } catch (Throwable t) {
+            LOGGER.warn("Region-cull dispatch failed (continuing without occlusion this frame)", t);
+        }
+    }
+
     private void ensureInit() {
         if (sceneUniform != null || initFailed) return;
         try {
@@ -310,6 +368,7 @@ public final class Renderer {
                 me.cortex.vulkium.VulkiumConfig.get().maxRegions);
             primaryTerrain = new PrimaryTerrainPass();
             terrainUploader = new TerrainUploader();
+            regionCuller = new RegionCuller();
 
             // Seed transformationArray[0] with an identity mat4 so sections whose
             // transformationId=0 transform as identity (no-op). Without this, the mesh shader
@@ -356,6 +415,10 @@ public final class Renderer {
         // Close in reverse construction order so dependent VK handles teardown before their
         // predecessors (pipelines hold references to modules + VkDevice; uploader holds its
         // arena's DeviceBuffer; UploadStream holds a StagingBuffer).
+        if (regionCuller != null) {
+            try { regionCuller.close(); } catch (Throwable t) { LOGGER.warn("RegionCuller close failed", t); }
+            regionCuller = null;
+        }
         if (hzbTexture != null) {
             try { hzbTexture.close(); } catch (Throwable t) { LOGGER.warn("HzbTexture close failed", t); }
             hzbTexture = null;
@@ -364,6 +427,7 @@ public final class Renderer {
             try { hzbBuilder.close(); } catch (Throwable t) { LOGGER.warn("HzbBuilder close failed", t); }
             hzbBuilder = null;
         }
+        lastFrameRanCull = false;
         if (transformationBuffer != null) {
             try { transformationBuffer.close(); } catch (Throwable t) { LOGGER.warn("transformationBuffer close failed", t); }
             transformationBuffer = null;

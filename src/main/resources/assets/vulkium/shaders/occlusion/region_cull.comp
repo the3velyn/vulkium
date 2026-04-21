@@ -1,0 +1,117 @@
+#version 460 core
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+// Region-level occlusion cull against the HZB pyramid built from the previous frame's depth.
+// Dispatch width: ceil(regionCount / 64). Writes regionVisibility[regionId] = 0 (occluded,
+// every section in the region skips dispatch at the task stage) or 1 (visible, defer to
+// sectionVisibility as before).
+//
+// Consumed by terrain/task.glsl's new gate:
+//   if (regionVisibility.data[sectionId >> 8] == uint8_t(0)) { EmitMeshTasksEXT(0, 1, 1); return; }
+//
+// Frame ordering (see FrameDriver):
+//   * HZB is built from frame N's depth at END_MAIN (includes vulkium's own terrain).
+//   * region_cull runs at AFTER_OPAQUE_TERRAIN of frame N+1, before the opaque dispatch.
+//   * Therefore the HZB we sample here reflects "what was rendered last frame" — a 1-frame lag
+//     that is conservative under camera motion (stale HZB over-reports visibility = safe).
+//
+// First-frame / no-HZB path: caller skips the dispatch and leaves regionVisibility all-0xFF
+// (the boot-time seed), so every region stays visible until the second frame's cull runs.
+//
+// Correctness notes:
+//   * MC 26.2 Vulkan uses reverse-Z (near=1, far=0, depth compare GREATER_OR_EQUAL). HZB is
+//     built with the min() downsample (see occlusion/hzb_downsample.comp), so each HZB texel
+//     holds the farthest rendered depth in its 2x2 block. A region is occluded iff its
+//     nearest-to-camera corner (largest reverse-Z of its 8 AABB corners) is still strictly
+//     less than the MIN of the HZB samples covering its screen footprint.
+//   * If any AABB corner straddles the near plane (clip.w <= 0) we conservatively keep the
+//     region visible — projecting is ill-defined and getting this wrong disappears terrain.
+//   * Sections in half-loaded regions (count < 256) are handled by the task-shader gate on
+//     sectionVisibility, independent of this pass.
+
+#include <vulkium:occlusion/scene.glsl>
+
+layout(local_size_x = 64) in;
+
+layout(set = 0, binding = 1) uniform sampler2D u_hzb;
+
+bool projectAabb(vec3 mn, vec3 mx, out vec2 ssMin, out vec2 ssMax, out float nearestZ) {
+    ssMin = vec2(1e30);
+    ssMax = vec2(-1e30);
+    nearestZ = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        vec3 c = vec3(
+            (i & 1) == 0 ? mn.x : mx.x,
+            (i & 2) == 0 ? mn.y : mx.y,
+            (i & 4) == 0 ? mn.z : mx.z);
+        vec4 clip = MVP * vec4(c, 1.0);
+        if (clip.w <= 0.0) return false; // behind near plane — can't project safely
+        vec3 ndc = clip.xyz / clip.w;
+        ssMin = min(ssMin, ndc.xy);
+        ssMax = max(ssMax, ndc.xy);
+        nearestZ = max(nearestZ, ndc.z); // reverse-Z: larger = closer
+    }
+    return true;
+}
+
+void main() {
+    // Caller dispatches ceil(maxRegionIndex / 64) workgroups, so regionId is bounded by
+    // maxRegionIndex + 63 in the worst case. Dispatched threads past maxRegionIndex read
+    // indeterminate-but-safely-allocated regionData/regionVisibility slots (buffers are
+    // sized to maxRegions ≥ maxRegionIndex) — their outputs are never read by task shaders.
+    uint regionId = gl_GlobalInvocationID.x;
+
+    // Pull AABB. unpackRegionPosition returns section coords in standard (X, Y, Z) order;
+    // chunkPosition is packed nvidium-order (cx, cz, cy) so we swap to standard before diffing.
+    Region region = regionData.data[regionId];
+    ivec3 secMin = unpackRegionPosition(region);
+    ivec3 secSize = unpackRegionSize(region); // inclusive; true extent = secSize + 1
+    ivec3 camChunkStd = ivec3(chunkPosition.x, chunkPosition.z, chunkPosition.y);
+
+    // Camera-relative section coords (standard XYZ), then scale to blocks and shave the
+    // subchunk offset (nvidium-packed (fx, fz, fy) → swap back to standard).
+    vec3 relMinSec = vec3(secMin - camChunkStd);
+    vec3 relMaxSec = relMinSec + vec3(secSize + ivec3(1));
+    vec3 camFracStd = vec3(subchunkOffset.x, subchunkOffset.z, subchunkOffset.y);
+    vec3 blockMin = relMinSec * 16.0 - camFracStd;
+    vec3 blockMax = relMaxSec * 16.0 - camFracStd;
+
+    vec2 ssMin, ssMax;
+    float nearestZ;
+    if (!projectAabb(blockMin, blockMax, ssMin, ssMax, nearestZ)) {
+        regionVisibility.data[regionId] = uint8_t(1);
+        return;
+    }
+
+    // Frustum cull: entirely outside NDC in x, y, or behind far plane (reverse-Z: z < 0).
+    if (ssMax.x < -1.0 || ssMin.x > 1.0 ||
+        ssMax.y < -1.0 || ssMin.y > 1.0 ||
+        nearestZ < 0.0) {
+        regionVisibility.data[regionId] = uint8_t(0);
+        return;
+    }
+
+    // Screen AABB → UV space, clamped.
+    vec2 uvMin = clamp(ssMin * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+    vec2 uvMax = clamp(ssMax * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+
+    // Pick mip level: smallest mip where the AABB's screen extent spans <= ~2 texels.
+    vec2 extentPx = (uvMax - uvMin) * vec2(textureSize(u_hzb, 0));
+    float mip = max(0.0, ceil(log2(max(extentPx.x, extentPx.y))));
+    float maxMip = float(textureQueryLevels(u_hzb) - 1);
+    mip = min(mip, maxMip);
+
+    // Sample 4 corners, take min. Reverse-Z + min-HZB: MIN of samples = "the least-far rendered
+    // pixel in the AABB's screen footprint". Occluded iff region's nearest > that.
+    float s00 = textureLod(u_hzb, uvMin, mip).r;
+    float s10 = textureLod(u_hzb, vec2(uvMax.x, uvMin.y), mip).r;
+    float s01 = textureLod(u_hzb, vec2(uvMin.x, uvMax.y), mip).r;
+    float s11 = textureLod(u_hzb, uvMax, mip).r;
+    float hzbMin = min(min(s00, s10), min(s01, s11));
+
+    // Reverse-Z: occluded iff the region's closest-to-camera corner has a smaller depth
+    // value than the farthest rendered pixel in the AABB footprint — i.e., every rendered
+    // pixel in that area is in front of every point of the region.
+    bool occluded = nearestZ < hzbMin;
+    regionVisibility.data[regionId] = occluded ? uint8_t(0) : uint8_t(1);
+}
