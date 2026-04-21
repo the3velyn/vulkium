@@ -45,7 +45,9 @@ void main() {
     // Whole-region early-out: if region_cull already rejected this region, every
     // section in it is also occluded (the region's AABB conservatively bounds its
     // sections'). Leave sectionVisibility untouched for these slots — the task
-    // shader's AND with regionVisibility handles it via the region bit.
+    // shader's AND with regionVisibility handles it via the region bit, and the
+    // per-frame reseed in Renderer.runRegionCull keeps sectionVisibility defaulting
+    // to 0xFF (visible) for skipped slots so no stale 0 can persist across rotations.
     if ((regionVisibility.data[regionId] & uint8_t(1)) == uint8_t(0)) {
         return;
     }

@@ -428,6 +428,39 @@ public final class Renderer {
         if (upperBound <= 0) return;
         try {
             CommandRecorder.recordAndSubmit(cmd -> {
+                // Reseed both visibility buffers to all-0xFF before the cull dispatches.
+                // Rationale: the cull shaders write per-frame bits over this seed; any slot
+                // a shader skips (section_cull early-exits when regionVisibility==0, and
+                // any future path that might skip a write) defaults back to "visible" instead
+                // of carrying a possibly-stale 0 from an older camera angle. Tests the
+                // "sectionVisibility goes stale across rotations" hypothesis for the
+                // persistent W-snapshot sliver — if it survives, the bug lives elsewhere.
+                //
+                // Cost: two vkCmdFillBuffer calls per frame. regionVisibility is maxRegions
+                // bytes (~4 KB at maxRegions=4096); sectionVisibility is maxRegions × 256
+                // (~1 MB). GPU fill-buffer bandwidth is hundreds of GB/s — single-digit µs
+                // combined on a 3060. A barrier follows so region_cull's subsequent reads of
+                // regionVisibility observe the fill rather than an old value.
+                org.lwjgl.vulkan.VK10.vkCmdFillBuffer(cmd,
+                    regVisBuf.handle(), 0L, regVisBuf.size(), 0xFFFFFFFF);
+                if (secVisBuf != null) {
+                    org.lwjgl.vulkan.VK10.vkCmdFillBuffer(cmd,
+                        secVisBuf.handle(), 0L, secVisBuf.size(), 0xFFFFFFFF);
+                }
+                try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                    org.lwjgl.vulkan.VkMemoryBarrier2.Buffer mb =
+                        org.lwjgl.vulkan.VkMemoryBarrier2.calloc(1, stack)
+                            .sType$Default()
+                            .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_CLEAR_BIT)
+                            .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_WRITE_BIT)
+                            .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                            .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_STORAGE_READ_BIT
+                                         | org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT);
+                    org.lwjgl.vulkan.VkDependencyInfo dep = org.lwjgl.vulkan.VkDependencyInfo.calloc(stack)
+                        .sType$Default().pMemoryBarriers(mb);
+                    org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep);
+                }
+
                 if (gpu != null) gpu.begin(cmd, "regionCull");
                 regCuller.record(cmd, scene, hzb, upperBound);
                 if (gpu != null) gpu.end(cmd, "regionCull");
