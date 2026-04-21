@@ -108,6 +108,7 @@ loom {
             // (KDE Wayland capture portal flakes and ydotool mouse-move is unreliable on
             // this host). World name matches run/saves/test/. Override with
             // `-PquickPlay=<other>` or unset via `-PquickPlay=off`.
+            // Window size is set by scripts/vulkium-test.sh via --args, not here.
             val quickPlay = (project.findProperty("quickPlay") as? String) ?: "test"
             if (quickPlay != "off") {
                 programArgs("--quickPlaySingleplayer", quickPlay)
