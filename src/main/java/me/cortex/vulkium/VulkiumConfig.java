@@ -78,15 +78,16 @@ public final class VulkiumConfig {
     /**
      * Section keep-distance in chunks. Matches nvidium's {@code region_keep_distance}.
      * <ul>
-     *   <li>{@code 32} — vanilla behavior: evict out-of-RD sections as MC unloads them.</li>
-     *   <li>{@code 256} — keep everything. Matches vulkium's current (no-eviction) baseline
-     *       — safe default while the arena is sized for the worst case.</li>
-     *   <li>Any value in {@code (32, 256)} — keep sections within a square of that radius
-     *       around the camera; evict further ones on a periodic sweep.</li>
+     *   <li>{@code 32} — vanilla behavior: evict sections only when MC has unloaded the
+     *       owning chunk ({@code ClientLevel.hasChunk} returns false). Default.</li>
+     *   <li>{@code 256} — keep everything. Memory-unbounded; useful for profiling or when
+     *       the arena is oversized.</li>
+     *   <li>Any value in {@code (32, 256)} — also evict anything outside a square of that
+     *       radius around the camera (stricter than vanilla).</li>
      * </ul>
      * Wired in {@link me.cortex.vulkium.managers.SectionManager#sweepKeepDistance}.
      */
-    public int regionKeepDistance = 256;
+    public int regionKeepDistance = 32;
 
     /** Matches nvidium's {@code translucency_sorting_level}. Controls the resort path that
      *  was just stabilized on 2026-04-20. Wired in {@code SectionManager.drainResorts} and
