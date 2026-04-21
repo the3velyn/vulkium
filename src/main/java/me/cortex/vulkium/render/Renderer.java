@@ -103,11 +103,13 @@ public final class Renderer {
         // order (QUADS additionally applies MC's POV resort inside each section via drainResorts).
         if (translucentSorter != null && rm != null
                 && sortLevel != me.cortex.vulkium.config.TranslucencySortingLevel.NONE) {
+            long tTs = me.cortex.vulkium.diag.PerfTracker.begin();
             translucentSorter.sort(
                 me.cortex.vulkium.managers.SectionManager.get().translucentSectionKeys(),
                 rm,
                 me.cortex.vulkium.managers.SectionManager.get(),
                 cx, cy, cz);
+            me.cortex.vulkium.diag.PerfTracker.end("translucentSort", tTs);
             translucentSortPtr = translucentSorter.deviceAddress();
         }
 
@@ -131,22 +133,23 @@ public final class Renderer {
         // doesn't need to cull further out than MC is actually loading chunks.
         if (cam.cullFrustum != null && rm != null) {
             int rd = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
+            long tVis = me.cortex.vulkium.diag.PerfTracker.begin();
             visibility.update(cam.cullFrustum, cx, cy, cz, rd);
+            me.cortex.vulkium.diag.PerfTracker.end("visibility.update", tVis);
         }
 
-        // Build the compact opaque dispatch list AFTER visibility has been updated — it
-        // filters to live-and-visible sections. FrameDriver consumes opaqueDispatchList.count()
-        // as the task-shader dispatch width, replacing the old maxRegionIndex*256 brute-force
-        // sweep.
         if (opaqueDispatchList != null && rm != null) {
+            long tOp = me.cortex.vulkium.diag.PerfTracker.begin();
             opaqueDispatchList.build(
                 me.cortex.vulkium.managers.SectionManager.get(),
                 rm, visibility);
+            me.cortex.vulkium.diag.PerfTracker.end("opaqueList.build", tOp);
         }
 
         // Drain dirty regions into the GPU-side regionBuffer + sectionBuffer. SectionManager
         // marks regions dirty whenever it populates a section header — without this upload
         // step our CPU-side writes never reach shader visibility.
+        long tDirty = me.cortex.vulkium.diag.PerfTracker.begin();
         if (rm != null && uploadStream != null) {
             final var target = rm;
             rm.drainDirty((regionId, removed, metaSrc, sectionSrc) -> {
@@ -173,6 +176,7 @@ public final class Renderer {
                 }
             });
         }
+        me.cortex.vulkium.diag.PerfTracker.end("drainDirty", tDirty);
 
         sceneUniform
             .mvp(mvp)
@@ -221,7 +225,9 @@ public final class Renderer {
         // dispatch records at AFTER_OPAQUE_TERRAIN the copies are already in flight or done.
         if (uploadStream != null) {
             try {
+                long tCommit = me.cortex.vulkium.diag.PerfTracker.begin();
                 uploadStream.commitFrame();
+                me.cortex.vulkium.diag.PerfTracker.end("uploadCommit", tCommit);
             } catch (Throwable t) {
                 LOGGER.warn("UploadStream.commitFrame failed (prepareFrame)", t);
             }

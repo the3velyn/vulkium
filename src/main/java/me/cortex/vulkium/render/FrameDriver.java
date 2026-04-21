@@ -42,6 +42,7 @@ public final class FrameDriver {
 
     private static void onStartMain(LevelTerrainRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
+        long tTotal = me.cortex.vulkium.diag.PerfTracker.begin();
         FRAMES.incrementAndGet();
 
         // NB: the BobViewTap reset lives in GameRendererBobMixin at bobHurt HEAD, NOT here.
@@ -58,31 +59,28 @@ public final class FrameDriver {
         // those chunks invisible until MC re-issued them via a block edit or F3+A.
         Renderer.get().ensureReady();
 
-        // Ingest queue drain: move captured compile results from worker threads into the
-        // render-thread-owned live section table + region ledger. MUST run every frame —
-        // this is the only path from MC's worker-thread captures to our live state.
+        long tDrain = me.cortex.vulkium.diag.PerfTracker.begin();
         SectionManager.get().drainPending(DRAIN_PER_FRAME);
+        me.cortex.vulkium.diag.PerfTracker.end("drainPending", tDrain);
 
-        // Translucent POV-resort drain: MC's ResortTransparencyTask produces new sorted index
-        // buffers each time the camera crosses a sub-chunk boundary. Our resort mixin copies
-        // those into a queue; here we apply them to the arena by permuting the cached unsorted
-        // translucent bytes. Cap liberally — resort batches are typically tens of sections.
+        long tResort = me.cortex.vulkium.diag.PerfTracker.begin();
         SectionManager.get().drainResorts(2048);
+        me.cortex.vulkium.diag.PerfTracker.end("drainResorts", tResort);
 
-        // prepareFrame runs the frustum cull + writes the scene UBO (+visibility pointers).
-        // Only needed if we're drawing OR if F3 is shown (so the HUD overlay's visible-region
-        // count stays fresh). When F3 is hidden AND draws are off, the idle frame cost is just
-        // drainPending above.
         VulkiumConfig cfg = VulkiumConfig.get();
         boolean f3Shown = net.minecraft.client.Minecraft.getInstance().getDebugOverlay() != null
             && net.minecraft.client.Minecraft.getInstance().getDebugOverlay().showDebugScreen();
         if (cfg.drawTerrain || cfg.enableHzb || f3Shown) {
+            long tPrep = me.cortex.vulkium.diag.PerfTracker.begin();
             Renderer.get().prepareFrame(ctx);
+            me.cortex.vulkium.diag.PerfTracker.end("prepareFrame", tPrep);
         }
+        me.cortex.vulkium.diag.PerfTracker.end("onStartMain", tTotal);
     }
 
     private static void onAfterOpaqueTerrain(LevelTerrainRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
+        long tTotal = me.cortex.vulkium.diag.PerfTracker.begin();
         VulkiumConfig cfg = VulkiumConfig.get();
 
         // HZB build: tap Mojang's depth attachment (now fully populated after opaque terrain) +
@@ -91,21 +89,20 @@ public final class FrameDriver {
             Renderer.get().buildHzb();
         }
 
-        if (!cfg.drawTerrain) return;
-        // Draw opaque HERE (MC's own opaque was cancelled by ChunkSectionsToRenderMixin). This
-        // is the vanilla position for opaque terrain — sky/entities/clouds/translucent come
-        // after and depth-test against our output. Critical for correct cloud/water layering:
-        // if opaque runs at END_MAIN instead, clouds draw first with empty depth and end up
-        // occluding our translucent at AFTER_TRANSLUCENT_TERRAIN.
+        if (!cfg.drawTerrain) {
+            me.cortex.vulkium.diag.PerfTracker.end("onAfterOpaqueTerrain", tTotal);
+            return;
+        }
         Renderer r = Renderer.get();
         me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
         var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
         if (scene != null && camState != null) {
             updateMvpFromCamera(scene, camState);
         }
-        // commitFrame moved to the end of Renderer.prepareFrame (START_MAIN) — submitting
-        // earlier overlaps the copies with MC's sky / opaque / entities / clouds pass.
+        long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
         dispatchTerrainDraw(true, false);
+        me.cortex.vulkium.diag.PerfTracker.end("dispatchOpaque", tDraw);
+        me.cortex.vulkium.diag.PerfTracker.end("onAfterOpaqueTerrain", tTotal);
     }
 
     private static long lastDispatchLog = 0L;
@@ -381,6 +378,7 @@ public final class FrameDriver {
     private static void onAfterTranslucentTerrain(LevelRenderContext ctx) {
         if (!Vulkium.isEnabled()) return;
         if (!VulkiumConfig.get().drawTerrain) return;
+        long tTotal = me.cortex.vulkium.diag.PerfTracker.begin();
         // Draw translucent HERE, not at END_MAIN. MC's cloud renderer fires between opaque and
         // translucent in vanilla order; drawing translucent at END_MAIN (after clouds) was the
         // plan but clouds were rendering OVER water. Moving the translucent draw to
@@ -401,7 +399,10 @@ public final class FrameDriver {
         // translucent hook. The opaque hook's commit already pushed this frame's arena /
         // region-header / dispatch-list writes to the GPU. Dropping this commit removes one
         // command-buffer submission per frame.
+        long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
         dispatchTerrainDraw(false, true);
+        me.cortex.vulkium.diag.PerfTracker.end("dispatchTranslucent", tDraw);
+        me.cortex.vulkium.diag.PerfTracker.end("onAfterTranslucentTerrain", tTotal);
     }
 
     /** Recompute the final MVP matrix (projection × pose × viewRotation) and push to the scene
