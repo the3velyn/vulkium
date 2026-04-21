@@ -2,12 +2,23 @@
 #extension GL_EXT_shader_explicit_arithmetic_types : require
 
 // Hierarchical-Z downsample pass. Builds one mip level by reducing a 2×2 block of the
-// previous level via max() (conservative — keeps the farthest depth so nothing visible is
-// incorrectly culled). One workgroup per 8×8 output tile; one invocation per output pixel.
+// previous level. One workgroup per 8×8 output tile; one invocation per output pixel.
 //
 // Replaces nvidium's reliance on GL_NV_representative_fragment_test. Callers sample this
 // texture at the mip level whose texel covers the screen-space AABB of a region/section to
 // cheaply decide occlusion before issuing mesh-shader draws.
+//
+// Reduction choice: MC 26.2 Vulkan renders with reverse-Z (near=1, far=0, GREATER_OR_EQUAL
+// depth compare). The "farthest rendered pixel" in a 2×2 block is the SMALLEST depth value
+// (closest to far plane). A consumer wants to know this min: any occludee whose closest
+// depth is still *below* it (i.e. reverse-Z: smaller value = farther from camera) is fully
+// behind the rendered block and can be culled. So we downsample with min(), not max().
+//
+// TODO(P0-2, deferred): no consumer reads this HZB today. When the region-cull compute
+// pass lands, validate against vanilla-equivalent frames before flipping enableHzb default
+// back to true. The two moving pieces — HZB build + consumer test — have to be validated
+// together because either getting the reverse-Z direction wrong produces silent regressions
+// (disappearing terrain on one direction, zero culling on the other).
 //
 // Binding layout:
 //   set=0, binding=0: input sampler (previous mip, COMBINED_IMAGE_SAMPLER)
@@ -28,14 +39,16 @@ void main() {
     ivec2 dst = ivec2(gl_GlobalInvocationID.xy);
     if (dst.x >= outSize.x || dst.y >= outSize.y) return;
 
-    // Gather the 2x2 depth values from the input mip and take the max (farthest).
-    // Use textureGather for a single fetch of four neighboring texels.
+    // Gather the 2x2 depth values from the input mip and take the min — reverse-Z's
+    // "farthest rendered pixel" in the 2x2 block. Conservative for occlusion tests:
+    // any AABB whose nearest depth is still less than this min is fully behind the
+    // rendered pixels and can be culled.
     vec2 uv = (vec2(dst) + 0.5) / vec2(outSize);
     vec4 d = textureGather(u_input, uv, 0);
-    float maxD = max(max(d.x, d.y), max(d.z, d.w));
+    float minD = min(min(d.x, d.y), min(d.z, d.w));
 
     // If the source mip had odd dimensions, one of the gathered texels may be a clamped
-    // repeat. That's still conservative (max of the 4 samples is >= max of the real 2 or 3).
+    // repeat. That's still conservative (min of the 4 samples is <= min of the real 2 or 3).
 
-    imageStore(u_output, dst, vec4(maxD, 0, 0, 0));
+    imageStore(u_output, dst, vec4(minD, 0, 0, 0));
 }
