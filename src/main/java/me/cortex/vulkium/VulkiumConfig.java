@@ -56,6 +56,14 @@ public final class VulkiumConfig {
      *  after a clean A/B comparison shows no disappearing-chunk regressions on lookaround. */
     public boolean enableHzbRegionCull = false;
 
+    /** Second-pass refinement of {@link #enableHzbRegionCull}: after the region-level bits
+     *  are written, dispatch a per-section compute pass that tests each section's 16³-block
+     *  AABB against the HZB and writes {@code sectionVisibility}. The terrain task shader
+     *  already ANDs region ∧ section visibility, so this doubles down on culling inside
+     *  visible regions. Requires {@link #enableHzbRegionCull}. Extra ~15-30µs GPU and one
+     *  extra {@code vkCmdCopyBuffer} of ~1MB per frame for the CPU readback. */
+    public boolean enableHzbSectionCull = false;
+
     /** Sort the opaque dispatch list front-to-back by per-section Manhattan distance so
      *  near sections render before far ones. Lets the GPU's early-Z reject more fragments
      *  from occluded far sections, but scatters {@code regionData} / {@code sectionData}

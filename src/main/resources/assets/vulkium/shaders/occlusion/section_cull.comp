@@ -1,0 +1,126 @@
+#version 460 core
+#extension GL_EXT_shader_explicit_arithmetic_types : require
+
+// Section-level HZB occlusion cull. Runs AFTER region_cull — regions fully occluded by
+// the region test never reach this pass (early-out on regionVisibility below). For
+// surviving regions, each of the 256 potential sections gets its own 16³-block AABB
+// tested against the previous frame's HZB, writing sectionVisibility per-section.
+//
+// Dispatch model: one workgroup per region slot [0, maxRegionIndex), local_size_x=256
+// so each thread handles one compactId within its region. Early-out when the region
+// was culled at region level, so cost is proportional to the ACTUAL visible-region
+// count × 256 threads — ~10k threads in a 39-visible-region scene.
+//
+// Output: sectionVisibility.data[(regionId << 8) | compactId] = 0 (occluded) or 1.
+// Consumed by terrain/task.glsl's existing shouldRenderVisible gate — no shader change
+// needed there.
+//
+// Frame ordering (FrameDriver sequences these in the same cmd buffer batch, with a
+// barrier between each):
+//   1. region_cull.comp       → regionVisibility
+//   2. section_cull.comp      → sectionVisibility (this file)
+//   3. vkCmdCopyBuffer        → host-visible readbacks for next-frame CPU compaction
+//   4. terrain task+mesh+frag → reads both visibility layers this frame
+//
+// First-frame safety: sectionVisibility is seeded all-0xFF at init, so before any
+// section_cull dispatch has run the task shader sees "all visible" — identical to
+// pre-P0-2 behavior. On toggle-off we re-seed to all-0xFF to avoid residual zeros.
+//
+// Correctness: strictly conservative. Any AABB corner at the near plane (clip.w <= 0)
+// or outside frustum in XY marks the section visible — mis-culling disappears chunks.
+// We trust the HZB min-downsample from b07b6dc (reverse-Z: "farthest rendered pixel"
+// in each 2x2 block), same test as region_cull.
+
+#include <vulkium:occlusion/scene.glsl>
+
+layout(local_size_x = 256) in;
+
+layout(set = 0, binding = 1) uniform sampler2D u_hzb;
+
+void main() {
+    uint regionId = gl_WorkGroupID.x;
+    uint compactId = gl_LocalInvocationID.x;
+    uint sectionId = (regionId << 8) | compactId;
+
+    // Whole-region early-out: if region_cull already rejected this region, every
+    // section in it is also occluded (the region's AABB conservatively bounds its
+    // sections'). Leave sectionVisibility untouched for these slots — the task
+    // shader's AND with regionVisibility handles it via the region bit.
+    if ((regionVisibility.data[regionId] & uint8_t(1)) == uint8_t(0)) {
+        return;
+    }
+
+    // Empty / unallocated section — no geometry to draw. Writing 0 here compounds with
+    // CPU compaction so the slot never even enters the dispatch list if we plumb the
+    // sectionVisibility readback into OpaqueDispatchList.build.
+    ivec4 header = sectionData.data[sectionId].header;
+    if (sectionEmpty(header)) {
+        sectionVisibility.data[sectionId] = uint8_t(0);
+        return;
+    }
+
+    // Decode this section's chunk coordinates. Matches the task-shader unpack exactly —
+    // header.xyz >> 8 yields (chunkX, chunkZ, chunkY) in nvidium axis order; chunk.z
+    // (which holds chunkY) needs a 9-bit mask + sign-extend because the hide-bit and
+    // translucent-count live in its upper bits.
+    ivec3 chunk = ivec3(header.xyz) >> 8;
+    chunk.z &= 0x1ff;
+    chunk.z <<= 32 - 9;
+    chunk.z >>= 32 - 9;
+
+    // chunkPosition is packed nvidium-order (cx, cz, cy); swap to standard (X, Y, Z)
+    // before diffing so all three axes line up.
+    ivec3 camChunkStd = ivec3(chunkPosition.x, chunkPosition.z, chunkPosition.y);
+    // chunk currently reads (chunkX, chunkZ, chunkY) from the header. Re-swap to standard.
+    ivec3 sectionChunkStd = ivec3(chunk.x, chunk.z, chunk.y);
+    ivec3 relChunkStd = sectionChunkStd - camChunkStd;
+
+    // Section AABB in camera-relative blocks. subchunkOffset packed nvidium (fx, fz, fy);
+    // swap to standard.
+    vec3 camFracStd = vec3(subchunkOffset.x, subchunkOffset.z, subchunkOffset.y);
+    vec3 blockMin = vec3(relChunkStd) * 16.0 - camFracStd;
+    vec3 blockMax = blockMin + vec3(16.0);
+
+    vec2 ssMin = vec2(1e30);
+    vec2 ssMax = vec2(-1e30);
+    float nearestZ = 0.0;
+    for (int i = 0; i < 8; ++i) {
+        vec3 c = vec3(
+            (i & 1) == 0 ? blockMin.x : blockMax.x,
+            (i & 2) == 0 ? blockMin.y : blockMax.y,
+            (i & 4) == 0 ? blockMin.z : blockMax.z);
+        vec4 clip = MVP * vec4(c, 1.0);
+        if (clip.w <= 0.0) {
+            // Near-plane straddle — keep visible (can't project safely).
+            sectionVisibility.data[sectionId] = uint8_t(1);
+            return;
+        }
+        vec3 ndc = clip.xyz / clip.w;
+        ssMin = min(ssMin, ndc.xy);
+        ssMax = max(ssMax, ndc.xy);
+        nearestZ = max(nearestZ, ndc.z);
+    }
+
+    if (ssMax.x < -1.0 || ssMin.x > 1.0 ||
+        ssMax.y < -1.0 || ssMin.y > 1.0 ||
+        nearestZ < 0.0) {
+        sectionVisibility.data[sectionId] = uint8_t(0);
+        return;
+    }
+
+    vec2 uvMin = clamp(ssMin * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+    vec2 uvMax = clamp(ssMax * 0.5 + 0.5, vec2(0.0), vec2(1.0));
+    vec2 extentPx = (uvMax - uvMin) * vec2(textureSize(u_hzb, 0));
+    float mip = max(0.0, ceil(log2(max(extentPx.x, extentPx.y))));
+    float maxMip = float(textureQueryLevels(u_hzb) - 1);
+    mip = min(mip, maxMip);
+
+    float s00 = textureLod(u_hzb, uvMin, mip).r;
+    float s10 = textureLod(u_hzb, vec2(uvMax.x, uvMin.y), mip).r;
+    float s01 = textureLod(u_hzb, vec2(uvMin.x, uvMax.y), mip).r;
+    float s11 = textureLod(u_hzb, uvMax, mip).r;
+    float hzbMin = min(min(s00, s10), min(s01, s11));
+
+    bool occluded = nearestZ < hzbMin;
+    sectionVisibility.data[sectionId] = occluded ? uint8_t(0) : uint8_t(1);
+}

@@ -78,6 +78,13 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                 "Sample the previous frame's HZB to skip occluded regions at the task-shader "
                     + "gate. Needs HZB build on. 1-frame lag; conservative under motion.",
                 cfg.enableHzbRegionCull, v -> cfg.enableHzbRegionCull = v),
+            boolOption("HZB section cull",
+                "Per-section HZB refinement on top of region cull. Tests each section's "
+                    + "AABB individually, catches occluded sections inside visible regions. "
+                    + "Requires HZB region cull; adds ~15-30µs GPU and a 1MB readback copy.",
+                cfg.enableHzbSectionCull, v -> cfg.enableHzbSectionCull = v));
+
+        this.list.addSmall(
             boolOption("Front-to-back sort",
                 "Sort the opaque dispatch list by per-section distance so near sections "
                     + "render before far ones. Lets the GPU's early-Z reject more occluded "

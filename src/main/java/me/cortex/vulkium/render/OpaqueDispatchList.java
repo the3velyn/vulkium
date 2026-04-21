@@ -69,16 +69,22 @@ public final class OpaqueDispatchList implements AutoCloseable {
      */
     public int build(SectionManager sectionMgr, RegionManager regionMgr,
                      VisibilityTracker visibility, long readbackPtr) {
-        return build(sectionMgr, regionMgr, visibility, readbackPtr,
+        return build(sectionMgr, regionMgr, visibility, readbackPtr, 0L,
             false, 0, 0, 0);
     }
 
-    /** Variant with front-to-back sort. When {@code sortFrontToBack} is true, every emitted
-     *  entry is keyed by its section's Manhattan distance to the camera and sorted ascending
-     *  before being written to the dispatch buffer. Extra ~20µs CPU for the sort; pays back
-     *  through reduced GPU overdraw in any scene with depth complexity. */
+    /** Variant with front-to-back sort and section-level compaction.
+     *
+     * <p>{@code sectionReadbackPtr} (if non-zero): host-side per-section visibility from a
+     *  prior frame's section_cull dispatch. When available, sections whose bit is 0 are
+     *  skipped at list-build time — compounds with the region-level compaction so the GPU
+     *  doesn't even launch a task workgroup for sections we already know are occluded.
+     *
+     * <p>{@code sortFrontToBack}: packs each entry by Manhattan distance and Arrays.sorts
+     *  before emission so near sections dispatch first, improving early-Z rejection. */
     public int build(SectionManager sectionMgr, RegionManager regionMgr,
-                     VisibilityTracker visibility, long readbackPtr,
+                     VisibilityTracker visibility,
+                     long readbackPtr, long sectionReadbackPtr,
                      boolean sortFrontToBack,
                      int camSectionX, int camSectionY, int camSectionZ) {
         final long base = buffer.mappedPointer();
@@ -112,26 +118,40 @@ public final class OpaqueDispatchList implements AutoCloseable {
             int rIdShifted = regionId << 8;
             int bound = Math.min(sectCount, cap - n);
             // id2pos is dense over [0, count), so compact IDs are just 0..count-1.
+            // When the section-level readback is armed, check each section's bit before
+            // emitting. Byte-per-section memory read is ~1ns; overall loop stays sub-µs
+            // per region.
+            final long secReadbackBase = sectionReadbackPtr;  // local for hot-path branch elision
             if (sortFrontToBack) {
                 // Pack (distance << 32) | (regionId << 8) | compactId so Arrays.sort yields
                 // near-to-far ordering and the low 32 bits survive the cast back to int for
                 // emission to the dispatch buffer.
                 for (int compactId = 0; compactId < bound; compactId++) {
+                    if (secReadbackBase != 0L) {
+                        long idx = (long) rIdShifted + (long) compactId;
+                        if ((MemoryUtil.memGetByte(secReadbackBase + idx) & 0x01) == 0) continue;
+                    }
                     int dist = regionMgr.sectionDistance(regionId, compactId,
                         camSectionX, camSectionY, camSectionZ);
                     // Clamp negative / overflow into a positive 32-bit bucket so the shift
                     // below doesn't produce a negative long (which would sort before valid
                     // entries). Distance in section units fits easily in 16 bits at any RD.
                     if (dist < 0) dist = 0;
-                    sortKeys[n + compactId] =
+                    sortKeys[n++] =
                         ((long) dist << 32) | (long) (rIdShifted | compactId);
+                    if (n >= cap) break;
                 }
             } else {
                 for (int compactId = 0; compactId < bound; compactId++) {
-                    MemoryUtil.memPutInt(base + (long) (n + compactId) * 4L, rIdShifted | compactId);
+                    if (secReadbackBase != 0L) {
+                        long idx = (long) rIdShifted + (long) compactId;
+                        if ((MemoryUtil.memGetByte(secReadbackBase + idx) & 0x01) == 0) continue;
+                    }
+                    MemoryUtil.memPutInt(base + (long) n * 4L, rIdShifted | compactId);
+                    n++;
+                    if (n >= cap) break;
                 }
             }
-            n += bound;
             if (n >= cap) break;
         }
 
