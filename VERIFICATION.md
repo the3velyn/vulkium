@@ -29,9 +29,8 @@ Launch MC 26.2-snapshot-3 with vulkium, attach log viewer, do NOT enter a world 
 - [ ] `[vulkium/smoke]` log line: `Compute smoke-test PASSED — 64 threads, out[i]==i*i
       verified.` Confirms shaderc + pipeline + dispatch + readback all wire correctly.
 - [ ] `[vulkium]` log line: `RegionManager bound (1024 regions × 256 sections/region).`
-- [ ] `[vulkium/render]` log line: `Renderer initialized (SceneUniform …; VisibilityTracker;
-      RegionSorter pipeline compiled).` — confirms region_section_sorter.comp compiles on
-      this GPU.
+- [ ] `[vulkium/render]` log line: `Renderer initialized: SceneUniform …; VisibilityTracker;
+      PrimaryTerrainPass; TerrainUploader …`.
 - [ ] No `VK_ERROR_*` log lines.
 - [ ] No Java stack traces involving `me.cortex.vulkium.*`.
 
@@ -89,8 +88,8 @@ Fly in creative for 60 seconds through the world at 1–2 chunks/sec.
 Return to title screen, then quit MC cleanly.
 
 - [ ] No shutdown-order crashes (VMA teardown vs. vulkium-owned buffers).
-- [ ] Log shows `RegionSorter close failed` only on controlled shutdown paths — or not at
-      all on a clean shutdown.
+- [ ] Log shows no `*Sorter close failed` on a clean shutdown (controlled shutdown paths
+      may log recoverable warnings).
 - [ ] No trailing `[vulkium]` WARN or ERROR lines after world leave.
 
 ## 6 — Regression comparison (optional)

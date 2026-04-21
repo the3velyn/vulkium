@@ -35,8 +35,7 @@ public final class ShaderSanityCheck {
         new Entry("terrain/translucent/task.glsl", ShaderStage.TASK, Map.of()),
         new Entry("terrain/translucent/mesh.glsl", ShaderStage.MESH, Map.of()),
         new Entry("terrain/frag.frag", ShaderStage.FRAGMENT, Map.of("TRANSLUCENT_PASS", "1")),
-        new Entry("occlusion/hzb_downsample.comp", ShaderStage.COMPUTE, Map.of()),
-        new Entry("sorting/region_section_sorter.comp", ShaderStage.COMPUTE, Map.of())
+        new Entry("occlusion/hzb_downsample.comp", ShaderStage.COMPUTE, Map.of())
     );
 
     private ShaderSanityCheck() {}

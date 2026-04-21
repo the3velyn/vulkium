@@ -19,8 +19,6 @@ All shaders compile at runtime via `com.mojang.blaze3d.vulkan.glsl.GlslCompiler`
 | `terrain/fog.glsl` | ✅ | ✅ | No mesh-shader code; was clean |
 | `terrain/vertex_format.glsl` | ✅ | n/a | Scalar helpers; no changes needed |
 | `occlusion/hzb_downsample.comp` | n/a | ✅ | Compute shader — HZB mip-chain build (textureGather → max) |
-| `sorting/region_section_sorter.comp` | n/a | ✅ | Compute shader — no mesh-shader code |
-| `sorting/sorting_network.glsl` | n/a | n/a | Pure algorithm, reused as-is |
 
 Legend: ✅ done · ⚠️ needs NV→EXT mesh builtin rewrite · `n/a` no applicable work
 

@@ -28,7 +28,6 @@ public final class Renderer {
 
     private SceneUniform sceneUniform;
     private VisibilityTracker visibility;
-    private RegionSorter regionSorter;
     private PrimaryTerrainPass primaryTerrain;
     private TerrainUploader terrainUploader;
     private UploadStream uploadStream;
@@ -123,10 +122,6 @@ public final class Renderer {
             me.cortex.vulkium.managers.SectionManager.get()
                 .sweepKeepDistance(cx, cz, keepDist, 256);
         }
-        long sortListPtr = regionSorter != null && uploadStream != null
-            ? regionSorter.uploadVisibleList(uploadStream, visibility)
-            : 0L;
-
         // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
         // getEffectiveRenderDistance() gives the server-clamped effective value (raw slider on
         // SP, min(slider, serverRenderDistance) on MP), which is exactly what we want — vulkium
@@ -198,9 +193,9 @@ public final class Renderer {
             .sectionVisibilityPtr(sectionVisibilityBuffer != null ? sectionVisibilityBuffer.deviceAddress() : 0L)
             .terrainCmdPtr(0L)
             .translucencyCmdPtr(0L)
-            // Repurposed: this pointer now carries the translucent-section sort list for the
-            // translucent task shader (far-to-near section IDs as uint16). RegionSorter's
-            // region-level list isn't wired into any draw path yet.
+            // Repurposed from the nvidium-era region sorter: this pointer now carries the
+            // translucent-section sort list (far-to-near GPU-compact section IDs) for the
+            // translucent task shader's gl_WorkGroupID.x redirect.
             .sortingRegionListPtr(translucentSortPtr)
             .terrainDataPtr(terrainPtr)
             .transformationArrPtr(transformationBuffer != null ? transformationBuffer.deviceAddress() : 0L)
@@ -236,7 +231,6 @@ public final class Renderer {
 
     public SceneUniform sceneUniform() { return sceneUniform; }
     public VisibilityTracker visibility() { return visibility; }
-    public RegionSorter regionSorter() { return regionSorter; }
     public PrimaryTerrainPass primaryTerrain() { return primaryTerrain; }
     public OpaqueDispatchList opaqueDispatchList() { return opaqueDispatchList; }
     public TranslucentSectionSorter translucentSorter() { return translucentSorter; }
@@ -310,7 +304,6 @@ public final class Renderer {
             // Eager shader compile: any shaderc / pipeline failure surfaces here, not on a
             // first-draw crash mid-frame. Construct failure disables the whole Renderer
             // (leaves vulkium flag enabled but render paths no-op so the game still runs).
-            regionSorter = new RegionSorter();
             translucentSorter = new TranslucentSectionSorter(
                 me.cortex.vulkium.VulkiumConfig.get().maxRegions);
             opaqueDispatchList = new OpaqueDispatchList(
@@ -349,7 +342,7 @@ public final class Renderer {
 
             LOGGER.info(
                 "Renderer initialized: SceneUniform({}B) + VisibilityTracker + UploadStream({}MB×{}) + "
-                    + "RegionSorter + PrimaryTerrainPass + TerrainUploader({}MB arena) + "
+                    + "PrimaryTerrainPass + TerrainUploader({}MB arena) + "
                     + "transformationBuffer(identity) + originBuffer.",
                 SceneUniform.SCENE_UBO_SIZE, UPLOAD_SECTION_BYTES / (1024 * 1024), UPLOAD_SECTION_COUNT,
                 terrainUploader.arena().allocatedMB());
@@ -394,10 +387,6 @@ public final class Renderer {
         if (primaryTerrain != null) {
             try { primaryTerrain.close(); } catch (Throwable t) { LOGGER.warn("PrimaryTerrainPass close failed", t); }
             primaryTerrain = null;
-        }
-        if (regionSorter != null) {
-            try { regionSorter.close(); } catch (Throwable t) { LOGGER.warn("RegionSorter close failed", t); }
-            regionSorter = null;
         }
         if (translucentSorter != null) {
             try { translucentSorter.close(); } catch (Throwable t) { LOGGER.warn("TranslucentSectionSorter close failed", t); }

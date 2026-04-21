@@ -49,7 +49,7 @@ public final class ComputeDispatch implements AutoCloseable {
 
     /**
      * Create a compute dispatch. {@code shaderResource} is a path under
-     * {@code assets/vulkium/shaders/} (e.g. {@code "sorting/region_section_sorter.comp"}).
+     * {@code assets/vulkium/shaders/} (e.g. {@code "occlusion/hzb_downsample.comp"}).
      * {@code pushConstantSize} is bytes (may be 0). {@code descriptorBindings} (may be
      * empty) describes the single set-0 push-descriptor layout.
      */
