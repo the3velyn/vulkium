@@ -93,9 +93,20 @@ public final class VulkiumConfig {
     /** Upload ring section count (frames in flight). */
     public int uploadSectionCount = 3;
 
-    /** Terrain arena size in MB. Sized for 32-chunk RD with per-block-edit churn headroom;
-     *  undersizing causes section ingests to hit SIZE_LIMIT and leave stale GPU headers. */
-    public int terrainArenaMb = 256;
+    /** Terrain arena size in MB. Undersizing causes {@code uploadSectionSplit} to return
+     *  {@code SIZE_LIMIT}; existing geometry keeps rendering from its allocated slots but new
+     *  chunks never write their section headers, so <i>new chunks stop rendering</i> once
+     *  the arena fills (progressive starvation rather than crash). Sizing guidance:
+     *  <ul>
+     *    <li>RD≤16: 256 MB typically fine.</li>
+     *    <li>RD 24-32: 512-1024 MB.</li>
+     *    <li>RD 48-64 or dense-biome exploration: 1024-4096 MB.</li>
+     *    <li>RD 96+ on a 16 GB GPU: 4-8 GB is reasonable and the allocator handles it.</li>
+     *  </ul>
+     *  Internal SegmentedManager address is 34-bit quad-granular (~32 GB byte-space ceiling
+     *  before {@code int} addr truncation), so the slider's 8192 MB cap leaves 4× headroom
+     *  below the truncation boundary. */
+    public int terrainArenaMb = 512;
 
     /** Max regions in the ledger. One region = 8×4×8 sections = 256 sections. */
     public int maxRegions = 1024;

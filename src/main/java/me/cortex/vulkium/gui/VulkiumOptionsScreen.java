@@ -114,8 +114,10 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                 "Number of staging-buffer sections (frames-in-flight). " + TIP_RESTART.getString(),
                 2, 8, cfg.uploadSectionCount, v -> cfg.uploadSectionCount = v),
             mbSlider("Terrain arena (MB)",
-                "Total VRAM reserved for terrain vertex data. 128 comfortably covers 16-chunk RD. " + TIP_RESTART.getString(),
-                64, 1024, 16, cfg.terrainArenaMb, v -> cfg.terrainArenaMb = v));
+                "Total VRAM reserved for terrain vertex data. Undersizing starves new chunks. "
+                    + "Guide: 256 for RD≤16, 1024 for RD=32, 2048+ for RD>48 or dense biomes. "
+                    + TIP_RESTART.getString(),
+                64, 8192, 64, cfg.terrainArenaMb, v -> cfg.terrainArenaMb = v));
 
         this.list.addSmall(
             intSlider("Max regions",
