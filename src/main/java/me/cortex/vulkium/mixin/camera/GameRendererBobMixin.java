@@ -11,15 +11,20 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
  * Captures the modelview matrix AFTER {@code bobHurt}+{@code bobView} have been applied to
- * the local {@code PoseStack} in {@code GameRenderer.renderLevel}. Vulkium's own MVP needs
- * this to include player-motion bobbing and damage-shake; terrain otherwise stays rigid
- * while vanilla entities/particles wobble.
+ * the local {@code PoseStack} in {@code GameRenderer.renderLevel}. Provides a bob-only
+ * fallback to the main catch-all capture in {@link LevelRendererProjMixin}.
  *
- * <p>The catch-all capture on {@code LevelRenderer.renderLevel}'s projection arg (which
- * would have picked up portal warp + nausea distortion for free) kept failing the mixin
- * target-scan on MC 26.2's dev mappings — @Inject and @ModifyArg both returned
- * "Scanned 0 target(s)" despite byte-for-byte descriptor matches. Reverted to this narrower
- * bob capture; portal + nausea distortion are not yet picked up (follow-up).
+ * <p>Frame-time preference in {@code FrameDriver.updateMvpFromCamera}:
+ * <ol>
+ *   <li>If {@code LevelRendererProjMixin}'s {@code @ModifyArg} on
+ *       {@code ProjectionMatrixBuffer.getBuffer(Matrix4f)} applied, read the full composed
+ *       projection from {@link BobViewTap#readProjection} (bob + portal warp + nausea +
+ *       any view-space mod distortion).</li>
+ *   <li>Otherwise fall back to this mixin's pose (bob only) composed with
+ *       {@code camState.projectionMatrix}.</li>
+ * </ol>
+ * Both paths coexist so that vulkium still looks correct even if the mixin target-scan for
+ * one misses on a future MC snapshot.
  */
 @Mixin(GameRenderer.class)
 public abstract class GameRendererBobMixin {
