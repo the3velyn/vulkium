@@ -28,7 +28,9 @@ set -u
 WORLD="${WORLD:-test}"
 SCREEN_W="${SCREEN_W:-2560}"
 SCREEN_H="${SCREEN_H:-1440}"
+RD="${RD:-32}"                      # render distance (chunks). Baseline was 32.
 BOOT_WAIT="${BOOT_WAIT:-35}"        # secs from launch to first screenshot
+LOOKAROUND_WAIT="${LOOKAROUND_WAIT:-8}" # secs for 360° spin + chunk-compile catch-up
 PROFILE_WAIT="${PROFILE_WAIT:-15}"  # additional secs for PerfTracker samples
 LOG_DIR="${LOG_DIR:-/tmp/vulkium-logs}"
 JAVA_HOME_DEFAULT="/home/hawaf/javas/jdk-25.0.1"
@@ -43,16 +45,45 @@ mkdir -p "$LOG_DIR"
 TS=$(date +%s)
 LOG="$LOG_DIR/run-$TS.log"
 SS_TRIGGER="/tmp/vulkium-screenshot"
+LA_TRIGGER="/tmp/vulkium-lookaround"
 
 echo "[test] repo=$REPO"
 echo "[test] log=$LOG"
-echo "[test] world=$WORLD ${SCREEN_W}x${SCREEN_H} boot=${BOOT_WAIT}s profile=${PROFILE_WAIT}s"
+echo "[test] world=$WORLD ${SCREEN_W}x${SCREEN_H} rd=$RD boot=${BOOT_WAIT}s profile=${PROFILE_WAIT}s"
+
+# --- 0. seed options.txt with the baseline render distance --------------------
+# Baseline methodology: RD=32 + 360° spin so every chunk in the loaded radius is
+# compiled before measurement. Writing options.txt before launch guarantees we
+# don't inherit whatever the save file last persisted.
+OPTS="$REPO/run/options.txt"
+mkdir -p "$(dirname "$OPTS")"
+if [[ -f "$OPTS" ]]; then
+    # Update in place; add line if missing.
+    if grep -q "^renderDistance:" "$OPTS"; then
+        sed -i "s/^renderDistance:.*/renderDistance:$RD/" "$OPTS"
+    else
+        echo "renderDistance:$RD" >> "$OPTS"
+    fi
+    # Turn vsync off so frame times reflect actual GPU throughput.
+    if grep -q "^enableVsync:" "$OPTS"; then
+        sed -i "s/^enableVsync:.*/enableVsync:false/" "$OPTS"
+    else
+        echo "enableVsync:false" >> "$OPTS"
+    fi
+else
+    cat > "$OPTS" <<EOT
+renderDistance:$RD
+enableVsync:false
+EOT
+    echo "[test] wrote fresh options.txt (MC will fill defaults for the rest)"
+fi
+echo "[test] options.txt: renderDistance=$RD enableVsync=false"
 
 # --- 1. launch ----------------------------------------------------------------
 # Use setsid so we can signal the whole process group at shutdown (gradle spawns
 # a daemon which spawns the MC JVM; killing only the gradle PID can orphan the
 # JVM). --args lets us pass --width/--height to MC without touching gradle.
-rm -f "$SS_TRIGGER"
+rm -f "$SS_TRIGGER" "$LA_TRIGGER"
 setsid bash -c "
   export JAVA_HOME='$JAVA_HOME'
   exec ./gradlew runClient --no-daemon --args='--width $SCREEN_W --height $SCREEN_H' > '$LOG' 2>&1
@@ -104,6 +135,22 @@ if [[ $READY -eq 1 ]]; then
     sleep 5
 else
     echo "[test] readiness signals not seen in ${BOOT_WAIT}s; proceeding anyway"
+fi
+
+# --- 2.5. look around to force all chunks in the RD sphere to compile ---------
+# Baseline methodology: spin player yaw through 360° so MC's SectionRenderDispatcher
+# sees every quadrant and schedules compiles for the full loaded radius. Without
+# this, only the cone in front of the camera streams in and FPS numbers aren't
+# comparable to pre-dev-branch baselines.
+echo "[test] triggering 360° lookaround"
+touch "$LA_TRIGGER"
+# Wait for the in-mod hook to pick up the trigger (~0.5s) + 4s rotation +
+# a few seconds for chunk-compile backpressure to drain through the ingest
+# queue. LOOKAROUND_WAIT covers the whole window.
+sleep "$LOOKAROUND_WAIT"
+if [[ -f "$LA_TRIGGER" ]]; then
+    echo "[test] WARN: lookaround trigger not consumed (world may still be loading)"
+    rm -f "$LA_TRIGGER"
 fi
 
 # --- 3. screenshot ------------------------------------------------------------

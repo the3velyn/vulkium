@@ -47,6 +47,19 @@ public final class VulkiumKeys {
     private static int screenshotTickCounter = 0;
     // END DEV_ONLY_SCREENSHOT_HOOK
 
+    // DEV_ONLY_LOOKAROUND — remove before release.
+    // File-based yaw-spin trigger. Prior-baseline test methodology was "RD=32, player
+    // rotates through 360° to force all chunks in the loaded radius to compile" — without
+    // it, MC only streams the cone in front of the camera and FPS numbers aren't comparable
+    // to the pre-dev-branch baseline. Bash-side `touch /tmp/vulkium-lookaround` spins the
+    // player's yaw at a fixed rate for LOOKAROUND_TOTAL_TICKS client ticks (~4s at 20 tps).
+    // Sampled on the same Nth-tick cadence as the screenshot trigger.
+    private static final Path LOOKAROUND_TRIGGER = Path.of("/tmp/vulkium-lookaround");
+    private static final int LOOKAROUND_TOTAL_TICKS = 80;
+    private static final float LOOKAROUND_DEG_PER_TICK = 360.0f / LOOKAROUND_TOTAL_TICKS;
+    private static int lookaroundTicksRemaining = 0;
+    // END DEV_ONLY_LOOKAROUND
+
     private VulkiumKeys() {}
 
     public static void register() {
@@ -65,12 +78,51 @@ public final class VulkiumKeys {
         dumpPrev = now;
 
         // DEV_ONLY_SCREENSHOT_HOOK — remove before release.
+        // DEV_ONLY_LOOKAROUND (shares this poll counter) — remove before release.
         if (++screenshotTickCounter >= SCREENSHOT_POLL_PERIOD_TICKS) {
             screenshotTickCounter = 0;
             maybeTakeTriggeredScreenshot(mc);
+            maybeStartLookaround(mc);
         }
-        // END DEV_ONLY_SCREENSHOT_HOOK
+        stepLookaround(mc); // runs every tick, not throttled
+        // END DEV_ONLY_SCREENSHOT_HOOK / DEV_ONLY_LOOKAROUND
     }
+
+    // DEV_ONLY_LOOKAROUND — remove before release.
+    private static void maybeStartLookaround(Minecraft mc) {
+        if (!Files.exists(LOOKAROUND_TRIGGER)) return;
+        try {
+            Files.deleteIfExists(LOOKAROUND_TRIGGER);
+        } catch (Exception e) {
+            LOGGER.warn("Could not delete lookaround trigger {}: {} — skipping",
+                LOOKAROUND_TRIGGER, e.getMessage());
+            return;
+        }
+        if (mc.player == null) {
+            LOGGER.warn("Lookaround trigger fired but mc.player is null (world not loaded?)");
+            return;
+        }
+        lookaroundTicksRemaining = LOOKAROUND_TOTAL_TICKS;
+        LOGGER.info("[vulkium-test] lookaround START ({} ticks = ~{}s at 20tps)",
+            LOOKAROUND_TOTAL_TICKS, LOOKAROUND_TOTAL_TICKS / 20);
+    }
+
+    private static void stepLookaround(Minecraft mc) {
+        if (lookaroundTicksRemaining <= 0) return;
+        if (mc.player == null) { lookaroundTicksRemaining = 0; return; }
+        // Advance yaw client-side; integrated server picks up from player-move packets.
+        // Increment the prev-frame yaw so camera interpolation stays smooth across the spin
+        // — using setYRot alone leaves yRotO at the previous tick's value, producing a
+        // single-frame jitter the screenshot could catch.
+        float newYaw = mc.player.getYRot() + LOOKAROUND_DEG_PER_TICK;
+        mc.player.yRotO = mc.player.getYRot();
+        mc.player.setYRot(newYaw);
+        lookaroundTicksRemaining--;
+        if (lookaroundTicksRemaining == 0) {
+            LOGGER.info("[vulkium-test] lookaround DONE — all 360° swept");
+        }
+    }
+    // END DEV_ONLY_LOOKAROUND
 
     // DEV_ONLY_SCREENSHOT_HOOK — remove before release.
     private static void maybeTakeTriggeredScreenshot(Minecraft mc) {
