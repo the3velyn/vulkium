@@ -203,7 +203,7 @@ public final class TerrainUploader implements AutoCloseable {
 
                 int outBytes = vCount * VERTEX_STRIDE;
                 long dstPtr = stream.upload(arena.buffer(), dstByteOffset, outBytes);
-                repackMcToCompact(src, dstPtr, vCount);
+                repackMcToCompact(src, dstPtr, vCount, cutoffBitsForLayer(e.getKey()));
                 dstByteOffset += outBytes;
                 opaqueVerts += vCount;
             }
@@ -225,10 +225,14 @@ public final class TerrainUploader implements AutoCloseable {
                 int qCount = vCount / 4;
 
                 // Step 1 — build unsorted cache via a temporary native scratch buffer.
+                // TRANSLUCENT layer → cutoffBits=0 so the fragment shader doesn't discard
+                // water/glass fragments. Encoded once here, then any later POV resort
+                // (resortTranslucent) just permutes these already-packed bytes.
+                final int transCutoff = cutoffBitsForLayer(ChunkSectionLayer.TRANSLUCENT);
                 byte[] unsorted = new byte[outBytes];
                 long tmp = MemoryUtil.nmemAlloc(outBytes);
                 try {
-                    repackMcToCompact(trans.vertexBytes, tmp, vCount);
+                    repackMcToCompact(trans.vertexBytes, tmp, vCount, transCutoff);
                     MemoryUtil.memByteBuffer(tmp, outBytes).get(unsorted);
                 } finally {
                     MemoryUtil.nmemFree(tmp);
@@ -242,7 +246,7 @@ public final class TerrainUploader implements AutoCloseable {
                 if (ib != null && trans.indexCount == qCount * 6 && ib.remaining() >= trans.indexCount * 2) {
                     int indexBytesPerElem = ib.remaining() / trans.indexCount;
                     repackMcToCompactSortedByIndex(trans.vertexBytes, ib, qCount,
-                            indexBytesPerElem, dstPtr);
+                            indexBytesPerElem, dstPtr, transCutoff);
                 } else {
                     MemoryUtil.memByteBuffer(dstPtr, outBytes).put(unsorted);
                 }
@@ -367,13 +371,41 @@ public final class TerrainUploader implements AutoCloseable {
      * with bounds checks. A 2000-quad section repacks in ~400 µs. Acceptable; can be moved
      * to a compute-shader upload path later if it becomes hot.
      */
-    private static void repackMcToCompact(ByteBuffer src, long dstPtr, int vCount) {
+    private static void repackMcToCompact(ByteBuffer src, long dstPtr, int vCount, int cutoffBits) {
         // LE order matches Java's default and MC's vertex-buffer byte order.
         src = src.order(java.nio.ByteOrder.LITTLE_ENDIAN);
         int base = src.position();
         for (int v = 0; v < vCount; v++) {
-            packOneVertex(src, base + v * MC_VERTEX_STRIDE, dstPtr + (long) v * VERTEX_STRIDE);
+            packOneVertex(src, base + v * MC_VERTEX_STRIDE, dstPtr + (long) v * VERTEX_STRIDE, cutoffBits);
         }
+    }
+
+    /** Layer → alphaCutoffIdx bits for the low 2 bits of the vertex-alpha byte.
+     *
+     * <p>Decoded by {@code terrain/vertex_format.glsl#rawVertexAlphaCutoff} into a cut
+     * value the fragment shader uses as its discard threshold:
+     * <ul>
+     *   <li>SOLID → 0 → cut=0.0, no discard (opaque terrain).</li>
+     *   <li>CUTOUT → 1 → cut=0.1, matches vanilla {@code RenderType.cutout} /
+     *       {@code cutoutMipped}. Plants, leaves, iron bars, crafting table side, etc.
+     *       Without this, mipmap-on tall grass averages its texel-0/1 alpha into
+     *       ~50% values at distance, the {@code textureLod(..., 0)} sharp-alpha test
+     *       in {@code terrain/frag.frag} only fires when {@code cut > 0}, and the
+     *       fall-through {@code albedo.a <= 0.0} branch discards only zero alpha —
+     *       so distant CUTOUT quads render as opaque blurry blocks instead of
+     *       transparent-edged blades.</li>
+     *   <li>TRANSLUCENT → 0 → cut=0.0, preserves blend. Water/glass/ice want
+     *       tex.alpha × vertex.alpha, not a discard. The ealier
+     *       "water renders as swiss-cheese speckles" regression came from reading
+     *       cutoff bits straight out of MC's vertex-alpha byte, where the low 2 bits
+     *       happened to flicker with animated-water alpha values and land on
+     *       cutoffIdx=1 or 2. Gating on LAYER instead of vertex bits fixes both.</li>
+     * </ul> */
+    private static int cutoffBitsForLayer(ChunkSectionLayer layer) {
+        // MC 26.2 has only SOLID / CUTOUT / TRANSLUCENT. Pre-26.2's CUTOUT_MIPPED merged
+        // into CUTOUT; the mipmap-or-not distinction is now a sampler-state affair on the
+        // atlas itself, not a layer selector. So we need exactly one cutoff-bearing value.
+        return layer == ChunkSectionLayer.CUTOUT ? 1 : 0;
     }
 
     /**
@@ -391,7 +423,7 @@ public final class TerrainUploader implements AutoCloseable {
      */
     private static void repackMcToCompactSortedByIndex(ByteBuffer vb, ByteBuffer ib,
                                                         int quadCount, int indexBytesPerElem,
-                                                        long dstPtr) {
+                                                        long dstPtr, int cutoffBits) {
         vb = vb.order(java.nio.ByteOrder.LITTLE_ENDIAN);
         ib = ib.order(java.nio.ByteOrder.LITTLE_ENDIAN);
         int vbBase = vb.position();
@@ -409,13 +441,20 @@ public final class TerrainUploader implements AutoCloseable {
             for (int lane = 0; lane < 4; lane++) {
                 packOneVertex(vb,
                         vbBase + (srcVertBase + lane) * MC_VERTEX_STRIDE,
-                        dstPtr + dstVertBase + (long) lane * VERTEX_STRIDE);
+                        dstPtr + dstVertBase + (long) lane * VERTEX_STRIDE,
+                        cutoffBits);
             }
         }
     }
 
-    /** Shared per-vertex packer used by both linear and indexed repack paths. */
-    private static void packOneVertex(ByteBuffer src, int o, long dstPtr) {
+    /** Shared per-vertex packer used by both linear and indexed repack paths.
+     *
+     *  <p>{@code cutoffBits} carries the layer-derived alphaCutoffIdx (see
+     *  {@link #cutoffBitsForLayer}) — clobber MC's low 2 alpha bits with it so the fragment
+     *  shader's discard threshold matches vanilla's per-layer rules without depending on
+     *  whatever the vertex's alpha byte happened to be. Preserves top 6 bits of MC's alpha
+     *  for the translucent blend multiplier. */
+    private static void packOneVertex(ByteBuffer src, int o, long dstPtr, int cutoffBits) {
         float px = src.getFloat(o);
         float py = src.getFloat(o + 4);
         float pz = src.getFloat(o + 8);
@@ -423,18 +462,14 @@ public final class TerrainUploader implements AutoCloseable {
         int r = src.get(o + 12) & 0xFF;
         int g = src.get(o + 13) & 0xFF;
         int b = src.get(o + 14) & 0xFF;
-        // MC encodes translucent-block transparency (water, glass panes) as vertex alpha —
-        // vanilla's rendertype_translucent outputs `color.a = tex.a * vertexColor.a`. Dropping
-        // this was making water render opaque (tex.a=1, our alpha=1 → no blend).
-        //
-        // The low 2 bits of our alpha byte land in v.y bits 16-17, which the mesh shader
-        // reads as `rawVertexAlphaCutoff` (0/1/2 → cut 0.0/0.1/0.5). For alpha values whose
-        // low 2 bits happen to be 1 or 2, the fragment shader then kills perfectly valid
-        // translucent fragments based on their texture alpha — water ended up rendering as
-        // speckled swiss cheese after more chunks loaded and different water vertices hit
-        // these bad alpha values. Clear the low 2 bits so cutoffIdx is always 0. Costs 2 bits
-        // of alpha precision (64 levels instead of 256), which is imperceptible for blend.
-        int a = src.get(o + 15) & 0xFC;
+        // Alpha packing: top 6 bits = MC's vertex alpha (for translucent blend), low 2 bits
+        // = layer-derived alphaCutoffIdx. Earlier revisions simply cleared the low 2 bits to
+        // dodge a "water renders as swiss cheese" regression where cutoff bits came from
+        // animated-water alpha values directly; that kept translucent safe but broke CUTOUT
+        // (tall grass / leaves) because cutoffIdx was always 0 → no discard → mipped
+        // albedo.a of ~0.3-0.7 passed fine → distant plants render as opaque boxes.
+        // Gating on LAYER closes both failure modes.
+        int a = (src.get(o + 15) & 0xFC) | (cutoffBits & 0x03);
 
         float u = src.getFloat(o + 16);
         float w = src.getFloat(o + 20);
