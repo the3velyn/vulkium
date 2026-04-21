@@ -5,6 +5,15 @@
 #extension GL_EXT_buffer_reference : require
 #extension GL_EXT_buffer_reference2 : require
 #extension GL_EXT_shader_explicit_arithmetic_types : require
+// GL_EXT_shader_8bit_storage unlocks byte-granularity SSBO reads+writes (distinct from
+// _explicit_arithmetic_types_int8, which only unlocks the uint8_t arithmetic type). Needed
+// by VisibilityPtr (uint8_t data[] storage buffer). Without this, NVIDIA lowers byte SSBO
+// writes to non-atomic 32-bit RMW — four adjacent threads in the cull compute workgroups
+// race each other on the same word and one of the four bytes' writes can be lost. Observed
+// symptom: sporadic single-section false-occlusion (the 2026-04-21 W-screenshot sky sliver).
+// Device feature {@code storageBuffer8BitAccess} is injected by
+// me.cortex.vulkium.blaze3d.MojangBackendFixup so the extension resolves at device-create.
+#extension GL_EXT_shader_8bit_storage : require
 
 #define Vertex uvec4
 

@@ -96,7 +96,19 @@ public final class MojangBackendFixup {
         injectFeature(new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT, "bufferDeviceAddress",
             VkPhysicalDeviceVulkan12Features.BUFFERDEVICEADDRESS));
 
-        LOGGER.info("Injected VK_EXT_mesh_shader + meshShader + taskShader + meshShaderQueries + bufferDeviceAddress into Mojang's VulkanBackend required-set.");
+        // storageBuffer8BitAccess — needed for well-defined byte-granularity writes to the
+        // regionVisibility / sectionVisibility storage buffers from the cull shaders. Without
+        // it, NVIDIA (and other drivers) lower uint8_t SSBO stores to non-atomic 32-bit RMW,
+        // so 4 adjacent threads within a compute workgroup race each other on the same word
+        // and one of the four bytes' writes wins. Symptom: sporadic single-section false-occlusion
+        // producing vertical sky slivers where one section's visibility bit got clobbered
+        // (observed 2026-04-21 in the W screenshot of the deep-test run). Promoted to core in
+        // Vulkan 1.2 so the feature toggle alone is sufficient — no separate extension name
+        // needed (KHR_8bit_storage is the pre-promotion name).
+        injectFeature(new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT, "storageBuffer8BitAccess",
+            VkPhysicalDeviceVulkan12Features.STORAGEBUFFER8BITACCESS));
+
+        LOGGER.info("Injected VK_EXT_mesh_shader + meshShader + taskShader + meshShaderQueries + bufferDeviceAddress + storageBuffer8BitAccess into Mojang's VulkanBackend required-set.");
     }
 
     private static void injectExtension(String name) {
