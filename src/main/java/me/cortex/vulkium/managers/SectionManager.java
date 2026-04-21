@@ -55,6 +55,17 @@ public final class SectionManager {
     /** Worker → render hand-off. Unbounded; trimmed per frame by drainPending(). */
     private final ConcurrentLinkedQueue<PendingIngest> ingestQueue = new ConcurrentLinkedQueue<>();
 
+    /** Retry queue for ingests whose upload hit arena SIZE_LIMIT. Drained back into
+     *  {@link #ingestQueue} at the START of each {@link #drainPending} call so the retry
+     *  is a next-frame affair, not an in-loop retry storm against a still-full arena. */
+    private final ConcurrentLinkedQueue<PendingIngest> retryQueue = new ConcurrentLinkedQueue<>();
+
+    /** Max times a single section ingest retries before we give up and free its bytes. At
+     *  500-600 FPS this is ~100-120 ms of retry window — plenty for the eviction sweep to
+     *  free arena slots under typical churn, and bounded enough that a truly-full arena
+     *  doesn't buffer unbounded captures in memory. */
+    private static final int MAX_UPLOAD_RETRIES = 60;
+
     /** Separate queue for POV-driven translucent resorts captured from MC's
      *  {@code ResortTransparencyTask} via {@code RenderSectionResortMixin}. Processed each
      *  frame alongside the main ingest drain. Kept separate so the per-frame drain cap on
@@ -114,11 +125,30 @@ public final class SectionManager {
                 ds));
         }
 
-        ingestQueue.offer(new PendingIngest(sectionPosKey, entry));
+        ingestQueue.offer(PendingIngest.fresh(sectionPosKey, entry));
     }
 
-    /** Render-thread pull. Processes at most {@code limit} entries; returns the count processed. */
+    /** Render-thread pull. Processes at most {@code limit} entries; returns the count processed.
+     *
+     *  <p>Order of operations:
+     *  <ol>
+     *    <li>Drain the retry queue (last frame's SIZE_LIMIT misses) into the main queue so
+     *        they get another shot before new captures this frame.</li>
+     *    <li>Pop from the main queue up to {@code limit}. Each ingest that hits SIZE_LIMIT
+     *        pushes itself onto the retry queue for next frame (bounded by
+     *        {@link #MAX_UPLOAD_RETRIES}).</li>
+     *  </ol>
+     *  Rationale: re-enqueuing into {@link #ingestQueue} directly would loop within one
+     *  {@code drainPending} call against a still-full arena, burning retries for nothing.
+     *  The retry queue is a one-frame delay that lets the eviction sweep + in-flight uploads
+     *  free arena slots before the next attempt. */
     public int drainPending(int limit) {
+        // Move retry queue back into main queue before processing this frame.
+        PendingIngest retry;
+        while ((retry = retryQueue.poll()) != null) {
+            ingestQueue.offer(retry);
+        }
+
         int n = 0;
         while (n < limit) {
             PendingIngest p = ingestQueue.poll();
@@ -134,18 +164,32 @@ public final class SectionManager {
     }
 
     private void ingest(PendingIngest p) {
-        // Replace (or insert) in the live table. On replace, free the prior entry's buffers.
-        SectionEntry prev = live.put(p.key, p.entry);
-        if (prev != null) {
-            freeEntry(prev);
-        } else if (regionManager != null && p.key != SectionCapture.UNKNOWN_SECTION) {
-            // First time we've seen this section — allocate a slot in the region ledger so the
-            // section is addressable (regionId << 8) | posInRegion for later draw dispatch.
-            int sx = SectionPos.x(p.key);
-            int sy = SectionPos.y(p.key);
-            int sz = SectionPos.z(p.key);
-            int ref = regionManager.allocateSection(sx, sy, sz);
-            sectionToRegionRef.put(p.key, ref);
+        final boolean isRetry = p.retryCount > 0;
+
+        if (isRetry) {
+            // Stale retry check: if a fresh capture came in for this key while we were
+            // waiting in the retry queue, live.put(newEntry) already freed p.entry's
+            // ByteBuffers via freeEntry(prev). Reading from them now would be a UAF.
+            // Drop this retry silently — the fresh capture will go through its own upload
+            // attempt in the main queue.
+            if (live.get(p.key) != p.entry) {
+                return;
+            }
+            // Live table + region slot already populated on the first attempt; skip.
+        } else {
+            // Replace (or insert) in the live table. On replace, free the prior entry's buffers.
+            SectionEntry prev = live.put(p.key, p.entry);
+            if (prev != null) {
+                freeEntry(prev);
+            } else if (regionManager != null && p.key != SectionCapture.UNKNOWN_SECTION) {
+                // First time we've seen this section — allocate a slot in the region ledger so the
+                // section is addressable (regionId << 8) | posInRegion for later draw dispatch.
+                int sx = SectionPos.x(p.key);
+                int sy = SectionPos.y(p.key);
+                int sz = SectionPos.z(p.key);
+                int ref = regionManager.allocateSection(sx, sy, sz);
+                sectionToRegionRef.put(p.key, ref);
+            }
         }
         drained++;
 
@@ -165,6 +209,24 @@ public final class SectionManager {
                     if (drained <= 8 || drained % 4096 == 0) {
                         LOGGER.warn("Terrain arena full — upload skipped for section 0x{} (drained={})",
                             Long.toHexString(p.key), drained);
+                    }
+                    // Re-queue the ingest with a bumped retry count. Fixes the "chunks
+                    // fail to load initially but F3+A fixes them" symptom: previously
+                    // SIZE_LIMIT dropped the captured bytes AND left the region marked
+                    // dirty with a zero section header, so the GPU rendered no geometry
+                    // even after arena pressure eased. Now we hold the bytes and retry
+                    // next frame until arena has space (or until MAX_UPLOAD_RETRIES gives
+                    // up, which only triggers if the arena is genuinely too small for
+                    // the workload — and the user sees the warning either way).
+                    if (p.retryCount < MAX_UPLOAD_RETRIES) {
+                        retryQueue.offer(p.withRetry());
+                        return; // skip freeEntry below — the bytes are reused by the retry
+                    }
+                    // Fall through to freeEntry — we're giving up on this section. A later
+                    // MC-driven recompile (block edit, F3+A, chunk reload) will re-capture.
+                    if (drained % 4096 == 0) {
+                        LOGGER.warn("Section 0x{} exhausted {} upload retries, dropping",
+                            Long.toHexString(p.key), MAX_UPLOAD_RETRIES);
                     }
                 } else if (regionManager != null) {
                     // Populate the section's 32-byte meta slab in RegionManager's sectionBuffer
@@ -260,8 +322,11 @@ public final class SectionManager {
         }
         // Drop queued worker-thread ingests that are now obsolete — they reference the arena
         // slots we just freed, and MC will re-dispatch compile tasks for the same sections
-        // after resetLevelRenderData anyway.
+        // after resetLevelRenderData anyway. Retry queue too: its entries point at bytes
+        // whose live[key] just got evicted, which would trip the stale-retry guard anyway
+        // but clearing is cheaper than letting them cycle through.
         ingestQueue.clear();
+        retryQueue.clear();
         resortQueue.clear();
         LOGGER.info("Flushed {} live sections inline (F3+A).", keys.length);
     }
@@ -330,9 +395,16 @@ public final class SectionManager {
         return n;
     }
 
-    private record PendingIngest(long key, SectionEntry entry) {
+    private record PendingIngest(long key, SectionEntry entry, int retryCount) {
         /** Sentinel: entry=null means "drop this section from the live table". */
-        static PendingIngest eviction(long key) { return new PendingIngest(key, null); }
+        static PendingIngest eviction(long key) { return new PendingIngest(key, null, 0); }
+        /** Normal ingest (first attempt). */
+        static PendingIngest fresh(long key, SectionEntry entry) {
+            return new PendingIngest(key, entry, 0);
+        }
+        PendingIngest withRetry() {
+            return new PendingIngest(key, entry, retryCount + 1);
+        }
     }
 
     /** Worker-thread hand-off of a POV-resorted translucent index buffer. The raw bytes
