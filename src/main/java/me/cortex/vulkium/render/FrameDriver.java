@@ -23,10 +23,9 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class FrameDriver {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/frame");
 
-    /** Max section-ingest drains per frame. Vulkium suppresses vanilla terrain so any queued
-     *  (not yet ingested) section = invisible chunk. High cap keeps streaming smooth on RD
-     *  change or teleport. */
-    private static final int DRAIN_PER_FRAME = 4096;
+    /** Fallback cap when cfg.drainPerFrame is absent/invalid. Vulkium suppresses vanilla
+     *  terrain so any queued (not yet ingested) section = invisible chunk — default high. */
+    private static final int DRAIN_PER_FRAME_FALLBACK = 4096;
 
     private static final AtomicLong FRAMES = new AtomicLong();
 
@@ -60,7 +59,9 @@ public final class FrameDriver {
         Renderer.get().ensureReady();
 
         long tDrain = me.cortex.vulkium.diag.PerfTracker.begin();
-        SectionManager.get().drainPending(DRAIN_PER_FRAME);
+        int drainCap = VulkiumConfig.get().drainPerFrame;
+        if (drainCap <= 0) drainCap = DRAIN_PER_FRAME_FALLBACK;
+        SectionManager.get().drainPending(drainCap);
         me.cortex.vulkium.diag.PerfTracker.end("drainPending", tDrain);
 
         long tResort = me.cortex.vulkium.diag.PerfTracker.begin();

@@ -83,8 +83,9 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
         this.list.addSmall(
             intSlider("Ingest drain / frame",
                 "Max sections moved from worker capture → live state per frame. Higher = "
-                    + "lower latency on large chunk batches, more render-thread work.",
-                16, 1024, cfg.drainPerFrame, v -> cfg.drainPerFrame = v),
+                    + "fewer invisible-chunk frames on RD change / first join. Lower = "
+                    + "smoother progressive streaming at the cost of a longer total load.",
+                64, 8192, cfg.drainPerFrame, v -> cfg.drainPerFrame = v),
             mbSlider("Upload ring size (MB)",
                 "Per-section staging-buffer size in MB. Multiplied by ring count for total. " + TIP_RESTART.getString(),
                 16, 256, 16, cfg.uploadSectionMb, v -> cfg.uploadSectionMb = v));

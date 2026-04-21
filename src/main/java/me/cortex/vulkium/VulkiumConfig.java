@@ -52,8 +52,12 @@ public final class VulkiumConfig {
      *  feature that actually cuts task-shader work on occluded geometry). */
     public boolean enableHzb = false;
 
-    /** Max sections the render thread drains from the ingest queue per frame. */
-    public int drainPerFrame = 256;
+    /** Max sections the render thread drains from the ingest queue per frame. Vulkium
+     *  suppresses MC's own terrain draw, so any queued-but-not-yet-ingested section is an
+     *  invisible chunk. High default (4096) avoids visible gaps on RD change / first join.
+     *  Lower it (e.g. 512) for smoother progressive chunk streaming at the cost of a longer
+     *  total load window. */
+    public int drainPerFrame = 4096;
 
     /** Upload ring section size in MB. Multiplied by {@link #uploadSectionCount} for total VRAM. */
     public int uploadSectionMb = 16;
