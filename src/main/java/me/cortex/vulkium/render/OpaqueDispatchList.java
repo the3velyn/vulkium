@@ -30,9 +30,6 @@ public final class OpaqueDispatchList implements AutoCloseable {
     /** Highest prior-frame count — positions from lastCount..maxEverWritten need sentinel
      *  re-stamping each frame so stale entries don't drive ghost dispatches. */
     private int maxEverWritten;
-    /** Persistent region-visible lookup, reused across builds. Grown on demand; cleared
-     *  each frame instead of reallocated. Saves ~4KB/frame of GC garbage. */
-    private boolean[] regionVisibleCache = new boolean[0];
     private boolean closed;
 
     public OpaqueDispatchList(int maxRegions) {
@@ -58,42 +55,25 @@ public final class OpaqueDispatchList implements AutoCloseable {
      */
     public int build(SectionManager sectionMgr, RegionManager regionMgr,
                      VisibilityTracker visibility) {
-        long base = buffer.mappedPointer();
-        int n = 0;
+        final long base = buffer.mappedPointer();
+        final int[] nBox = { 0 };
 
-        // Collect visible region IDs into a packed lookup. Bounded by maxRegionIndex.
-        // Reuse the cached array; grow when the ledger expands, clear the used prefix each
-        // frame (saves ~4KB/frame of GC garbage at maxRegions=1024).
-        int maxRegion = Math.max(regionMgr.maxRegionIndex(), 0);
-        if (regionVisibleCache.length < maxRegion) {
-            regionVisibleCache = new boolean[Math.max(maxRegion, regionVisibleCache.length * 2)];
-        }
-        final boolean[] regionVisible = regionVisibleCache;
-        // Clear only the range we'll touch (prior writes were at most maxEverVisibleRegion).
-        java.util.Arrays.fill(regionVisible, 0, Math.min(maxRegion, regionVisible.length), false);
-        visibility.forEachVisibleRegion(id -> {
-            if (id >= 0 && id < regionVisible.length) regionVisible[id] = true;
-        });
-
-        var live = sectionMgr.liveView();
-        var it = live.keySet().iterator();
-        while (it.hasNext() && n < capacity) {
-            long key = it.nextLong();
-            int ref = sectionMgr.getRegionRef(key);
-            if (ref < 0) continue;
-            int regionId = ref >>> 8;
-            if (regionId >= regionVisible.length || !regionVisible[regionId]) continue;
-
-            int compactId;
-            try {
-                compactId = regionMgr.getSectionRefId(ref);
-            } catch (RuntimeException ex) {
-                continue;
+        // Iterate by VISIBLE REGION × per-region compact section IDs. This is O(visibleRegions
+        // × sectionsPerRegion) instead of O(liveSections). At typical RDs it's a 10-20×
+        // reduction in CPU work because live-section counts sit in the thousands while
+        // visible-region × packed-sections lands in the low hundreds.
+        visibility.forEachVisibleRegion(regionId -> {
+            int count = regionMgr.regionSectionCount(regionId);
+            if (count == 0 || nBox[0] >= capacity) return;
+            final int rIdShifted = regionId << 8;
+            // id2pos is already dense over [0, count), so compact IDs are just 0..count-1.
+            for (int compactId = 0; compactId < count && nBox[0] < capacity; compactId++) {
+                int gpuRef = rIdShifted | compactId;
+                MemoryUtil.memPutInt(base + (long) nBox[0] * 4L, gpuRef);
+                nBox[0]++;
             }
-            int gpuRef = (ref & ~0xFF) | (compactId & 0xFF);
-            MemoryUtil.memPutInt(base + (long) n * 4L, gpuRef);
-            n++;
-        }
+        });
+        int n = nBox[0];
 
         // Sentinel-sweep trailing positions from n..maxEverWritten so prior frames' higher
         // counts don't leave ghost entries for the GPU to dispatch.

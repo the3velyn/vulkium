@@ -233,6 +233,24 @@ public final class RegionManager implements AutoCloseable {
     public int maxRegions() { return regions.length; }
     public int maxRegionIndex() { return idProvider.maxIndex(); }
 
+    /** Number of populated section slots in the given region (0..256). Fast O(1). */
+    public int regionSectionCount(int regionId) {
+        if (regionId < 0 || regionId >= regions.length) return 0;
+        Region r = regions[regionId];
+        return r == null ? 0 : r.count;
+    }
+
+    /** Iterate the compact section IDs (0..count-1) for every allocated section in the given
+     *  region. Consumer receives each {@code compactIdInRegion}; the full GPU-compact section
+     *  index is {@code (regionId << 8) | compactId}. Avoids the O(liveSections) walk in callers
+     *  that want per-region iteration. */
+    public void forEachSectionInRegion(int regionId, java.util.function.IntConsumer consumer) {
+        if (regionId < 0 || regionId >= regions.length) return;
+        Region r = regions[regionId];
+        if (r == null) return;
+        for (int i = 0; i < r.count; i++) consumer.accept(i);
+    }
+
     public boolean regionExists(int regionId) {
         return regions[regionId] != null;
     }
