@@ -86,7 +86,9 @@ public final class FrameDriver {
         // HZB build: tap Mojang's depth attachment (now fully populated after opaque terrain) +
         // run the downsample chain.
         if (cfg.enableHzb) {
+            long tHzb = me.cortex.vulkium.diag.PerfTracker.begin();
             Renderer.get().buildHzb();
+            me.cortex.vulkium.diag.PerfTracker.end("buildHzb", tHzb);
         }
 
         if (!cfg.drawTerrain) {
@@ -97,7 +99,9 @@ public final class FrameDriver {
         me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
         var camState = ctx.levelState() != null ? ctx.levelState().cameraRenderState : null;
         if (scene != null && camState != null) {
+            long tMvp = me.cortex.vulkium.diag.PerfTracker.begin();
             updateMvpFromCamera(scene, camState);
+            me.cortex.vulkium.diag.PerfTracker.end("updateMvp", tMvp);
         }
         long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
         dispatchTerrainDraw(true, false);
