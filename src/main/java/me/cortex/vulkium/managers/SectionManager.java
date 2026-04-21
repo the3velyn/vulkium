@@ -46,6 +46,11 @@ public final class SectionManager {
      *  set is the authoritative CPU-side answer. */
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet translucentSections =
         new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
+    /** Monotonic counter bumped on every add/remove to {@link #translucentSections}. Consumers
+     *  (TranslucentSectionSorter) snapshot it alongside the camera chunk to skip re-sorting
+     *  when neither the section set nor the camera has moved. */
+    private int translucentVersion;
+    public int translucentVersion() { return translucentVersion; }
 
     /** Worker → render hand-off. Unbounded; trimmed per frame by drainPending(). */
     private final ConcurrentLinkedQueue<PendingIngest> ingestQueue = new ConcurrentLinkedQueue<>();
@@ -180,8 +185,11 @@ public final class SectionManager {
                         int opaqueQuads = Math.min(up.opaqueQuadCount, 0xFFFF);
                         int translucentQuads = Math.min(up.translucentQuadCount, 0xFFFF);
                         // Keep the translucent-keys set in sync with actual translucent content.
-                        if (translucentQuads > 0) translucentSections.add(p.key);
-                        else translucentSections.remove(p.key);
+                        boolean hasTrans = translucentQuads > 0;
+                        if (hasTrans ? translucentSections.add(p.key)
+                                     : translucentSections.remove(p.key)) {
+                            translucentVersion++;
+                        }
                         long ptr = regionManager.setSectionData(ref);
                         // header.xyz — chunk coords + face AABB. header.z packs translucent
                         // quad count into bits 16-31 (bits 0-15 = chunk y + offset/size; bit
@@ -233,23 +241,35 @@ public final class SectionManager {
     }
 
     /**
-     * Queue eviction of every live section. Used by the F3+A path so hitting "clear chunks"
-     * flushes vulkium's view in addition to MC's. Processed on the render thread via the
-     * normal {@link #drainPending} pump — same code path as per-section eviction, so region
-     * ledger + arena slots get released cleanly.
+     * Evict every live section SYNCHRONOUSLY on the calling thread (render thread — the F3+A
+     * and allChanged paths run there). Previously we queued per-section eviction events and
+     * let {@link #drainPending} process them at its normal 256/frame cap — for 10k+ live
+     * sections that's 40+ frames of trailing eviction work happening in parallel with MC's
+     * fresh re-compile ingest, which caused a sustained FPS drop after every F3+A.
+     *
+     * <p>Inline eviction converts that to one big CPU spike (typically 10-50ms on 10k
+     * sections) at the moment of F3+A, after which the engine is clean and the fresh ingest
+     * from MC's recompile can land at full rate. Also drops any queued (stale) ingests from
+     * the worker threads for these same keys — the fresh recompile will produce the correct
+     * replacements.
      */
     public void queueFlushAll() {
         long[] keys = live.keySet().toLongArray();
         for (long key : keys) {
-            ingestQueue.offer(PendingIngest.eviction(key));
+            evictLive(key);
         }
-        LOGGER.info("Queued flush of {} live sections (F3+A).", keys.length);
+        // Drop queued worker-thread ingests that are now obsolete — they reference the arena
+        // slots we just freed, and MC will re-dispatch compile tasks for the same sections
+        // after resetLevelRenderData anyway.
+        ingestQueue.clear();
+        resortQueue.clear();
+        LOGGER.info("Flushed {} live sections inline (F3+A).", keys.length);
     }
 
     private void evictLive(long key) {
         SectionEntry prev = live.remove(key);
         if (prev != null) freeEntry(prev);
-        translucentSections.remove(key);
+        if (translucentSections.remove(key)) translucentVersion++;
         int ref = sectionToRegionRef.remove(key);
         if (ref != -1 && regionManager != null) {
             try {
