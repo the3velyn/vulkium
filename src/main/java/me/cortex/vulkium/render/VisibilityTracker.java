@@ -170,6 +170,11 @@ public final class VisibilityTracker {
         }
     }
 
+    /** Direct access to the visible-region front buffer. Use together with
+     *  {@link #visibleRegionCount()} to iterate without the lambda-capture cost of
+     *  {@link #forEachVisibleRegion(IntConsumer)}. Read-only; do not mutate. */
+    public int[] visibleRegionsArray() { return front; }
+
     public long lastUpdateDurationNs() {
         return lastUpdateNs;
     }

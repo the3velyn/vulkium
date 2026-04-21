@@ -56,24 +56,28 @@ public final class OpaqueDispatchList implements AutoCloseable {
     public int build(SectionManager sectionMgr, RegionManager regionMgr,
                      VisibilityTracker visibility) {
         final long base = buffer.mappedPointer();
-        final int[] nBox = { 0 };
+        int n = 0;
 
-        // Iterate by VISIBLE REGION × per-region compact section IDs. This is O(visibleRegions
-        // × sectionsPerRegion) instead of O(liveSections). At typical RDs it's a 10-20×
-        // reduction in CPU work because live-section counts sit in the thousands while
-        // visible-region × packed-sections lands in the low hundreds.
-        visibility.forEachVisibleRegion(regionId -> {
-            int count = regionMgr.regionSectionCount(regionId);
-            if (count == 0 || nBox[0] >= capacity) return;
-            final int rIdShifted = regionId << 8;
-            // id2pos is already dense over [0, count), so compact IDs are just 0..count-1.
-            for (int compactId = 0; compactId < count && nBox[0] < capacity; compactId++) {
-                int gpuRef = rIdShifted | compactId;
-                MemoryUtil.memPutInt(base + (long) nBox[0] * 4L, gpuRef);
-                nBox[0]++;
+        // Iterate by VISIBLE REGION × per-region compact section IDs via direct array
+        // access — no lambda / capture allocation on the per-frame hot path. At typical
+        // RDs, visibleRegions × packedSections runs in the low hundreds, vs. the multi-
+        // thousand live-section walk the old path did.
+        int[] visIds = visibility.visibleRegionsArray();
+        int visCount = visibility.visibleRegionCount();
+        final int cap = capacity;
+        for (int k = 0; k < visCount; k++) {
+            int regionId = visIds[k];
+            int sectCount = regionMgr.regionSectionCount(regionId);
+            if (sectCount == 0) continue;
+            int rIdShifted = regionId << 8;
+            int bound = Math.min(sectCount, cap - n);
+            // id2pos is dense over [0, count), so compact IDs are just 0..count-1.
+            for (int compactId = 0; compactId < bound; compactId++) {
+                MemoryUtil.memPutInt(base + (long) (n + compactId) * 4L, rIdShifted | compactId);
             }
-        });
-        int n = nBox[0];
+            n += bound;
+            if (n >= cap) break;
+        }
 
         // Sentinel-sweep trailing positions from n..maxEverWritten so prior frames' higher
         // counts don't leave ghost entries for the GPU to dispatch.
