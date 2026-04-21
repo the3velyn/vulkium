@@ -18,14 +18,7 @@ All shaders compile at runtime via `com.mojang.blaze3d.vulkan.glsl.GlslCompiler`
 | `terrain/translucent/task_common.glsl` | ✅ | ✅ | Shared payload (`TranslucentTaskPayload`) for translucent task+mesh pair |
 | `terrain/fog.glsl` | ✅ | ✅ | No mesh-shader code; was clean |
 | `terrain/vertex_format.glsl` | ✅ | n/a | Scalar helpers; no changes needed |
-| `occlusion/region_raster/mesh.glsl` | ✅ | ✅ | Precomputed 12 AABB `uvec3` tris; SetMeshOutputsEXT(8,12) or (0,0) |
-| `occlusion/region_raster/fragment.frag` | ✅ | ✅ | No mesh-shader code |
-| `occlusion/section_raster/task.glsl` | ✅ | ✅ | Uses `section_raster/task_common.glsl` payload; `EmitMeshTasksEXT(count,1,1)` |
-| `occlusion/section_raster/task_common.glsl` | ✅ | ✅ | Shared payload (`SectionRasterTaskPayload`) |
-| `occlusion/section_raster/mesh.glsl` | ✅ | ✅ | Precomputed 12 AABB `uvec3` tris; early-exit path emits (0,0) |
-| `occlusion/section_raster/fragment.glsl` | ✅ | ✅ | No mesh-shader code |
-| `occlusion/queries/region/mesh.glsl` | ✅ | ✅ | Precomputed 12 AABB `uvec3` tris; SetMeshOutputsEXT(8,12) |
-| `occlusion/queries/region/fragment.frag` | ✅ | ✅ | No mesh-shader code |
+| `occlusion/hzb_downsample.comp` | n/a | ✅ | Compute shader — HZB mip-chain build (textureGather → max) |
 | `sorting/region_section_sorter.comp` | n/a | ✅ | Compute shader — no mesh-shader code |
 | `sorting/sorting_network.glsl` | n/a | n/a | Pure algorithm, reused as-is |
 
