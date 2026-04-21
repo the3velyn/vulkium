@@ -58,10 +58,19 @@ public final class VulkiumConfig {
 
     /** Sort the opaque dispatch list front-to-back by per-section Manhattan distance so
      *  near sections render before far ones. Lets the GPU's early-Z reject more fragments
-     *  from occluded far sections. ~15-25µs extra CPU on the {@code opaqueList.build}
-     *  phase; pays back through {@code gpu.opaqueDraw} as long as the scene has overdraw.
-     *  Toggleable for A/B perf comparison. */
-    public boolean enableFrontToBackSort = true;
+     *  from occluded far sections, but scatters {@code regionData} / {@code sectionData}
+     *  fetches across adjacent task workgroups and loses the natural spatial locality of
+     *  compact-id-within-region emission. Net effect is scene-dependent:
+     *  <ul>
+     *    <li>Dense overdraw (caves, jungles, cities, looking into walls from outside) —
+     *        early-Z wins dominate, measurable gpu.opaqueDraw drop.</li>
+     *    <li>Open-air / mostly-visible scenes — cache-miss cost can edge out early-Z
+     *        benefit; measured ~+15-20µs gpu.opaqueDraw regression in a flat-terrain
+     *        test on RTX 3060 (2026-04-21 11:52 run).</li>
+     *  </ul>
+     *  Default off because open-air is the more common "always-paid" Minecraft viewpoint;
+     *  flip on if your typical scenes lean dense. Costs ~13µs CPU on opaqueList.build. */
+    public boolean enableFrontToBackSort = false;
 
     /** Max sections the render thread drains from the ingest queue per frame. Vulkium
      *  suppresses MC's own terrain draw, so any queued-but-not-yet-ingested section is an
