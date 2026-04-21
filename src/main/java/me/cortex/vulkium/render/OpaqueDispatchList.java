@@ -52,9 +52,18 @@ public final class OpaqueDispatchList implements AutoCloseable {
      * Rebuild the list for this frame. Iterates vulkium's live section table, filters by
      * visible regions, skips sections that can't resolve their compact ID (stale during
      * region teardown). Returns the number of entries written (= {@link #count()} after).
+     *
+     * <p>If {@code readbackPtr != 0L}, the CPU-side regionVisibility readback (populated by
+     * a prior frame's region_cull + vkCmdCopyBuffer, see
+     * {@link Renderer#regionVisibilityReadbackPtr}) is consulted to skip occluded regions
+     * at list-build time. Savings compound with the GPU-side task-shader gate: excluded
+     * regions don't even dispatch workgroups here, saving both task-shader launches and the
+     * mesh/frag work those tasks would have emitted for visible sections in those regions.
+     * Frame-lagged by the GPU queue depth so the bits reflect what was occluded ~1-2 frames
+     * ago — conservative under motion at 500+ FPS.
      */
     public int build(SectionManager sectionMgr, RegionManager regionMgr,
-                     VisibilityTracker visibility) {
+                     VisibilityTracker visibility, long readbackPtr) {
         final long base = buffer.mappedPointer();
         int n = 0;
 
@@ -67,6 +76,14 @@ public final class OpaqueDispatchList implements AutoCloseable {
         final int cap = capacity;
         for (int k = 0; k < visCount; k++) {
             int regionId = visIds[k];
+            // CPU-side HZB compaction: when the readback pointer is valid (cull has run at
+            // least once), skip regions that were marked occluded. Falls back to "include
+            // all" when readbackPtr == 0, which keeps correctness for the cull-off and
+            // first-frame-after-enable paths where the bits can't yet be trusted.
+            if (readbackPtr != 0L
+                && (MemoryUtil.memGetByte(readbackPtr + regionId) & 0x01) == 0) {
+                continue;
+            }
             int sectCount = regionMgr.regionSectionCount(regionId);
             if (sectCount == 0) continue;
             int rIdShifted = regionId << 8;

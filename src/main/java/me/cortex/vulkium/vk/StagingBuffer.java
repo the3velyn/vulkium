@@ -45,7 +45,7 @@ public final class StagingBuffer implements VkBuffer {
     public static StagingBuffer allocate(long size) {
         return allocate(size,
             VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK10.VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT,
-            false);
+            false, false);
     }
 
     /** Persistent-mapped staging that ALSO exposes a shader device address. Use this for small
@@ -55,10 +55,23 @@ public final class StagingBuffer implements VkBuffer {
         return allocate(size,
             VK10.VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK10.VK_BUFFER_USAGE_TRANSFER_SRC_BIT
                 | VK12.VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT,
-            true);
+            true, false);
     }
 
-    private static StagingBuffer allocate(long size, int usage, boolean wantDeviceAddress) {
+    /** Host-visible readback buffer: device writes into it via {@code vkCmdCopyBuffer}, host
+     *  reads the mapped pointer on subsequent frames. Uses
+     *  {@code VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT} so the allocation is readable from
+     *  the host (sequential-write-only allocations on some drivers land in write-combined
+     *  memory and read as garbage). TRANSFER_DST only — callers that need further usage flags
+     *  should fork this factory. */
+    public static StagingBuffer allocateHostReadback(long size) {
+        return allocate(size,
+            VK10.VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            false, true);
+    }
+
+    private static StagingBuffer allocate(long size, int usage, boolean wantDeviceAddress,
+                                          boolean readback) {
         long vma = MojangVulkanBridge.vma();
         try (MemoryStack stack = MemoryStack.stackPush()) {
             var bufferInfo = VkBufferCreateInfo.calloc(stack)
@@ -70,10 +83,12 @@ public final class StagingBuffer implements VkBuffer {
                 .usage(usage)
                 .sharingMode(VK10.VK_SHARING_MODE_EXCLUSIVE);
 
+            int hostAccessFlag = readback
+                ? Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_RANDOM_BIT
+                : Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT;
             var allocInfo = VmaAllocationCreateInfo.calloc(stack)
                 .usage(Vma.VMA_MEMORY_USAGE_AUTO)
-                .flags(Vma.VMA_ALLOCATION_CREATE_HOST_ACCESS_SEQUENTIAL_WRITE_BIT
-                    | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
+                .flags(hostAccessFlag | Vma.VMA_ALLOCATION_CREATE_MAPPED_BIT);
 
             LongBuffer pBuffer = stack.callocLong(1);
             PointerBuffer pAllocation = stack.callocPointer(1);

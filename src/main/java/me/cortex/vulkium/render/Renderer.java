@@ -49,6 +49,17 @@ public final class Renderer {
      *  once V8 HZB-based section culling lands. */
     private me.cortex.vulkium.vk.DeviceBuffer sectionVisibilityBuffer;
     private me.cortex.vulkium.vk.DeviceBuffer regionVisibilityBuffer;
+    /** Host-visible readback of {@link #regionVisibilityBuffer}. Populated by a
+     *  {@code vkCmdCopyBuffer} right after {@code region_cull} writes its bits; read by
+     *  {@link OpaqueDispatchList#build} next frame to skip known-occluded regions at
+     *  dispatch-build time (CPU-side compaction). Frame-late by the same margin as the
+     *  HZB cull itself; stale data is conservative at 500+ FPS (human-invisible single-frame
+     *  mis-rendering). {@code null} until cull is first enabled. */
+    private me.cortex.vulkium.vk.StagingBuffer regionVisibilityReadback;
+    /** True once at least one cull+copy has been submitted; gates the compaction path so the
+     *  very first frame (and frames immediately after cull is re-enabled) dispatches every
+     *  region normally. */
+    private boolean regionVisibilityReadbackArmed;
     private TranslucentSectionSorter translucentSorter;
     private OpaqueDispatchList opaqueDispatchList;
     private int hzbWidth;
@@ -140,9 +151,14 @@ public final class Renderer {
 
         if (opaqueDispatchList != null && rm != null) {
             long tOp = me.cortex.vulkium.diag.PerfTracker.begin();
+            // Pass the readback pointer only when CPU compaction is enabled — and only after
+            // the first cull dispatch has populated the buffer. Either gate missing ⇒ 0L ⇒
+            // OpaqueDispatchList falls back to "include all visible regions".
+            long readbackPtr = VulkiumConfig.get().enableHzbRegionCull
+                ? regionVisibilityReadbackPtr() : 0L;
             opaqueDispatchList.build(
                 me.cortex.vulkium.managers.SectionManager.get(),
-                rm, visibility);
+                rm, visibility, readbackPtr);
             me.cortex.vulkium.diag.PerfTracker.end("opaqueList.build", tOp);
         }
 
@@ -237,6 +253,17 @@ public final class Renderer {
     public SceneUniform sceneUniform() { return sceneUniform; }
     public VisibilityTracker visibility() { return visibility; }
     public PrimaryTerrainPass primaryTerrain() { return primaryTerrain; }
+    /** @return host pointer to the CPU-readable regionVisibility readback, or 0 if either
+     *  unavailable (never initialized) or not yet armed (first cull submit hasn't happened).
+     *  Callers cast this to a native byte array and read regionVisibility[regionId]; a zero
+     *  byte means the region was marked occluded the last time cull ran. Frame-lagged by
+     *  the GPU queue depth — tolerated at 500+ FPS where single-frame mis-culls are
+     *  imperceptible. Returns 0 when {@link #regionVisibilityReadbackArmed} is false so the
+     *  caller can fall back to "all visible". */
+    public long regionVisibilityReadbackPtr() {
+        return regionVisibilityReadbackArmed && regionVisibilityReadback != null
+            ? regionVisibilityReadback.mappedPointer() : 0L;
+    }
     /** @return the GPU timer pool, or {@code null} when the hardware doesn't support
      *  timestamp queries. Callers must null-check every access. */
     public me.cortex.vulkium.diag.GpuTimerPool gpuTimers() { return gpuTimers; }
@@ -338,6 +365,14 @@ public final class Renderer {
                         LOGGER.warn("Region-visibility reseed failed on cull toggle-off", t);
                     }
                 }
+                // Same reset on the host-side readback so CPU compaction doesn't honour
+                // stale zeros from the last enabled window.
+                if (regionVisibilityReadback != null) {
+                    org.lwjgl.system.MemoryUtil.memSet(
+                        regionVisibilityReadback.mappedPointer(), 0xFF,
+                        regionVisibilityReadback.size());
+                }
+                regionVisibilityReadbackArmed = false;
                 lastFrameRanCull = false;
             }
             return;
@@ -347,6 +382,8 @@ public final class Renderer {
         final SceneUniform scene = sceneUniform;
         final HzbTexture hzb = hzbTexture;
         final me.cortex.vulkium.diag.GpuTimerPool gpu = this.gpuTimers;
+        final me.cortex.vulkium.vk.DeviceBuffer visBuf = regionVisibilityBuffer;
+        final me.cortex.vulkium.vk.StagingBuffer readback = regionVisibilityReadback;
         // Dispatch over [0, maxRegionIndex): every allocated region ID falls in this range.
         // idProvider recycles released IDs so live slots can be anywhere in this span — we
         // must cull them all, not just map.size() threads' worth (that would skip the high
@@ -358,8 +395,48 @@ public final class Renderer {
                 if (gpu != null) gpu.begin(cmd, "regionCull");
                 culler.record(cmd, scene, hzb, upperBound);
                 if (gpu != null) gpu.end(cmd, "regionCull");
+
+                // Copy the freshly-written regionVisibility bits into the host-visible
+                // readback buffer. RegionCuller.record already emitted a memory barrier for
+                // SHADER_STORAGE_WRITE → task-shader read; we need a separate barrier for
+                // SHADER_STORAGE_WRITE → TRANSFER_READ on the same buffer so the copy
+                // observes the writes. Use a buffer barrier scoped to regionVisibility — a
+                // memory barrier would stall unrelated work.
+                if (readback != null && visBuf != null) {
+                    try (org.lwjgl.system.MemoryStack stack = org.lwjgl.system.MemoryStack.stackPush()) {
+                        org.lwjgl.vulkan.VkBufferMemoryBarrier2.Buffer bb =
+                            org.lwjgl.vulkan.VkBufferMemoryBarrier2.calloc(1, stack);
+                        bb.get(0)
+                            .sType$Default()
+                            .srcStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COMPUTE_SHADER_BIT)
+                            .srcAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_SHADER_STORAGE_WRITE_BIT)
+                            .dstStageMask(org.lwjgl.vulkan.VK13.VK_PIPELINE_STAGE_2_COPY_BIT)
+                            .dstAccessMask(org.lwjgl.vulkan.VK13.VK_ACCESS_2_TRANSFER_READ_BIT)
+                            .srcQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                            .dstQueueFamilyIndex(org.lwjgl.vulkan.VK10.VK_QUEUE_FAMILY_IGNORED)
+                            .buffer(visBuf.handle())
+                            .offset(0L)
+                            .size(visBuf.size());
+                        org.lwjgl.vulkan.VkDependencyInfo dep = org.lwjgl.vulkan.VkDependencyInfo.calloc(stack)
+                            .sType$Default()
+                            .pBufferMemoryBarriers(bb);
+                        org.lwjgl.vulkan.KHRSynchronization2.vkCmdPipelineBarrier2KHR(cmd, dep);
+
+                        // Copy the live prefix only — [0, maxRegions). Readback size matches
+                        // visibility buffer size so a full copy is always in-bounds.
+                        org.lwjgl.vulkan.VkBufferCopy.Buffer regions =
+                            org.lwjgl.vulkan.VkBufferCopy.calloc(1, stack)
+                                .srcOffset(0L).dstOffset(0L).size(visBuf.size());
+                        org.lwjgl.vulkan.VK10.vkCmdCopyBuffer(cmd,
+                            visBuf.handle(), readback.handle(), regions);
+                    }
+                }
             });
             lastFrameRanCull = true;
+            // Arm the readback on the first successful submit — even though the data won't
+            // be coherent until the GPU finishes the copy, the host memset we did at init
+            // ensures reads stay conservative (all-0xFF) until real data lands.
+            regionVisibilityReadbackArmed = true;
         } catch (Throwable t) {
             LOGGER.warn("Region-cull dispatch failed (continuing without occlusion this frame)", t);
         }
@@ -415,6 +492,16 @@ public final class Renderer {
             seedFillByte(sectionVisibilityBuffer, (byte) 0xFF);
             seedFillByte(regionVisibilityBuffer,  (byte) 0xFF);
 
+            // Host-visible readback buffer matching regionVisibilityBuffer's size. Populated
+            // after each region_cull dispatch via vkCmdCopyBuffer so OpaqueDispatchList.build
+            // can read the bits on the NEXT frame (before the cull dispatch happens) to
+            // skip regions that have been occluded for longer than the GPU queue depth.
+            regionVisibilityReadback = me.cortex.vulkium.vk.StagingBuffer.allocateHostReadback(
+                (long) maxRegions);
+            // Initial fill matches the seed above — every region "visible" until proven otherwise.
+            org.lwjgl.system.MemoryUtil.memSet(
+                regionVisibilityReadback.mappedPointer(), 0xFF, (long) maxRegions);
+
             LOGGER.info(
                 "Renderer initialized: SceneUniform({}B) + VisibilityTracker + UploadStream({}MB×{}) + "
                     + "PrimaryTerrainPass + TerrainUploader({}MB arena) + "
@@ -464,6 +551,11 @@ public final class Renderer {
             try { regionVisibilityBuffer.close(); } catch (Throwable t) { LOGGER.warn("regionVisibilityBuffer close failed", t); }
             regionVisibilityBuffer = null;
         }
+        if (regionVisibilityReadback != null) {
+            try { regionVisibilityReadback.close(); } catch (Throwable t) { LOGGER.warn("regionVisibilityReadback close failed", t); }
+            regionVisibilityReadback = null;
+        }
+        regionVisibilityReadbackArmed = false;
         if (terrainUploader != null) {
             try { terrainUploader.close(); } catch (Throwable t) { LOGGER.warn("TerrainUploader close failed", t); }
             terrainUploader = null;
