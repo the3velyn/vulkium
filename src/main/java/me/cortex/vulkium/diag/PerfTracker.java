@@ -7,8 +7,8 @@ import java.util.Arrays;
 
 /**
  * Lightweight per-phase nanosecond CPU timer. Tracks running stats (count, total ns, min,
- * max) for named phases; dumps averages to log every {@value #FLUSH_INTERVAL_NS} (~2 seconds
- * of wall clock) and resets. Dormant phases skip zero-count rows.
+ * max) for named phases; dumps averages to log on a configurable flush interval (default
+ * 500ms, see {@link #flushIntervalNs}) and resets. Dormant phases skip zero-count rows.
  *
  * <p>Usage:
  * <pre>
@@ -28,8 +28,11 @@ import java.util.Arrays;
 public final class PerfTracker {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/perf");
 
-    /** Every ~2s of render-thread wall clock, flush stats to the log and reset. */
-    private static final long FLUSH_INTERVAL_NS = 2_000_000_000L;
+    /** Flush interval in ns. Shorter = finer-grained timing intervals for A/B comparisons
+     *  at the cost of more log volume. 500ms catches 4 windows/second — short enough to
+     *  separate warmup from steady state in a 10s test run, long enough to avoid log spam. */
+    private static volatile long flushIntervalNs = 500_000_000L;
+    public static void setFlushIntervalNs(long ns) { flushIntervalNs = Math.max(50_000_000L, ns); }
 
     /** Open-addressing table. Power-of-two size, linear probe. */
     private static final int CAP = 64;
@@ -83,7 +86,7 @@ public final class PerfTracker {
     private static void maybeFlush() {
         long now = System.nanoTime();
         if (lastFlushNs == 0L) { lastFlushNs = now; return; }
-        if (now - lastFlushNs < FLUSH_INTERVAL_NS) return;
+        if (now - lastFlushNs < flushIntervalNs) return;
         long elapsedWindow = now - lastFlushNs;
         lastFlushNs = now;
 

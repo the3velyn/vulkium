@@ -107,6 +107,11 @@ public final class VulkiumConfig {
      *  is under 0.5% of frame time at 200+ FPS. */
     public boolean enablePerfTracker = true;
 
+    /** How often the PerfTracker flushes its running averages to the log, in milliseconds.
+     *  Short intervals (≤500ms) let you separate warmup from steady state inside a 10s run
+     *  and make before/after A/B comparisons sharper. Clamped to ≥50ms at apply time. */
+    public int perfTrackerFlushMs = 500;
+
     public static VulkiumConfig get() {
         if (INSTANCE == null) {
             synchronized (VulkiumConfig.class) {

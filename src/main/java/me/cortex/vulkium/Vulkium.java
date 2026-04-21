@@ -70,10 +70,13 @@ public final class Vulkium implements ClientModInitializer {
         ClientLifecycleEvents.CLIENT_STARTED.register(Vulkium::onClientStarted);
         ClientLifecycleEvents.CLIENT_STOPPING.register(Vulkium::onClientStopping);
 
-        // Apply the perf-tracker config flag as early as possible — boot-time diagnostics
+        // Apply the perf-tracker config flags as early as possible — boot-time diagnostics
         // (ShaderSanityCheck, ComputeSmokeTest) don't use PerfTracker, but FrameDriver does
         // and fires before CLIENT_STARTED under some launch paths.
-        me.cortex.vulkium.diag.PerfTracker.setEnabled(VulkiumConfig.get().enablePerfTracker);
+        VulkiumConfig bootCfg = VulkiumConfig.get();
+        me.cortex.vulkium.diag.PerfTracker.setEnabled(bootCfg.enablePerfTracker);
+        me.cortex.vulkium.diag.PerfTracker.setFlushIntervalNs(
+            (long) bootCfg.perfTrackerFlushMs * 1_000_000L);
 
         // Frame hooks must be registered at init (not CLIENT_STARTED) — the events fire from
         // world render which can start before CLIENT_STARTED under some launch paths. The

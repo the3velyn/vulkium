@@ -128,11 +128,22 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                 cfg.translucencySortingLevel,
                 v -> cfg.translucencySortingLevel = v),
             boolOption("Perf tracker",
-                "Per-phase CPU timers flushed to the log every ~2s. ~0.5% frame-time overhead "
-                    + "at 200+ FPS; disable for zero overhead on release builds.",
+                "Per-phase CPU timers flushed to the log. ~0.5% frame-time overhead at 200+ FPS; "
+                    + "disable for zero overhead on release builds.",
                 cfg.enablePerfTracker, v -> {
                     cfg.enablePerfTracker = v;
                     me.cortex.vulkium.diag.PerfTracker.setEnabled(v);
+                }));
+
+        this.list.addSmall(
+            intSliderLabel("Perf flush",
+                "How often PerfTracker dumps its averages to the log. Short = sharper A/B "
+                    + "comparisons; long = less log volume.",
+                50, 5000, cfg.perfTrackerFlushMs,
+                v -> v >= 1000 ? (v / 1000) + "s" : v + "ms",
+                v -> {
+                    cfg.perfTrackerFlushMs = v;
+                    me.cortex.vulkium.diag.PerfTracker.setFlushIntervalNs((long) v * 1_000_000L);
                 }));
     }
 
