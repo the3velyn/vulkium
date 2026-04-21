@@ -37,6 +37,20 @@ Launch MC 26.2-snapshot-3 with vulkium, attach log viewer, do NOT enter a world 
 
 If any of the above fails, stop — fix before proceeding.
 
+## Known limitation: server-side chunk streaming cap at 32
+
+Vulkium raises MC's render-distance slider + client ViewArea to 128, and the render
+frustum extends accordingly. However, **server-side chunk streaming is still capped at
+32** due to `ChunkLevel.MAX_LEVEL`-derived array sizes (e.g. `LoadingChunkTracker.queues[46]`).
+A previous attempt to raise `DistanceManager.PlayerTicketTracker.maxDistance` to 128 crashed
+on `ArrayIndexOutOfBoundsException` once a chunk past 32 enrolled in the tracker (reverted in
+commit `09aead9`). A proper fix requires bumping `ChunkLevel.MAX_LEVEL` AND auditing every
+consumer that sizes arrays from it — significant integrated-server surface area.
+
+Practical effect: with an RD slider above 32, the frustum shows vulkium-captured geometry
+up to the slider value, but new chunks beyond 32 only appear when MC's server streams them,
+which caps at 32. In multiplayer, the server's own render-distance setting is authoritative.
+
 ## 2 — World entry
 
 Create or load a superflat / creative flat test world. Stand still at spawn for ~10 seconds.
