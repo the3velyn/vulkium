@@ -77,7 +77,12 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
             boolOption("HZB region cull",
                 "Sample the previous frame's HZB to skip occluded regions at the task-shader "
                     + "gate. Needs HZB build on. 1-frame lag; conservative under motion.",
-                cfg.enableHzbRegionCull, v -> cfg.enableHzbRegionCull = v));
+                cfg.enableHzbRegionCull, v -> cfg.enableHzbRegionCull = v),
+            boolOption("Front-to-back sort",
+                "Sort the opaque dispatch list by per-section distance so near sections "
+                    + "render before far ones. Lets the GPU's early-Z reject more occluded "
+                    + "fragments. ~20µs CPU overhead; pays back via less GPU overdraw.",
+                cfg.enableFrontToBackSort, v -> cfg.enableFrontToBackSort = v));
 
         this.list.addSmall(
             boolOption("Boot shader check",

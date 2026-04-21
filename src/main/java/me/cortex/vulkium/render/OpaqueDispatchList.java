@@ -30,6 +30,11 @@ public final class OpaqueDispatchList implements AutoCloseable {
     /** Highest prior-frame count — positions from lastCount..maxEverWritten need sentinel
      *  re-stamping each frame so stale entries don't drive ghost dispatches. */
     private int maxEverWritten;
+    /** Reused sort scratch for front-to-back. Packed as (distance << 32) | (regionId << 8) |
+     *  compactId so {@code Arrays.sort(long[])} produces an ascending-distance order and the
+     *  low 32 bits are the emitted dispatch entry. Sized to capacity so no reallocation on
+     *  hot path. */
+    private long[] sortKeys;
     private boolean closed;
 
     public OpaqueDispatchList(int maxRegions) {
@@ -64,8 +69,26 @@ public final class OpaqueDispatchList implements AutoCloseable {
      */
     public int build(SectionManager sectionMgr, RegionManager regionMgr,
                      VisibilityTracker visibility, long readbackPtr) {
+        return build(sectionMgr, regionMgr, visibility, readbackPtr,
+            false, 0, 0, 0);
+    }
+
+    /** Variant with front-to-back sort. When {@code sortFrontToBack} is true, every emitted
+     *  entry is keyed by its section's Manhattan distance to the camera and sorted ascending
+     *  before being written to the dispatch buffer. Extra ~20µs CPU for the sort; pays back
+     *  through reduced GPU overdraw in any scene with depth complexity. */
+    public int build(SectionManager sectionMgr, RegionManager regionMgr,
+                     VisibilityTracker visibility, long readbackPtr,
+                     boolean sortFrontToBack,
+                     int camSectionX, int camSectionY, int camSectionZ) {
         final long base = buffer.mappedPointer();
         int n = 0;
+
+        // Lazy-allocate the sort scratch. One-shot cost on first sorted frame; stable
+        // allocation for the lifetime of this list.
+        if (sortFrontToBack && sortKeys == null) {
+            sortKeys = new long[capacity];
+        }
 
         // Iterate by VISIBLE REGION × per-region compact section IDs via direct array
         // access — no lambda / capture allocation on the per-frame hot path. At typical
@@ -89,11 +112,34 @@ public final class OpaqueDispatchList implements AutoCloseable {
             int rIdShifted = regionId << 8;
             int bound = Math.min(sectCount, cap - n);
             // id2pos is dense over [0, count), so compact IDs are just 0..count-1.
-            for (int compactId = 0; compactId < bound; compactId++) {
-                MemoryUtil.memPutInt(base + (long) (n + compactId) * 4L, rIdShifted | compactId);
+            if (sortFrontToBack) {
+                // Pack (distance << 32) | (regionId << 8) | compactId so Arrays.sort yields
+                // near-to-far ordering and the low 32 bits survive the cast back to int for
+                // emission to the dispatch buffer.
+                for (int compactId = 0; compactId < bound; compactId++) {
+                    int dist = regionMgr.sectionDistance(regionId, compactId,
+                        camSectionX, camSectionY, camSectionZ);
+                    // Clamp negative / overflow into a positive 32-bit bucket so the shift
+                    // below doesn't produce a negative long (which would sort before valid
+                    // entries). Distance in section units fits easily in 16 bits at any RD.
+                    if (dist < 0) dist = 0;
+                    sortKeys[n + compactId] =
+                        ((long) dist << 32) | (long) (rIdShifted | compactId);
+                }
+            } else {
+                for (int compactId = 0; compactId < bound; compactId++) {
+                    MemoryUtil.memPutInt(base + (long) (n + compactId) * 4L, rIdShifted | compactId);
+                }
             }
             n += bound;
             if (n >= cap) break;
+        }
+
+        if (sortFrontToBack && n > 0) {
+            java.util.Arrays.sort(sortKeys, 0, n);
+            for (int i = 0; i < n; i++) {
+                MemoryUtil.memPutInt(base + (long) i * 4L, (int) sortKeys[i]);
+            }
         }
 
         // Sentinel-sweep trailing positions from n..maxEverWritten so prior frames' higher

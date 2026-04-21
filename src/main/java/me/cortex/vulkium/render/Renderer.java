@@ -156,9 +156,11 @@ public final class Renderer {
             // OpaqueDispatchList falls back to "include all visible regions".
             long readbackPtr = VulkiumConfig.get().enableHzbRegionCull
                 ? regionVisibilityReadbackPtr() : 0L;
+            boolean sortF2B = VulkiumConfig.get().enableFrontToBackSort;
             opaqueDispatchList.build(
                 me.cortex.vulkium.managers.SectionManager.get(),
-                rm, visibility, readbackPtr);
+                rm, visibility, readbackPtr,
+                sortF2B, cx, cy, cz);
             me.cortex.vulkium.diag.PerfTracker.end("opaqueList.build", tOp);
         }
 

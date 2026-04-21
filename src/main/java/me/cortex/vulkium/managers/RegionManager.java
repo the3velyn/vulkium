@@ -265,6 +265,32 @@ public final class RegionManager implements AutoCloseable {
             + Math.abs((region.rz << 3) + 3 - camChunkZ)) >> 1;
     }
 
+    /**
+     * Manhattan distance in section-coord units from camera to a specific compact section
+     * within a region. Used by {@code OpaqueDispatchList} for intra-region front-to-back
+     * sort so near sections dispatch before far ones, letting the GPU's early-Z reject more
+     * occluded fragments. Returns {@link Integer#MAX_VALUE} if the region or compact id
+     * isn't populated (so callers sorting by this naturally push stale slots to the end).
+     *
+     * <p>Position decode mirrors {@code allocateSection}'s packing:
+     * {@code sectionKey = ((y & 3) << 6) | (x & 7) | ((z & 7) << 3)}.
+     */
+    public int sectionDistance(int regionId, int compactId,
+                               int camSectionX, int camSectionY, int camSectionZ) {
+        if (regionId < 0 || regionId >= regions.length) return Integer.MAX_VALUE;
+        Region r = regions[regionId];
+        if (r == null) return Integer.MAX_VALUE;
+        if (compactId < 0 || compactId >= r.count) return Integer.MAX_VALUE;
+        int posCode = r.id2pos[compactId];
+        if (posCode < 0) return Integer.MAX_VALUE;
+        int sx = (r.rx << 3) + (posCode & 7);
+        int sy = (r.ry << 2) + ((posCode >>> 6) & 3);
+        int sz = (r.rz << 3) + ((posCode >>> 3) & 7);
+        return Math.abs(sx - camSectionX)
+             + Math.abs(sy - camSectionY)
+             + Math.abs(sz - camSectionZ);
+    }
+
     public DeviceBuffer regionBuffer() { return regionBuffer; }
     public DeviceBuffer sectionBuffer() { return sectionBuffer; }
 

@@ -56,6 +56,13 @@ public final class VulkiumConfig {
      *  after a clean A/B comparison shows no disappearing-chunk regressions on lookaround. */
     public boolean enableHzbRegionCull = false;
 
+    /** Sort the opaque dispatch list front-to-back by per-section Manhattan distance so
+     *  near sections render before far ones. Lets the GPU's early-Z reject more fragments
+     *  from occluded far sections. ~15-25µs extra CPU on the {@code opaqueList.build}
+     *  phase; pays back through {@code gpu.opaqueDraw} as long as the scene has overdraw.
+     *  Toggleable for A/B perf comparison. */
+    public boolean enableFrontToBackSort = true;
+
     /** Max sections the render thread drains from the ingest queue per frame. Vulkium
      *  suppresses MC's own terrain draw, so any queued-but-not-yet-ingested section is an
      *  invisible chunk. High default (4096) avoids visible gaps on RD change / first join.
