@@ -41,6 +41,35 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(cd "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO"
 
+# --- auto-discover GUI env (SSH sessions won't have DISPLAY/XAUTHORITY) -------
+# KDE Plasma on Wayland runs Xwayland on a different :N each session and uses a
+# random-suffix XAUTHORITY path, so we can't hardcode. Read them out of a
+# running kwin/plasmashell /proc/<pid>/environ. Respects anything the caller
+# already exported.
+if [[ -z "${DISPLAY:-}" || -z "${XAUTHORITY:-}" ]]; then
+    for proc in plasmashell kwin_wayland kded6 kactivitymanagerd; do
+        for p in $(pgrep -u "$USER" -x "$proc" 2>/dev/null); do
+            [[ -r /proc/$p/environ ]] || continue
+            while IFS='=' read -r k v; do
+                case "$k" in
+                    DISPLAY)         [[ -z "${DISPLAY:-}" ]]         && export DISPLAY="$v" ;;
+                    XAUTHORITY)      [[ -z "${XAUTHORITY:-}" ]]      && export XAUTHORITY="$v" ;;
+                    WAYLAND_DISPLAY) [[ -z "${WAYLAND_DISPLAY:-}" ]] && export WAYLAND_DISPLAY="$v" ;;
+                    XDG_RUNTIME_DIR) [[ -z "${XDG_RUNTIME_DIR:-}" ]] && export XDG_RUNTIME_DIR="$v" ;;
+                esac
+            done < <(tr '\0' '\n' < /proc/$p/environ)
+            [[ -n "${DISPLAY:-}" ]] && break 2
+        done
+    done
+fi
+if [[ -z "${DISPLAY:-}" ]]; then
+    echo "[test] ERROR: DISPLAY not set and no KDE session process found to borrow it from."
+    echo "[test] Make sure someone is logged in to the Plasma session on the console, or"
+    echo "[test] export DISPLAY/XAUTHORITY manually before running this script."
+    exit 1
+fi
+echo "[test] DISPLAY=$DISPLAY XAUTHORITY=${XAUTHORITY:-(unset)} WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-(unset)}"
+
 mkdir -p "$LOG_DIR"
 TS=$(date +%s)
 LOG="$LOG_DIR/run-$TS.log"
