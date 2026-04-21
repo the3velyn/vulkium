@@ -60,6 +60,14 @@ public final class VulkiumKeys {
     private static int lookaroundTicksRemaining = 0;
     // END DEV_ONLY_LOOKAROUND
 
+    // DEV_ONLY_QUARTER_TURN — remove before release.
+    // Instant +90° yaw rotate trigger. Used by the deep-test script to capture four
+    // screenshots at cardinal view directions (N, E, S, W) without the motion-blur you'd
+    // get from the smooth LOOKAROUND rotation. Each touch of the file snaps yaw by exactly
+    // 90° on the next processed tick. Like the other triggers, checked on the ~4 Hz poll.
+    private static final Path QUARTER_TURN_TRIGGER = Path.of("/tmp/vulkium-rotate-90");
+    // END DEV_ONLY_QUARTER_TURN
+
     private VulkiumKeys() {}
 
     public static void register() {
@@ -83,6 +91,7 @@ public final class VulkiumKeys {
             screenshotTickCounter = 0;
             maybeTakeTriggeredScreenshot(mc);
             maybeStartLookaround(mc);
+            maybeQuarterTurn(mc);
         }
         stepLookaround(mc); // runs every tick, not throttled
         // END DEV_ONLY_SCREENSHOT_HOOK / DEV_ONLY_LOOKAROUND
@@ -106,6 +115,28 @@ public final class VulkiumKeys {
         LOGGER.info("[vulkium-test] lookaround START ({} ticks = ~{}s at 20tps)",
             LOOKAROUND_TOTAL_TICKS, LOOKAROUND_TOTAL_TICKS / 20);
     }
+
+    // DEV_ONLY_QUARTER_TURN — remove before release.
+    private static void maybeQuarterTurn(Minecraft mc) {
+        if (!Files.exists(QUARTER_TURN_TRIGGER)) return;
+        try {
+            Files.deleteIfExists(QUARTER_TURN_TRIGGER);
+        } catch (Exception e) {
+            LOGGER.warn("Could not delete quarter-turn trigger {}: {} — skipping",
+                QUARTER_TURN_TRIGGER, e.getMessage());
+            return;
+        }
+        if (mc.player == null) {
+            LOGGER.warn("Quarter-turn trigger fired but mc.player is null (world not loaded?)");
+            return;
+        }
+        float prevYaw = mc.player.getYRot();
+        float newYaw = prevYaw + 90.0f;
+        mc.player.yRotO = prevYaw;
+        mc.player.setYRot(newYaw);
+        LOGGER.info("[vulkium-test] quarter-turn: yaw {} → {}", prevYaw, newYaw);
+    }
+    // END DEV_ONLY_QUARTER_TURN
 
     private static void stepLookaround(Minecraft mc) {
         if (lookaroundTicksRemaining <= 0) return;
