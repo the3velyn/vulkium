@@ -269,7 +269,17 @@ public final class SectionManager {
     private void evictLive(long key) {
         SectionEntry prev = live.remove(key);
         if (prev != null) freeEntry(prev);
-        if (translucentSections.remove(key)) translucentVersion++;
+        // Bump translucentVersion on *every* eviction, not just those whose removed section
+        // was itself translucent. RegionManager.removeSection does a tail-compaction swap —
+        // if any OTHER section in the same region sat at the tail compact slot and gets
+        // shifted to fill the vacated slot, its GPU-compact id changes. If that tail-section
+        // was translucent, its gpuRef in the TranslucentSectionSorter cache goes stale and
+        // the task shader would redirect to the wrong section. The narrow "was-translucent"
+        // bump pre-translucent-cache was sufficient, but the sort-cache needs tighter
+        // invalidation. Cost: one extra re-sort per opaque-only eviction, still dominated
+        // by eviction I/O.
+        translucentSections.remove(key);
+        translucentVersion++;
         int ref = sectionToRegionRef.remove(key);
         if (ref != -1 && regionManager != null) {
             try {

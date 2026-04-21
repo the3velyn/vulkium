@@ -59,6 +59,17 @@ public final class TranslucentSectionSorter implements AutoCloseable {
     private int lastCount;
     public int count() { return lastCount; }
 
+    /** Sort-cache key. When (cameraChunk, translucentVersion) is unchanged from the last sort
+     *  call, the back-to-front order is identical — skip the entire scan + Arrays.sort +
+     *  mapped-buffer rewrite, which is the single biggest remaining CPU line in PerfTracker
+     *  (~160µs/frame on a full oceanfront). Initialized to a sentinel that can never match a
+     *  real first call, so the first frame always takes the fast-path through the real sort. */
+    private int cachedCx = Integer.MIN_VALUE;
+    private int cachedCy = Integer.MIN_VALUE;
+    private int cachedCz = Integer.MIN_VALUE;
+    private int cachedVersion = Integer.MIN_VALUE;
+    private boolean cacheValid = false;
+
     public TranslucentSectionSorter(int maxRegions) {
         int maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
         this.capacity = maxSections;
@@ -92,6 +103,20 @@ public final class TranslucentSectionSorter implements AutoCloseable {
                      RegionManager regionMgr,
                      me.cortex.vulkium.managers.SectionManager sectionMgr,
                      int cameraX, int cameraY, int cameraZ) {
+        // Sort-cache fast path. The sorted output is a pure function of (camera chunk pos,
+        // translucentVersion) — if neither has changed since the last call, the last frame's
+        // mapped-buffer contents are still valid. Bail out with no work and let `lastCount` /
+        // deviceAddress continue to point at the already-correct result. This dominates in
+        // stationary frames: the GPU reads the same list from the same BDA, the sort is a no-op,
+        // and translucentSort drops to ~2µs/frame (just the equality checks).
+        int version = sectionMgr.translucentVersion();
+        if (cacheValid
+                && cameraX == cachedCx
+                && cameraY == cachedCy
+                && cameraZ == cachedCz
+                && version == cachedVersion) {
+            return;
+        }
         int n = 0;
         var it = translucentKeys.longIterator();
         while (it.hasNext()) {
@@ -148,6 +173,14 @@ public final class TranslucentSectionSorter implements AutoCloseable {
         if (n > maxEntriesEverWritten) maxEntriesEverWritten = n;
         buffer.flush(0L, (long) (sentinelEnd + 1) * 4L);
         lastCount = n;
+
+        // Cache the key for the next frame's fast-path check. Only reached when the fast-path
+        // missed, so writing unconditionally here is correct.
+        cachedCx = cameraX;
+        cachedCy = cameraY;
+        cachedCz = cameraZ;
+        cachedVersion = version;
+        cacheValid = true;
     }
 
     @Override
