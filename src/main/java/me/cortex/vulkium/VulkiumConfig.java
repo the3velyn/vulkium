@@ -92,6 +92,17 @@ public final class VulkiumConfig {
      *  (ingest / region allocation / section ingest race). Default on; toggle for A/B only. */
     public boolean enableOpaqueDispatchList = true;
 
+    /** Diagnostic toggle — when false, SectionManager writes 0 into renderRanges.xyz so
+     *  task_common.glsl's populateTasks falls through to the unsigned-tail bin for EVERY
+     *  opaque quad (no face-direction cull). TerrainUploader still permutes the arena
+     *  into face-bin order, which is harmless — the unsigned bin covers the whole range.
+     *
+     *  <p>Use to isolate face-classification regressions: if flipping this to false makes
+     *  "close chunks missing" go away, the bug is in TerrainUploader.classifyQuadFace
+     *  (an axis's sign predicate wrong, or specific geometry falling into the wrong bin).
+     *  If still missing, the bug is unrelated to face binning. Default on. */
+    public boolean enableFaceBinCull = true;
+
     /** Max sections the render thread drains from the ingest queue per frame. Vulkium
      *  suppresses MC's own terrain draw, so any queued-but-not-yet-ingested section is an
      *  invisible chunk. High default (4096) avoids visible gaps on RD change / first join.

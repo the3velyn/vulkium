@@ -289,16 +289,27 @@ public final class SectionManager {
                         //   ranges.w[16:32] = starting offset (= 0; unsigned tail anchors at sum(faces))
                         //
                         // See TerrainUploader.classifyQuadFace for the winding → bin mapping.
-                        int[] fb = up.faceBinCounts;
-                        int posX = Math.min(fb[0], 0xFFFF); // east face
-                        int posZ = Math.min(fb[1], 0xFFFF); // south face
-                        int posY = Math.min(fb[2], 0xFFFF); // top
-                        int negX = Math.min(fb[3], 0xFFFF); // west face
-                        int negZ = Math.min(fb[4], 0xFFFF); // north face
-                        int negY = Math.min(fb[5], 0xFFFF); // bottom
-                        MemoryUtil.memPutInt(ptr + 16, posX | (posZ << 16));
-                        MemoryUtil.memPutInt(ptr + 20, posY | (negX << 16));
-                        MemoryUtil.memPutInt(ptr + 24, negZ | (negY << 16));
+                        if (me.cortex.vulkium.VulkiumConfig.get().enableFaceBinCull) {
+                            int[] fb = up.faceBinCounts;
+                            int posX = Math.min(fb[0], 0xFFFF); // east face
+                            int posZ = Math.min(fb[1], 0xFFFF); // south face
+                            int posY = Math.min(fb[2], 0xFFFF); // top
+                            int negX = Math.min(fb[3], 0xFFFF); // west face
+                            int negZ = Math.min(fb[4], 0xFFFF); // north face
+                            int negY = Math.min(fb[5], 0xFFFF); // bottom
+                            MemoryUtil.memPutInt(ptr + 16, posX | (posZ << 16));
+                            MemoryUtil.memPutInt(ptr + 20, posY | (negX << 16));
+                            MemoryUtil.memPutInt(ptr + 24, negZ | (negY << 16));
+                        } else {
+                            // Face-bin cull disabled — every opaque quad falls through to
+                            // the unsigned tail bin in populateTasks, which covers
+                            // [0, totalOpaque) regardless of bin sums. Arena permutation
+                            // stays but has no semantic effect: all quads emit every frame
+                            // regardless of camera direction.
+                            MemoryUtil.memPutInt(ptr + 16, 0);
+                            MemoryUtil.memPutInt(ptr + 20, 0);
+                            MemoryUtil.memPutInt(ptr + 24, 0);
+                        }
                         MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
                     }
                 }
