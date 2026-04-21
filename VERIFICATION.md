@@ -92,15 +92,20 @@ Return to title screen, then quit MC cleanly.
       may log recoverable warnings).
 - [ ] No trailing `[vulkium]` WARN or ERROR lines after world leave.
 
-## 6 — Regression comparison (optional)
+## 6 — Perf delta vs vanilla (required for release)
 
-Against a clean vanilla MC 26.2 instance (same profile, no vulkium):
+Same world, same spawn, same RD (16 and 32 chunks separately). Measure with F3 frame
+time panel over ~30s of standing-still.
 
-- [ ] At 16 chunks render distance, standing still, frame time is within 5 % of vanilla
-      (vulkium is observe-only today; regressions here mean our mixins cost more than
-      expected).
+- [ ] Standing-still FPS with vulkium enabled is ≥ 1.5× vanilla at 16-chunk RD.
+- [ ] Standing-still FPS with vulkium enabled is ≥ 1.5× vanilla at 32-chunk RD.
+- [ ] Toggle "Vulkium enabled" off in Video Settings → Vulkium Options, wait ~5s, toggle
+      back on. FPS returns to pre-toggle baseline within 2 s (no restart required).
 - [ ] `jstack` on both processes: vulkium's thread list shows only the expected additions
       (no rogue worker thread loops).
+
+Record the numbers in the release notes (GPU model, driver, vanilla-FPS, vulkium-FPS,
+ratio). Any ratio below 1.0× at standing still is a shipping blocker — something regressed.
 
 ## 7 — OpenGL backend fallback
 

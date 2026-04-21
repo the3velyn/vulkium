@@ -126,21 +126,13 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                     + "only. QUADS = full (cross-section + POV-driven per-section resort).",
                 cfg.translucencySortingLevel,
                 v -> cfg.translucencySortingLevel = v),
-            boolOption("Temporal coherence",
-                "Reuse visibility across frames when camera/chunks didn't move. Inert until the "
-                    + "HZB temporal-coherence pass lands.",
-                cfg.enableTemporalCoherence, v -> cfg.enableTemporalCoherence = v));
-
-        this.list.addSmall(
-            boolOption("Automatic memory",
-                "Auto-size the terrain arena from free VRAM at boot. Inert — vulkium currently uses "
-                    + "the fixed \"Terrain arena (MB)\" slider above.",
-                cfg.automaticMemory, v -> cfg.automaticMemory = v));
-
-        // NOTE: "Extra render distance" used to live here. Removed — vulkium now extends MC's
-        // own render-distance slider up to 128 via OptionsRenderDistanceMixin, so the user
-        // just moves the vanilla RD slider in Video Settings. Simpler, one fewer knob, and
-        // it works for both server-driven and client-driven distance logic consistently.
+            boolOption("Perf tracker",
+                "Per-phase CPU timers flushed to the log every ~2s. ~0.5% frame-time overhead "
+                    + "at 200+ FPS; disable for zero overhead on release builds.",
+                cfg.enablePerfTracker, v -> {
+                    cfg.enablePerfTracker = v;
+                    me.cortex.vulkium.diag.PerfTracker.setEnabled(v);
+                }));
     }
 
     @Override

@@ -2,7 +2,6 @@ package me.cortex.vulkium;
 
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
-import me.cortex.vulkium.config.StatisticsLoggingLevel;
 import me.cortex.vulkium.config.TranslucencySortingLevel;
 import net.fabricmc.loader.api.FabricLoader;
 import org.slf4j.Logger;
@@ -99,33 +98,10 @@ public final class VulkiumConfig {
      *  fog for vulkium's terrain pass without touching the shader variant. */
     public boolean renderFog = true;
 
-    /** Matches nvidium's {@code statistics_level}. Tracked but currently inert — F3 overlay
-     *  integration lands with V9. */
-    public StatisticsLoggingLevel statisticsLevel = StatisticsLoggingLevel.NONE;
-
-    /** Matches nvidium's {@code enable_temporal_coherence}. Inert until HZB temporal-coherence
-     *  pass lands (nvidium's 6-phase pipeline step 4 — vulkium currently runs phases 1-3). */
-    public boolean enableTemporalCoherence = false;
-
-    /** Matches nvidium's {@code async_bfs}. Inert — vulkium's visibility is GPU-driven via
-     *  task-shader culling, not a CPU BFS, so there's no async vs. sync tradeoff to expose. */
-    public boolean asyncBfs = false;
-
-    /** Matches nvidium's {@code automatic_memory}. Inert — vulkium currently uses a fixed
-     *  {@link #terrainArenaMb}. Auto-sizing based on {@code vmaGetHeapBudgets} is a follow-up. */
-    public boolean automaticMemory = false;
-
-    /** Matches nvidium's {@code max_geometry_memory}. Alias of {@link #terrainArenaMb} —
-     *  kept for config-file parity with nvidium users; the runtime reads {@link #terrainArenaMb}.
-     *  If you edit this value, also edit {@link #terrainArenaMb}. */
-    public int maxGeometryMemory = 256;
-
-    /** Legacy — used to hold nvidium's {@code extra_rd}. Vulkium now raises MC's own RD slider
-     *  max to 128 via {@code OptionsRenderDistanceMixin}, so users set render distance in the
-     *  vanilla slider directly. Field kept (defaults to 0 and reads nothing) purely so existing
-     *  config files don't blow up with GSON complaints. Safe to delete from {@code vulkium.json}. */
-    @Deprecated
-    public int extraRd = 0;
+    /** Master toggle for the render-thread per-phase timer. Disabling skips the two
+     *  nanoTime() calls per bracketed phase and the auto-flush log spam. Cost when enabled
+     *  is under 0.5% of frame time at 200+ FPS. */
+    public boolean enablePerfTracker = true;
 
     public static VulkiumConfig get() {
         if (INSTANCE == null) {
