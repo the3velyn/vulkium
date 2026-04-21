@@ -36,9 +36,9 @@ public abstract class ChunkSectionsToRenderMixin {
             cancellable = true)
     private void vulkium$suppressVanillaTerrain(ChunkSectionLayerGroup group, GpuSampler sampler,
                                                 CallbackInfo ci) {
-        // Tap Mojang's color-attachment format on first call so FrameDriver can build the
-        // SecondaryRecorder.InheritanceSpec with the real format (not a guess). Failure to match
-        // silently makes our secondary's draws produce nothing.
+        // Tap Mojang's color-attachment format on first call so FrameDriver's render pass
+        // opens with the real format (not a guess). Failure to match silently makes our
+        // draws produce nothing.
         if (me.cortex.vulkium.blaze3d.MojangColorFormat.get() == 0) {
             try {
                 GpuTextureView view = textureView();

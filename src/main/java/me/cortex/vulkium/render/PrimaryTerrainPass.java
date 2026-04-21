@@ -29,9 +29,9 @@ import java.util.Map;
  *       {@link PushDescriptor} before invoking {@code record}.</li>
  * </ul>
  *
- * <p>Uses dynamic rendering ({@code VK_KHR_dynamic_rendering}, core in 1.3). The caller supplies
- * a SECONDARY command buffer whose inheritance info matches {@link #COLOR_FORMAT} and
- * {@link #DEPTH_FORMAT}; see {@link me.cortex.vulkium.vk.SecondaryRecorder}.
+ * <p>Uses dynamic rendering ({@code VK_KHR_dynamic_rendering}, core in 1.3). The caller opens
+ * its own primary render pass via {@code vkCmdBeginRendering} with color/depth attachments
+ * matching {@link #COLOR_FORMAT} and {@link #DEPTH_FORMAT}, then invokes {@link #record}.
  */
 public final class PrimaryTerrainPass implements AutoCloseable {
 

@@ -23,8 +23,9 @@ import java.util.Set;
  *
  * <p>MC 26.1+ is deobfuscated and exposes {@code VulkanDevice} publicly. We do not need any
  * mixin to extract VK handles — we just cast {@code GpuDevice.backend} (field exposed via our
- * accesswidener). Frame-ordering hooks live in {@link FrameHooks}; command-buffer interception
- * mixins (if any are needed) live under {@code me.cortex.vulkium.mixin.blaze3d}.
+ * accesswidener). Per-frame ordering is driven by Fabric's {@code LevelRenderEvents} in
+ * {@link me.cortex.vulkium.render.FrameDriver}; command-buffer interception mixins (if any
+ * are needed) live under {@code me.cortex.vulkium.mixin.blaze3d}.
  */
 public final class MojangVulkanBridge {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/blaze3d");

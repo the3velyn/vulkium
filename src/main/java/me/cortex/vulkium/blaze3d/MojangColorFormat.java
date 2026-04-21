@@ -3,8 +3,8 @@ package me.cortex.vulkium.blaze3d;
 /**
  * Shared state for Mojang's captured main color-attachment VkFormat. Populated at first
  * {@code ChunkSectionsToRender.renderGroup} invocation by
- * {@code mixin.chunk.ChunkSectionsToRenderMixin}; consumed by {@code FrameDriver} when it
- * builds its {@code SecondaryRecorder.InheritanceSpec} so format matches Mojang's primary.
+ * {@code mixin.chunk.ChunkSectionsToRenderMixin}; read by {@code FrameDriver} for its
+ * own primary-command-buffer render pass so formats match Mojang's.
  *
  * <p>Mixin classes can't hold non-private static fields, hence this separate carrier.
  */
