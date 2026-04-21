@@ -266,39 +266,25 @@ public final class SectionManager {
                         MemoryUtil.memPutInt(ptr +  8,
                             0xF0 | syBits | ((translucentQuads & 0x3FFF) << 18));
                         MemoryUtil.memPutInt(ptr + 12, addr);
-                        // renderRanges.xyz: per-face-direction opaque quad counts, packed to
-                        // match task_common.glsl's populateTasks read order. TerrainUploader
-                        // has permuted opaque quads into
-                        // [+X][+Z][+Y][-X][-Z][-Y][unsigned] order in the arena; this write
-                        // tells populateTasks how many quads live in each bin so it can skip
-                        // 3-of-6 bins per section based on camera position relative to the
-                        // section.
+                        // renderRanges.xyz face-bin cull DISABLED — two consecutive attempts
+                        // (commits e320860 and 03a69d9) failed to produce a correct bin
+                        // mapping despite matching task_common.glsl's populateTasks emit
+                        // conditions and factoring in nvidium's (chunkX, chunkZ, chunkY)
+                        // header axis swap. User reports the same N-direction face gaps
+                        // persist after 03a69d9. Writing zeros to ranges.xyz lands every
+                        // opaque quad in the unsigned tail bin — populateTasks computes the
+                        // tail range as [0, totalOpaque), covering every quad exactly once
+                        // regardless of face direction. That is the pre-meshlet rendering
+                        // path; TerrainUploader's face-bin permutation in the arena stays
+                        // but is harmless (unsigned bin walks the full contiguous range).
                         //
-                        // CRITICAL: nvidium packs header chunk coords as (chunkX, chunkZ, chunkY)
-                        // with Y and Z swapped, so the task shader's relChunkPos.y is actually
-                        // rel-Z and relChunkPos.z is actually rel-Y. Bin semantics reflect this:
-                        //
-                        //   ranges.x[0:16]  = +X quad count (east  face, emit when relChunkPos.x ≤ 0)
-                        //   ranges.x[16:32] = +Z quad count (south face, emit when rel-Z ≤ 0)
-                        //   ranges.y[0:16]  = +Y quad count (top,        emit when rel-Y ≤ 0)
-                        //   ranges.y[16:32] = -X quad count (west  face, emit when rel-X ≥ 0)
-                        //   ranges.z[0:16]  = -Z quad count (north face, emit when rel-Z ≥ 0)
-                        //   ranges.z[16:32] = -Y quad count (bottom,     emit when rel-Y ≥ 0)
-                        //   ranges.w[0:16]  = total opaque (unsigned bin size computed as
-                        //                                   totalOpaque - sum(faces) in populateTasks)
-                        //   ranges.w[16:32] = starting offset (= 0; unsigned tail anchors at sum(faces))
-                        //
-                        // See TerrainUploader.classifyQuadFace for the winding → bin mapping.
-                        int[] fb = up.faceBinCounts;
-                        int posX = Math.min(fb[0], 0xFFFF); // east face
-                        int posZ = Math.min(fb[1], 0xFFFF); // south face
-                        int posY = Math.min(fb[2], 0xFFFF); // top
-                        int negX = Math.min(fb[3], 0xFFFF); // west face
-                        int negZ = Math.min(fb[4], 0xFFFF); // north face
-                        int negY = Math.min(fb[5], 0xFFFF); // bottom
-                        MemoryUtil.memPutInt(ptr + 16, posX | (posZ << 16));
-                        MemoryUtil.memPutInt(ptr + 20, posY | (negX << 16));
-                        MemoryUtil.memPutInt(ptr + 24, negZ | (negY << 16));
+                        // To diagnose: needs per-axis GPU probe (render each face-bin solid-
+                        // color and see which bin owns the quads that disappear under what
+                        // camera position). Not reviving without that evidence — reviving
+                        // with wrong mapping costs a client restart every time to verify.
+                        MemoryUtil.memPutInt(ptr + 16, 0);
+                        MemoryUtil.memPutInt(ptr + 20, 0);
+                        MemoryUtil.memPutInt(ptr + 24, 0);
                         MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
                     }
                 }
