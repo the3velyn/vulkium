@@ -9,10 +9,14 @@ import me.cortex.vulkium.render.Renderer;
 import me.cortex.vulkium.render.VisibilityTracker;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.Screenshot;
 import net.minecraft.network.chat.Component;
 import org.lwjgl.glfw.GLFW;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
 
 /**
  * Runtime diagnostic input. Polls GLFW directly rather than using Fabric's key-binding API
@@ -31,6 +35,18 @@ public final class VulkiumKeys {
     /** Edge-detect so held-down doesn't spam. */
     private static boolean dumpPrev = false;
 
+    // DEV_ONLY_SCREENSHOT_HOOK — remove before release.
+    // File-based screenshot trigger for remote (headless-Wayland) testing: the dev session
+    // is on a Linux + NVIDIA host reached over SSH from a machine without a GPU, so KDE's
+    // xdg-desktop-portal capture path isn't reliable. Instead, bash-side `touch
+    // /tmp/vulkium-screenshot` asks MC to screenshot via its own code path into
+    // `run/screenshots/`, which is transferable over scp. Checked every Nth tick to amortize
+    // the Files.exists syscall.
+    private static final Path SCREENSHOT_TRIGGER = Path.of("/tmp/vulkium-screenshot");
+    private static final int SCREENSHOT_POLL_PERIOD_TICKS = 5; // ~4 Hz at 20 tps
+    private static int screenshotTickCounter = 0;
+    // END DEV_ONLY_SCREENSHOT_HOOK
+
     private VulkiumKeys() {}
 
     public static void register() {
@@ -47,7 +63,41 @@ public final class VulkiumKeys {
             dump(mc);
         }
         dumpPrev = now;
+
+        // DEV_ONLY_SCREENSHOT_HOOK — remove before release.
+        if (++screenshotTickCounter >= SCREENSHOT_POLL_PERIOD_TICKS) {
+            screenshotTickCounter = 0;
+            maybeTakeTriggeredScreenshot(mc);
+        }
+        // END DEV_ONLY_SCREENSHOT_HOOK
     }
+
+    // DEV_ONLY_SCREENSHOT_HOOK — remove before release.
+    private static void maybeTakeTriggeredScreenshot(Minecraft mc) {
+        if (!Files.exists(SCREENSHOT_TRIGGER)) return;
+        // Delete first so a second touch (even if Screenshot.grab fails for this frame)
+        // leaves a clean trigger state. On delete failure, log and bail so we don't
+        // fire repeatedly on the same trigger.
+        try {
+            Files.deleteIfExists(SCREENSHOT_TRIGGER);
+        } catch (Exception e) {
+            LOGGER.warn("Could not delete screenshot trigger {}: {} — skipping",
+                SCREENSHOT_TRIGGER, e.getMessage());
+            return;
+        }
+        if (mc.gameRenderer == null || mc.gameRenderer.mainRenderTarget() == null) {
+            LOGGER.warn("Screenshot trigger fired but no mainRenderTarget available yet");
+            return;
+        }
+        try {
+            Screenshot.grab(mc.gameDirectory,
+                mc.gameRenderer.mainRenderTarget(),
+                msg -> LOGGER.info("[vulkium-ss] {}", msg.getString()));
+        } catch (Throwable t) {
+            LOGGER.warn("Screenshot.grab threw", t);
+        }
+    }
+    // END DEV_ONLY_SCREENSHOT_HOOK
 
     private static void dump(Minecraft mc) {
         VulkanDetect.ProbeResult probe = Vulkium.probe();

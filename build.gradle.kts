@@ -103,6 +103,16 @@ loom {
             appendProjectPathToConfigName = false
             ideConfigGenerated(true)
             runDir("run")
+            // DEV_ONLY_QUICKPLAY — remove before release.
+            // Skip title → singleplayer → worldlist clicks when testing over remote SSH
+            // (KDE Wayland capture portal flakes and ydotool mouse-move is unreliable on
+            // this host). World name matches run/saves/test/. Override with
+            // `-PquickPlay=<other>` or unset via `-PquickPlay=off`.
+            val quickPlay = (project.findProperty("quickPlay") as? String) ?: "test"
+            if (quickPlay != "off") {
+                programArgs("--quickPlaySingleplayer", quickPlay)
+            }
+            // END DEV_ONLY_QUICKPLAY
         }
     }
 }
