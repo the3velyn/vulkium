@@ -33,7 +33,7 @@ BOOT_WAIT="${BOOT_WAIT:-35}"
 LOOKAROUND_WAIT="${LOOKAROUND_WAIT:-8}"
 # Between each rotate-and-screenshot: let MC compile any newly-visible chunks and
 # let PerfTracker accrue a flush window or two for that view direction.
-SCREENSHOT_SETTLE="${SCREENSHOT_SETTLE:-3}"
+SCREENSHOT_SETTLE="${SCREENSHOT_SETTLE:-20}"
 # After the 4 screenshots, accumulate perf samples. 120s matches the "2 minutes" spec
 # and captures post-warmup stationary-frame behavior.
 PROFILE_WAIT="${PROFILE_WAIT:-120}"
