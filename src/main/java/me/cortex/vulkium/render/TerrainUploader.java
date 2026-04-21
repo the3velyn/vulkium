@@ -107,12 +107,12 @@ public final class TerrainUploader implements AutoCloseable {
      *  opaque and translucent, and — within the opaque range — the split across the 6
      *  axis-aligned face-direction bins plus an unsigned tail bin. Arena layout:
      *  <pre>
-     *    [addr                                    ] bin0 (-X)
-     *    [addr + bin[0]                           ] bin1 (-Y)
-     *    [addr + bin[0]+bin[1]                    ] bin2 (-Z)
-     *    [addr + sum(bin[0..2])                   ] bin3 (+X)
-     *    [addr + sum(bin[0..3])                   ] bin4 (+Y)
-     *    [addr + sum(bin[0..4])                   ] bin5 (+Z)
+     *    [addr                                    ] bin0 (+X east face)
+     *    [addr + bin[0]                           ] bin1 (+Y top)
+     *    [addr + bin[0]+bin[1]                    ] bin2 (+Z south face)
+     *    [addr + sum(bin[0..2])                   ] bin3 (-X west face)
+     *    [addr + sum(bin[0..3])                   ] bin4 (-Y bottom)
+     *    [addr + sum(bin[0..4])                   ] bin5 (-Z north face)
      *    [addr + sum(bin[0..5])                   ] unsigned tail (plants/cross-quads/non-aligned)
      *    [addr + opaqueQuadCount                  ] translucent
      *    [addr + opaqueQuadCount + translucentQuadCount) end
@@ -122,9 +122,10 @@ public final class TerrainUploader implements AutoCloseable {
         public final int addr;
         public final int opaqueQuadCount;
         public final int translucentQuadCount;
-        /** Per-face-direction quad counts in task_common.glsl's populateTasks read order:
-         *  [0]=-X, [1]=-Y, [2]=-Z, [3]=+X, [4]=+Y, [5]=+Z. Unsigned tail = opaqueQuadCount -
-         *  sum(faceBinCounts). */
+        /** Per-face-direction quad counts, in task_common.glsl's populateTasks read order
+         *  (which defines the bin semantics via the emit conditions):
+         *  [0]=+X east, [1]=+Y top, [2]=+Z south, [3]=-X west, [4]=-Y bottom, [5]=-Z north.
+         *  Unsigned tail size = opaqueQuadCount - sum(faceBinCounts). */
         public final int[] faceBinCounts;
         public UploadResult(int addr, int opaque, int translucent, int[] faceBinCounts) {
             this.addr = addr;
@@ -212,12 +213,12 @@ public final class TerrainUploader implements AutoCloseable {
             // Pass 1: non-TRANSLUCENT opaque layers get face-direction binning. Each axis-aligned
             // quad is classified by its outward face normal (±X, ±Y, ±Z); non-axis-aligned
             // quads (plant cross-geometry, slab/stair slopes, non-block shapes) land in an
-            // unsigned tail bin. Output order:
-            //   [-X][-Y][-Z][+X][+Y][+Z][unsigned]
-            // matching task_common.glsl's populateTasks bin read order. This unlocks a big
-            // backface meshlet-style cull in the task shader: the 3 face bins pointing AWAY
-            // from the camera get their bins skipped and no mesh workgroups dispatched for
-            // them — ~35% reduction in emitted opaque quads on typical scenes.
+            // unsigned tail bin. Output order, matching task_common.glsl's populateTasks
+            // bin read order (which defines bin semantics via the emit conditions):
+            //   [+X east][+Y top][+Z south][-X west][-Y bottom][-Z north][unsigned]
+            // This unlocks a big backface meshlet-style cull in the task shader: the 3 face
+            // bins pointing AWAY from the camera get skipped and no mesh workgroups dispatch
+            // for them — ~35% reduction in emitted opaque quads on typical scenes.
             //
             // Two-pass: classify quads across all non-translucent layers first (so we can
             // compute per-bin write cursors from the prefix sum), then repack into the right
@@ -498,31 +499,36 @@ public final class TerrainUploader implements AutoCloseable {
     /**
      * Classify an opaque quad into a face-direction bin.
      *
-     * <p>Return values match {@code terrain/task_common.glsl}'s populateTasks read order:
-     * <ul>
-     *   <li>0 — outward normal = -X</li>
-     *   <li>1 — outward normal = -Y</li>
-     *   <li>2 — outward normal = -Z</li>
-     *   <li>3 — outward normal = +X</li>
-     *   <li>4 — outward normal = +Y</li>
-     *   <li>5 — outward normal = +Z</li>
-     *   <li>6 — unsigned (plant cross-geometry, non-aligned slopes, anything else)</li>
-     * </ul>
+     * <p>MC uses a right-handed Y-up coordinate system: {@code +X = east, +Y = up,
+     * +Z = south}. Standard CCW-from-outside winding means the cross product
+     * {@code (v1-v0) × (v2-v0)} points along the outward face normal.
+     *
+     * <p>Bin semantics are DEFINED BY task_common.glsl's populateTasks emit conditions.
+     * Each bin is emitted when the camera sits on the side that can SEE the bin's
+     * outward face direction. Getting these bin labels backwards is what produced the
+     * "missing +X face quads when looking west" bug in the first draft — the labels
+     * below are the canonical ones:
+     *
+     * <table>
+     *   <tr><th>bin</th><th>task-shader condition</th><th>outward normal</th><th>face direction</th></tr>
+     *   <tr><td>0</td><td>{@code relChunkPos.x <= 0} (camera east of section)</td><td>+X</td><td>east face</td></tr>
+     *   <tr><td>1</td><td>{@code relChunkPos.y <= 0} (camera above section)</td><td>+Y</td><td>top</td></tr>
+     *   <tr><td>2</td><td>{@code relChunkPos.z <= 0} (camera south of section)</td><td>+Z</td><td>south face</td></tr>
+     *   <tr><td>3</td><td>{@code relChunkPos.x >= 0} (camera west of section)</td><td>-X</td><td>west face</td></tr>
+     *   <tr><td>4</td><td>{@code relChunkPos.y >= 0} (camera below section)</td><td>-Y</td><td>bottom</td></tr>
+     *   <tr><td>5</td><td>{@code relChunkPos.z >= 0} (camera north of section)</td><td>-Z</td><td>north face</td></tr>
+     *   <tr><td>6</td><td>always</td><td>n/a</td><td>unsigned tail (plants, cross-geometry)</td></tr>
+     * </table>
      *
      * <p>Classification: if all 4 quad corners share exactly one coordinate (X, Y, or Z),
-     * the face is axis-aligned. The sign of the face normal comes from the cross-product of
-     * two edge vectors projected onto that axis. For non-aligned quads (plants), the test
-     * falls through to the unsigned bin.
+     * the face is axis-aligned. The sign of the outward normal comes from the relevant
+     * cross-product component. Non-aligned quads (plants, fences, stair slopes) fall into
+     * bin 6 and render regardless of camera direction.
      *
-     * <p>Why exact float equality works: MC's chunk-build pipeline quantizes block-face
-     * corners to whole or half block positions stored as f32. For a +X face of a block at
-     * (x,y,z), all 4 corners have X = x+1.0f exactly. Equality holds. For a rotated
-     * slab/stair that rounds to the same grid, equality also holds. Cross-geometry (ferns,
-     * saplings) has corners at differing X values → fall-through.
-     *
-     * <p>Winding sign: derived empirically. If a face bin is wrong (visible symptom:
-     * approaching a wall from the culled direction makes the wall disappear), flip the
-     * corresponding sign predicate.
+     * <p>Why exact float equality works: MC quantizes block-face corners to whole or half
+     * block positions stored as f32. A +X face of a block at column x has all 4 corners'
+     * X component equal to x+1.0f exactly. Cross-geometry has corners at differing values
+     * on every axis → falls through to bin 6.
      */
     private static int classifyQuadFace(ByteBuffer src, int v0Off) {
         int v1 = v0Off + MC_VERTEX_STRIDE;
@@ -541,7 +547,8 @@ public final class TerrainUploader implements AutoCloseable {
             float z1 = src.getFloat(v1 + 8);
             float z2 = src.getFloat(v2 + 8);
             float nx = (y1 - y0) * (z2 - z0) - (z1 - z0) * (y2 - y0);
-            return nx > 0f ? 3 : 0;
+            // nx > 0 → outward +X → bin 0 (east face). nx < 0 → -X → bin 3 (west face).
+            return nx > 0f ? 0 : 3;
         }
 
         float y0 = src.getFloat(v0Off + 4);
@@ -553,7 +560,8 @@ public final class TerrainUploader implements AutoCloseable {
             float z1 = src.getFloat(v1 + 8);
             float z2 = src.getFloat(v2 + 8);
             float ny = (z1 - z0) * (x2 - x0) - (x1 - x0) * (z2 - z0);
-            return ny > 0f ? 4 : 1;
+            // ny > 0 → outward +Y (top) → bin 1. ny < 0 → -Y (bottom) → bin 4.
+            return ny > 0f ? 1 : 4;
         }
 
         float z0 = src.getFloat(v0Off + 8);
@@ -562,10 +570,11 @@ public final class TerrainUploader implements AutoCloseable {
         float z3 = src.getFloat(v3 + 8);
         if (z0 == z1 && z1 == z2 && z2 == z3) {
             float nz = (x1 - x0) * (y2 - y0) - (y1 - y0) * (x2 - x0);
-            return nz > 0f ? 5 : 2;
+            // nz > 0 → outward +Z (south) → bin 2. nz < 0 → -Z (north) → bin 5.
+            return nz > 0f ? 2 : 5;
         }
 
-        return 6; // unsigned
+        return 6; // unsigned tail (cross-geometry, rotated slopes, etc.)
     }
 
     /**

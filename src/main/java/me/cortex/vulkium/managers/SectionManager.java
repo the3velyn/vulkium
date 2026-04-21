@@ -267,29 +267,35 @@ public final class SectionManager {
                             0xF0 | syBits | ((translucentQuads & 0x3FFF) << 18));
                         MemoryUtil.memPutInt(ptr + 12, addr);
                         // renderRanges.xyz: per-face-direction opaque quad counts, packed to
-                        // match task_common.glsl's populateTasks read order. TerrainUploader
-                        // sorts opaque quads into [-X][-Y][-Z][+X][+Y][+Z][unsigned] buckets;
-                        // populateTasks then skips the 3 buckets whose outward normal points
-                        // AWAY from the camera, halving emitted opaque mesh workgroups on
-                        // typical scenes.
+                        // match task_common.glsl's populateTasks read order — which defines
+                        // bin semantics via its emit conditions. TerrainUploader has already
+                        // permuted opaque quads into [+X][+Y][+Z][-X][-Y][-Z][unsigned] order
+                        // in the arena; this write tells populateTasks how many quads live in
+                        // each bin so it can skip 3-of-6 bins per section based on camera
+                        // position relative to the section.
                         //
-                        //   ranges.x[0:16]  = -X quad count   ranges.x[16:32] = -Y quad count
-                        //   ranges.y[0:16]  = -Z quad count   ranges.y[16:32] = +X quad count
-                        //   ranges.z[0:16]  = +Y quad count   ranges.z[16:32] = +Z quad count
-                        //   ranges.w[0:16]  = total opaque (unsigned bin size = total - sum(faces),
-                        //                                   computed dynamically in populateTasks)
-                        //   ranges.w[16:32] = starting offset (0; unsigned tail anchors at
-                        //                                      sum(faces))
+                        //   ranges.x[0:16]  = +X quad count (east  face, emitted when relChunkPos.x ≤ 0)
+                        //   ranges.x[16:32] = +Y quad count (top,        emitted when relChunkPos.y ≤ 0)
+                        //   ranges.y[0:16]  = +Z quad count (south face, emitted when relChunkPos.z ≤ 0)
+                        //   ranges.y[16:32] = -X quad count (west  face, emitted when relChunkPos.x ≥ 0)
+                        //   ranges.z[0:16]  = -Y quad count (bottom,     emitted when relChunkPos.y ≥ 0)
+                        //   ranges.z[16:32] = -Z quad count (north face, emitted when relChunkPos.z ≥ 0)
+                        //   ranges.w[0:16]  = total opaque (unsigned bin size computed as
+                        //                                   totalOpaque - sum(faces) in populateTasks)
+                        //   ranges.w[16:32] = starting offset (= 0; unsigned tail anchors at sum(faces))
+                        //
+                        // See TerrainUploader.classifyQuadFace for the bin-semantic → face-
+                        // direction mapping (MC Y-up right-handed, +X east, +Z south).
                         int[] fb = up.faceBinCounts;
-                        int negX = Math.min(fb[0], 0xFFFF);
-                        int negY = Math.min(fb[1], 0xFFFF);
-                        int negZ = Math.min(fb[2], 0xFFFF);
-                        int posX = Math.min(fb[3], 0xFFFF);
-                        int posY = Math.min(fb[4], 0xFFFF);
-                        int posZ = Math.min(fb[5], 0xFFFF);
-                        MemoryUtil.memPutInt(ptr + 16, negX | (negY << 16));
-                        MemoryUtil.memPutInt(ptr + 20, negZ | (posX << 16));
-                        MemoryUtil.memPutInt(ptr + 24, posY | (posZ << 16));
+                        int posX = Math.min(fb[0], 0xFFFF); // east face
+                        int posY = Math.min(fb[1], 0xFFFF); // top
+                        int posZ = Math.min(fb[2], 0xFFFF); // south face
+                        int negX = Math.min(fb[3], 0xFFFF); // west face
+                        int negY = Math.min(fb[4], 0xFFFF); // bottom
+                        int negZ = Math.min(fb[5], 0xFFFF); // north face
+                        MemoryUtil.memPutInt(ptr + 16, posX | (posY << 16));
+                        MemoryUtil.memPutInt(ptr + 20, posZ | (negX << 16));
+                        MemoryUtil.memPutInt(ptr + 24, negY | (negZ << 16));
                         MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
                     }
                 }
