@@ -95,8 +95,17 @@ uint populateTasks(ivec3 relChunkPos, uvec4 ranges) {
     }
     fr += (ranges.z >> 16) & 0xFFFF;
 
-    //TODO(vulkium): Put unsigned quads at the beginning? Should be cheaper.
-    putBinData(idx, lastIndex, fr, fr + (ranges.w & 0xFFFF));
+    // Unsigned tail bin covers the span from fr (== sum of 6 face bins + starting offset)
+    // through startingOffset + totalOpaqueCount. `ranges.w & 0xFFFF` is the TOTAL opaque
+    // quad count (kept stable so translucent/task.glsl can use it as the translucent base
+    // offset) — the unsigned bin size therefore = total - sum(face bins). We compute the
+    // end directly from startingOffset + total so we don't carry the running sum around.
+    uint startingOffset = (ranges.w >> 16) & 0xFFFF;
+    uint totalOpaque = ranges.w & 0xFFFF;
+    uint unsignedEnd = startingOffset + totalOpaque;
+    if (fr < unsignedEnd) {
+        putBinData(idx, lastIndex, fr, unsignedEnd);
+    }
 
     payload.quadCount = lastIndex;
 

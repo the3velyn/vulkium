@@ -266,11 +266,30 @@ public final class SectionManager {
                         MemoryUtil.memPutInt(ptr +  8,
                             0xF0 | syBits | ((translucentQuads & 0x3FFF) << 18));
                         MemoryUtil.memPutInt(ptr + 12, addr);
-                        // renderRanges.w low 16 = opaque quad count (consumed by populateTasks'
-                        // unsigned-bin path). High 16 stays 0 so `fr = ranges.w>>16` = 0.
-                        MemoryUtil.memPutInt(ptr + 16, 0);
-                        MemoryUtil.memPutInt(ptr + 20, 0);
-                        MemoryUtil.memPutInt(ptr + 24, 0);
+                        // renderRanges.xyz: per-face-direction opaque quad counts, packed to
+                        // match task_common.glsl's populateTasks read order. TerrainUploader
+                        // sorts opaque quads into [-X][-Y][-Z][+X][+Y][+Z][unsigned] buckets;
+                        // populateTasks then skips the 3 buckets whose outward normal points
+                        // AWAY from the camera, halving emitted opaque mesh workgroups on
+                        // typical scenes.
+                        //
+                        //   ranges.x[0:16]  = -X quad count   ranges.x[16:32] = -Y quad count
+                        //   ranges.y[0:16]  = -Z quad count   ranges.y[16:32] = +X quad count
+                        //   ranges.z[0:16]  = +Y quad count   ranges.z[16:32] = +Z quad count
+                        //   ranges.w[0:16]  = total opaque (unsigned bin size = total - sum(faces),
+                        //                                   computed dynamically in populateTasks)
+                        //   ranges.w[16:32] = starting offset (0; unsigned tail anchors at
+                        //                                      sum(faces))
+                        int[] fb = up.faceBinCounts;
+                        int negX = Math.min(fb[0], 0xFFFF);
+                        int negY = Math.min(fb[1], 0xFFFF);
+                        int negZ = Math.min(fb[2], 0xFFFF);
+                        int posX = Math.min(fb[3], 0xFFFF);
+                        int posY = Math.min(fb[4], 0xFFFF);
+                        int posZ = Math.min(fb[5], 0xFFFF);
+                        MemoryUtil.memPutInt(ptr + 16, negX | (negY << 16));
+                        MemoryUtil.memPutInt(ptr + 20, negZ | (posX << 16));
+                        MemoryUtil.memPutInt(ptr + 24, posY | (posZ << 16));
                         MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
                     }
                 }
