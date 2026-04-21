@@ -79,17 +79,22 @@ public final class PerfTracker {
         maybeFlush();
     }
 
-    /** Look up or insert a slot for {@code phase} via identity-hash + linear probe. String
-     *  interning by the JVM keeps identity hashes stable for literal names used by callers. */
+    /** Look up or insert a slot for {@code phase} via content-hash + linear probe. Earlier
+     *  versions used {@code System.identityHashCode} + {@code ==} which was ~5ns faster for
+     *  string-literal callers but silently miscounted when a caller passed dynamically
+     *  concatenated names (e.g. {@code "gpu." + phase} from {@link GpuTimerPool}): each
+     *  concat produced a new String identity, probed to different slots, and samples ended
+     *  up summed into whichever slot first collided. Content hashing makes every semantically
+     *  equal name land in the same slot regardless of instance identity. */
     private static int findSlot(String phase) {
-        int h = System.identityHashCode(phase) & (CAP - 1);
+        int h = phase.hashCode() & (CAP - 1);
         for (int probes = 0; probes < CAP; probes++) {
             int slot = (h + probes) & (CAP - 1);
             if (names[slot] == null) {
                 names[slot] = phase;
                 return slot;
             }
-            if (names[slot] == phase) return slot;
+            if (names[slot] == phase || names[slot].equals(phase)) return slot;
         }
         // Table full — drop sample. Should not happen with CAP=64 and <<64 distinct phases.
         return 0;
