@@ -11,6 +11,7 @@
     "chunk.RenderSectionMixin",
     "chunk.RenderSectionResortMixin",
     "chunk.ChunkSectionsToRenderMixin",
+    "chunk.LevelRendererPrepareChunkRendersMixin",
     "chunk.LevelRendererAllChangedMixin",
     "gui.OptionsRenderDistanceMixin",
     "gui.VideoSettingsScreenMixin",
