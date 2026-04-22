@@ -17,6 +17,24 @@ import java.nio.ByteBuffer;
  * <p>Offsets computed from std140 rules: mat4 is 64 bytes 16-aligned; vec4/ivec4 is 16 bytes
  * 16-aligned; 64-bit buffer-reference pointers are 8 bytes 8-aligned. Trailing scalars
  * are packed in declared order with std140 padding.
+ *
+ * <p><b>Ring buffer, not a single slot.</b> The CPU rewrites this UBO every frame (full
+ * rewrite in {@code prepareFrame} and again mid-frame via {@code flushMvp} after bob +
+ * distortion finalize). With {@code MAX_SUBMITS_IN_FLIGHT=2}, frame N+1's CPU writes could
+ * land on the same bytes an in-flight frame-N submit is still reading via its push-descriptor
+ * UBO binding — a WAR race with no synchronization. Same hazard class as
+ * {@link OpaqueDispatchList} / {@link TranslucentSectionSorter}; same fix. Symptom on NVIDIA
+ * Windows: ~10s of correct rendering, then a sudden GPU hang surfacing as MC's
+ * VulkanCommandEncoder 5s semaphore timeout. Linux's driver serializes the hazard; Windows
+ * walks off the end.
+ *
+ * <p>Three slots: current frame + up to {@code MAX_SUBMITS_IN_FLIGHT=2} prior frames still
+ * reading. Slot rotation happens once per frame in {@link #rotate()}; all setters +
+ * {@link #flush()}/{@link #flushMvp()} after that target the new slot. Consumers that hold
+ * a {@code buffer()} or {@code deviceAddress()} handle must re-resolve it each frame — the
+ * underlying VkBuffer changes when the slot rotates. All current consumers
+ * ({@link PrimaryTerrainPass#record}, {@link RegionCuller}, {@link SectionCuller}) already
+ * call {@code sceneUniform.buffer().handle()} at record time, so the rotation is transparent.
  */
 public final class SceneUniform implements AutoCloseable {
 
@@ -52,25 +70,53 @@ public final class SceneUniform implements AutoCloseable {
     /** Round up to 16-byte multiple for UBO binding. Ptr at 240 + 8 bytes = 248 → pad to 256. */
     public static final int SCENE_UBO_SIZE                 = 256;
 
-    private final StagingBuffer buffer;
-    private final ByteBuffer view;
+    /** Matches Mojang's {@code MAX_SUBMITS_IN_FLIGHT=2} plus one for the frame being written.
+     *  Same constant as {@link OpaqueDispatchList#RING_SLOTS} / {@code TranslucentSectionSorter}
+     *  — if Mojang ever bumps the in-flight cap, all three must move together. */
+    private static final int RING_SLOTS = 3;
+
+    private final StagingBuffer[] buffers = new StagingBuffer[RING_SLOTS];
+    private final ByteBuffer[] views = new ByteBuffer[RING_SLOTS];
+    /** Which ring slot CURRENT writes target. Callers access {@code buffer()} +
+     *  {@code deviceAddress()} for THIS slot; the GPU reads it via the push-descriptor
+     *  UBO binding recorded while this slot is current. */
+    private int currentSlot = 0;
+    /** Frame counter; incremented on every {@link #rotate()} call. Mod RING_SLOTS gives the
+     *  next slot to write into. */
+    private long frameCounter = 0L;
 
     public SceneUniform() {
-        // StagingBuffer is host-visible + persistently mapped. Using it for the scene UBO is
-        // right because the CPU rewrites most fields every frame.
-        this.buffer = StagingBuffer.allocate(SCENE_UBO_SIZE);
-        this.view = buffer.mapped();
+        // Three host-visible, persistently-mapped UBO slots. Each 256B × 3 = 768B — negligible
+        // memory cost vs. the hazard class it fixes.
+        for (int s = 0; s < RING_SLOTS; s++) {
+            buffers[s] = StagingBuffer.allocate(SCENE_UBO_SIZE);
+            views[s] = buffers[s].mapped();
+        }
     }
 
-    public StagingBuffer buffer() { return buffer; }
-    public long deviceAddress() { return buffer.deviceAddress(); }
+    /** Advance to the next ring slot. Must be called ONCE per frame, BEFORE any setters,
+     *  flush, or {@code buffer()}/{@code deviceAddress()} access for this frame. Safe to
+     *  call without subsequent writes — the slot's contents from 3 frames ago are still
+     *  present and stale, so the caller is responsible for writing fresh data before the
+     *  next draw binds this slot. In practice {@link Renderer#prepareFrame} does a full
+     *  rewrite every frame, so the stale contents are always overwritten before use. */
+    public void rotate() {
+        currentSlot = (int) ((frameCounter++) % RING_SLOTS);
+    }
+
+    /** The current-slot's staging buffer. Consumers must call this at record time so the
+     *  returned handle matches the slot the CPU is currently writing — caching the handle
+     *  across frames defeats the ring. */
+    public StagingBuffer buffer() { return buffers[currentSlot]; }
+    public long deviceAddress() { return buffers[currentSlot].deviceAddress(); }
 
     public SceneUniform mvp(Matrix4f m) {
-        m.get(OFFSET_MVP, view);
+        m.get(OFFSET_MVP, views[currentSlot]);
         return this;
     }
 
     public SceneUniform chunkPosition(int x, int y, int z, int w) {
+        ByteBuffer view = views[currentSlot];
         view.putInt(OFFSET_CHUNK_POSITION,       x);
         view.putInt(OFFSET_CHUNK_POSITION +  4,  y);
         view.putInt(OFFSET_CHUNK_POSITION +  8,  z);
@@ -79,6 +125,7 @@ public final class SceneUniform implements AutoCloseable {
     }
 
     public SceneUniform subchunkOffset(float x, float y, float z, float w) {
+        ByteBuffer view = views[currentSlot];
         view.putFloat(OFFSET_SUBCHUNK_OFFSET,       x);
         view.putFloat(OFFSET_SUBCHUNK_OFFSET +  4,  y);
         view.putFloat(OFFSET_SUBCHUNK_OFFSET +  8,  z);
@@ -87,6 +134,7 @@ public final class SceneUniform implements AutoCloseable {
     }
 
     public SceneUniform fogColour(float r, float g, float b, float a) {
+        ByteBuffer view = views[currentSlot];
         view.putFloat(OFFSET_FOG_COLOUR,       r);
         view.putFloat(OFFSET_FOG_COLOUR +  4,  g);
         view.putFloat(OFFSET_FOG_COLOUR +  8,  b);
@@ -94,21 +142,22 @@ public final class SceneUniform implements AutoCloseable {
         return this;
     }
 
-    public SceneUniform regionIndicesPtr(long ptr)      { view.putLong(OFFSET_REGION_INDICES_PTR, ptr);      return this; }
-    public SceneUniform regionDataPtr(long ptr)         { view.putLong(OFFSET_REGION_DATA_PTR, ptr);         return this; }
-    public SceneUniform sectionDataPtr(long ptr)        { view.putLong(OFFSET_SECTION_DATA_PTR, ptr);        return this; }
-    public SceneUniform regionVisibilityPtr(long ptr)   { view.putLong(OFFSET_REGION_VISIBILITY_PTR, ptr);   return this; }
-    public SceneUniform sectionVisibilityPtr(long ptr)  { view.putLong(OFFSET_SECTION_VISIBILITY_PTR, ptr);  return this; }
-    public SceneUniform terrainCmdPtr(long ptr)         { view.putLong(OFFSET_TERRAIN_CMD_PTR, ptr);         return this; }
-    public SceneUniform translucencyCmdPtr(long ptr)    { view.putLong(OFFSET_TRANSLUCENCY_CMD_PTR, ptr);    return this; }
-    public SceneUniform sortingRegionListPtr(long ptr)  { view.putLong(OFFSET_SORTING_REGION_LIST_PTR, ptr); return this; }
-    public SceneUniform terrainDataPtr(long ptr)        { view.putLong(OFFSET_TERRAIN_DATA_PTR, ptr);        return this; }
-    public SceneUniform transformationArrPtr(long ptr)  { view.putLong(OFFSET_TRANSFORMATION_ARR_PTR, ptr);  return this; }
-    public SceneUniform originArrPtr(long ptr)          { view.putLong(OFFSET_ORIGIN_ARR_PTR, ptr);          return this; }
-    public SceneUniform statisticsPtr(long ptr)         { view.putLong(OFFSET_STATISTICS_PTR, ptr);          return this; }
-    public SceneUniform opaqueDispatchListPtr(long ptr) { view.putLong(OFFSET_OPAQUE_DISPATCH_LIST_PTR, ptr); return this; }
+    public SceneUniform regionIndicesPtr(long ptr)      { views[currentSlot].putLong(OFFSET_REGION_INDICES_PTR, ptr);      return this; }
+    public SceneUniform regionDataPtr(long ptr)         { views[currentSlot].putLong(OFFSET_REGION_DATA_PTR, ptr);         return this; }
+    public SceneUniform sectionDataPtr(long ptr)        { views[currentSlot].putLong(OFFSET_SECTION_DATA_PTR, ptr);        return this; }
+    public SceneUniform regionVisibilityPtr(long ptr)   { views[currentSlot].putLong(OFFSET_REGION_VISIBILITY_PTR, ptr);   return this; }
+    public SceneUniform sectionVisibilityPtr(long ptr)  { views[currentSlot].putLong(OFFSET_SECTION_VISIBILITY_PTR, ptr);  return this; }
+    public SceneUniform terrainCmdPtr(long ptr)         { views[currentSlot].putLong(OFFSET_TERRAIN_CMD_PTR, ptr);         return this; }
+    public SceneUniform translucencyCmdPtr(long ptr)    { views[currentSlot].putLong(OFFSET_TRANSLUCENCY_CMD_PTR, ptr);    return this; }
+    public SceneUniform sortingRegionListPtr(long ptr)  { views[currentSlot].putLong(OFFSET_SORTING_REGION_LIST_PTR, ptr); return this; }
+    public SceneUniform terrainDataPtr(long ptr)        { views[currentSlot].putLong(OFFSET_TERRAIN_DATA_PTR, ptr);        return this; }
+    public SceneUniform transformationArrPtr(long ptr)  { views[currentSlot].putLong(OFFSET_TRANSFORMATION_ARR_PTR, ptr);  return this; }
+    public SceneUniform originArrPtr(long ptr)          { views[currentSlot].putLong(OFFSET_ORIGIN_ARR_PTR, ptr);          return this; }
+    public SceneUniform statisticsPtr(long ptr)         { views[currentSlot].putLong(OFFSET_STATISTICS_PTR, ptr);          return this; }
+    public SceneUniform opaqueDispatchListPtr(long ptr) { views[currentSlot].putLong(OFFSET_OPAQUE_DISPATCH_LIST_PTR, ptr); return this; }
 
     public SceneUniform screenSize(float w, float h) {
+        ByteBuffer view = views[currentSlot];
         view.putFloat(OFFSET_SCREEN_SIZE,     w);
         view.putFloat(OFFSET_SCREEN_SIZE + 4, h);
         return this;
@@ -120,6 +169,7 @@ public final class SceneUniform implements AutoCloseable {
      *  {@code terrain/fog.glsl#computeFogLerp}. Source is {@code cam.fogData} from MC's
      *  {@link net.minecraft.client.renderer.fog.FogRenderer}. */
     public SceneUniform fog(float envStart, float envEnd, float rdStart, float rdEnd) {
+        ByteBuffer view = views[currentSlot];
         view.putFloat(OFFSET_FOG_ENV_START,    envStart);
         view.putFloat(OFFSET_FOG_ENV_END,      envEnd);
         view.putFloat(OFFSET_FOG_RENDER_START, rdStart);
@@ -128,29 +178,35 @@ public final class SceneUniform implements AutoCloseable {
     }
 
     public SceneUniform regionCount(int count) {
-        view.putShort(OFFSET_REGION_COUNT, (short) count);
+        views[currentSlot].putShort(OFFSET_REGION_COUNT, (short) count);
         return this;
     }
 
     public SceneUniform frameId(int id) {
-        view.put(OFFSET_FRAME_ID, (byte) id);
+        views[currentSlot].put(OFFSET_FRAME_ID, (byte) id);
         return this;
     }
 
-    /** Flush host writes to the GPU's view. Call once per frame after all setters. */
+    /** Flush host writes to the GPU's view for the CURRENT slot. Call once per frame after
+     *  all setters. */
     public void flush() {
-        buffer.flush(0, SCENE_UBO_SIZE);
+        buffers[currentSlot].flush(0, SCENE_UBO_SIZE);
     }
 
-    /** Narrow flush covering just the MVP matrix range (bytes 0..64). Use for mid-frame
-     *  refreshes that only update MVP (per-draw bob/distortion composite) — avoids re-
-     *  flushing the entire 240-byte UBO when everything else is already current. */
+    /** Narrow flush covering just the MVP matrix range (bytes 0..64) on the CURRENT slot.
+     *  Used for mid-frame MVP refreshes (per-draw bob/distortion composite) after the
+     *  full flush has already covered the rest of the UBO. */
     public void flushMvp() {
-        buffer.flush(OFFSET_MVP, 64);
+        buffers[currentSlot].flush(OFFSET_MVP, 64);
     }
 
     @Override
     public void close() {
-        buffer.close();
+        for (int s = 0; s < RING_SLOTS; s++) {
+            if (buffers[s] != null) {
+                try { buffers[s].close(); } catch (Throwable ignored) { /* swallow */ }
+                buffers[s] = null;
+            }
+        }
     }
 }

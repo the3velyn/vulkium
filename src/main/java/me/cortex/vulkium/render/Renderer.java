@@ -93,6 +93,13 @@ public final class Renderer {
         ensureInit();
         if (sceneUniform == null) return;
 
+        // Advance the scene-UBO ring slot BEFORE any setters. See SceneUniform javadoc for
+        // why this is triple-buffered (cross-frame WAR race with in-flight push-descriptor
+        // UBO reads). The full rewrite below overwrites this slot's stale contents from 3
+        // frames ago; the mid-frame flushMvp calls in FrameDriver.onAfterOpaqueTerrain /
+        // onAfterTranslucentTerrain also target THIS slot.
+        sceneUniform.rotate();
+
         LevelRenderState state = ctx.levelState();
         if (state == null || state.cameraRenderState == null) return;
         CameraRenderState cam = state.cameraRenderState;
