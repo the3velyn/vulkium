@@ -13,6 +13,7 @@
     "chunk.ChunkSectionsToRenderMixin",
     "chunk.LevelRendererPrepareChunkRendersMixin",
     "chunk.LevelRendererAllChangedMixin",
+    "chunk.LevelExtractorAccessor",
     "gui.VideoSettingsScreenMixin",
     "camera.GameRendererBobMixin",
     "camera.LevelRendererProjMixin"

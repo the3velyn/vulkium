@@ -494,20 +494,22 @@ public final class SectionManager {
      * <p>Two criteria, matching nvidium's three modes:
      * <ul>
      *   <li>{@code 256+} — <b>Keep All</b>: no-op. Never evict. Memory-unbounded.</li>
-     *   <li>{@code 32} — <b>Vanilla</b>: evict only sections MC itself has unloaded
-     *       ({@code ClientLevel.hasChunk(sx, sz) == false}). Never uses the radius, so
-     *       vulkium's set == MC's set.</li>
-     *   <li>Intermediate {@code (32, 256)} — evict if <b>either</b> the section is outside
-     *       a square of radius {@code keepDistance+4} around the camera, <b>or</b> MC has
-     *       already dropped it. Keeps more than vanilla but still bounded.</li>
+     *   <li>{@code 32} — <b>Vanilla</b>: evict sections outside a radius of
+     *       {@code keepDistance+4 = 36} chunks around the camera, OR whose owning chunk
+     *       MC has already unloaded. Matches vanilla MC's default render distance
+     *       envelope.</li>
+     *   <li>Intermediate {@code (32, 256)} — same logic with a larger radius. Keeps more
+     *       than vanilla but still bounded.</li>
      * </ul>
      *
-     * <p><b>Regression fix (2026-04-20):</b> the prior version of this method evicted purely
-     * by radius, which threw away sections MC still had loaded. When the player walked back
-     * toward those sections MC never re-ran {@code SectionCompiler.compile} (no dirty flag
-     * fired) so they stayed invisible forever. Delegating eviction to MC's hasChunk check
-     * means sections only leave vulkium when MC has already unloaded them; re-approaching
-     * then re-loads via MC's normal chunk-load → compile → our capture path.
+     * <p><b>How the "come back and it's still visible" case works:</b> when eviction fires
+     * via the radius (not via MC unloading the chunk), we also call
+     * {@code SectionUpdateTracker.setDirty(sx, sy, sz, true)} on MC's extractor. MC's
+     * section-compile pipeline then re-queues a compile next time that section becomes
+     * visible — which re-fires our capture path and the entry lands back in {@code live}.
+     * Without this, MC's warm {@code SectionMesh} cache makes it think the section is
+     * already ready, no compile fires, and our live map never repopulates → permanent
+     * hole. This was the 2026-04-20 regression.
      *
      * <p>Walks all live keys via a one-shot array snapshot (map-walk + evict would ConcurrentMod).
      * Budget-bound by {@code maxEvictPerCall}.
@@ -517,31 +519,62 @@ public final class SectionManager {
     public int sweepKeepDistance(int cameraChunkX, int cameraChunkZ,
                                  int keepDistance, int maxEvictPerCall) {
         if (keepDistance >= 256) return 0;
-        final boolean useRadius = keepDistance > 32;
+        // Radius check now fires at every setting below "Keep All" — the previous
+        // ">32 only" gate left "Vanilla" (32) functionally identical to "Keep All" on the
+        // integrated server (where ClientLevel.hasChunk stays true for chunks the server
+        // cooperates to keep loaded). Evicting at radius + marking-dirty below gives MC a
+        // path to re-compile when the player returns.
         final int radius = keepDistance + 4;
         final int radiusSq = radius * radius;
         net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
         net.minecraft.client.multiplayer.ClientLevel level = mc != null ? mc.level : null;
         if (level == null) return 0;
 
+        // Resolve MC's SectionUpdateTracker once per sweep — LevelExtractor holds it
+        // privately, so we reach it via an accessor mixin. Null-guarded: during early
+        // boot / world-transition, levelExtractor may not be attached yet; skip setDirty
+        // in that case and rely on MC's own chunk-load path to re-compile once it spins up.
+        net.minecraft.client.SectionUpdateTracker tracker = null;
+        try {
+            if (mc != null && mc.levelExtractor != null) {
+                tracker = ((me.cortex.vulkium.mixin.chunk.LevelExtractorAccessor)
+                    (Object) mc.levelExtractor).vulkium$getSectionUpdateTracker();
+            }
+        } catch (Throwable ignored) {
+            // Accessor not wired or cast failed — proceed without the re-request signal.
+        }
+
         long[] keys = live.keySet().toLongArray();
         int evicted = 0;
         for (long key : keys) {
             if (evicted >= maxEvictPerCall) break;
             int sx = net.minecraft.core.SectionPos.x(key);
+            int sy = net.minecraft.core.SectionPos.y(key);
             int sz = net.minecraft.core.SectionPos.z(key);
-            boolean outOfRadius = false;
-            if (useRadius) {
-                int dx = sx - cameraChunkX;
-                int dz = sz - cameraChunkZ;
-                outOfRadius = (long) dx * dx + (long) dz * dz > radiusSq;
-            }
+            int dx = sx - cameraChunkX;
+            int dz = sz - cameraChunkZ;
+            boolean outOfRadius = (long) dx * dx + (long) dz * dz > radiusSq;
             // MC's client-side chunk presence. Returns false for chunks that were unloaded
             // (fell out of the server's streaming radius) or never loaded.
             boolean mcHasChunk = level.hasChunk(sx, sz);
             if (outOfRadius || !mcHasChunk) {
                 evict(key);
                 evicted++;
+                // Re-request compile when the player approaches again. MC won't re-run
+                // SectionCompiler for chunks whose SectionMesh cache is still warm — so
+                // without this, walking back toward an evicted section leaves a permanent
+                // hole (regression documented in the old code's 2026-04-20 comment).
+                // setDirty with neighborChange=true covers both the single-section dirty
+                // and its immediate-neighbor invalidations that MC uses to know when to
+                // re-run occlusion + compile.
+                if (tracker != null && mcHasChunk) {
+                    try {
+                        tracker.setDirty(sx, sy, sz, true);
+                    } catch (Throwable ignored) {
+                        // Defensive — if setDirty itself races with a world-change, the
+                        // caller's allChanged path will catch up.
+                    }
+                }
             }
         }
         return evicted;

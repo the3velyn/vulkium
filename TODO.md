@@ -32,20 +32,6 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   HZB → region-cull → task-shader pipeline, or the depth-tap layout transition fighting
   Mojang's subsequent depth writes for hand-item rendering).
 
-- **`regionKeepDistance=32` ("Vanilla") behaves identically to "Keep All".** The GUI
-  label says 32 should evict sections whose owning chunk has been unloaded (vanilla
-  behavior), but in practice vulkium never evicts at that setting. Likely a bug in the
-  sweep path's threshold check or in how the unload signal reaches
-  `SectionManager.sweepKeepDistance`. Acceptance: setting to 32, flying far, then
-  returning to origin leaves `SectionManager.live.size()` well below the "keep all"
-  high-water mark.
-
-- **Translucent geometry outlives opaque at far distances (>~48 chunks).** Past the
-  opaque eviction radius, opaque blocks unload but the translucent layer from the same
-  chunk stays rendered — visually reads as "floating glass/water". Expected: opaque
-  should stay as long as translucent, OR translucent should evict with opaque. The
-  mismatch suggests the eviction path treats the two layers separately; the translucent
-  branch isn't seeing the same distance test.
 
 ## Feature gaps
 
