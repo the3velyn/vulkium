@@ -266,50 +266,24 @@ public final class SectionManager {
                         MemoryUtil.memPutInt(ptr +  8,
                             0xF0 | syBits | ((translucentQuads & 0x3FFF) << 18));
                         MemoryUtil.memPutInt(ptr + 12, addr);
-                        // renderRanges.xyz: per-face-direction opaque quad counts, packed to
-                        // match task_common.glsl's populateTasks read order. TerrainUploader
-                        // has permuted opaque quads into
-                        // [+X][+Z][+Y][-X][-Z][-Y][unsigned] order in the arena; this write
-                        // tells populateTasks how many quads live in each bin so it can skip
-                        // 3-of-6 bins per section based on camera position relative to the
-                        // section.
-                        //
-                        // CRITICAL: nvidium packs header chunk coords as (chunkX, chunkZ, chunkY)
-                        // with Y and Z swapped, so the task shader's relChunkPos.y is actually
-                        // rel-Z and relChunkPos.z is actually rel-Y. Bin semantics reflect this:
-                        //
-                        //   ranges.x[0:16]  = +X quad count (east  face, emit when relChunkPos.x ≤ 0)
-                        //   ranges.x[16:32] = +Z quad count (south face, emit when rel-Z ≤ 0)
-                        //   ranges.y[0:16]  = +Y quad count (top,        emit when rel-Y ≤ 0)
-                        //   ranges.y[16:32] = -X quad count (west  face, emit when rel-X ≥ 0)
-                        //   ranges.z[0:16]  = -Z quad count (north face, emit when rel-Z ≥ 0)
-                        //   ranges.z[16:32] = -Y quad count (bottom,     emit when rel-Y ≥ 0)
-                        //   ranges.w[0:16]  = total opaque (unsigned bin size computed as
-                        //                                   totalOpaque - sum(faces) in populateTasks)
-                        //   ranges.w[16:32] = starting offset (= 0; unsigned tail anchors at sum(faces))
-                        //
-                        // See TerrainUploader.classifyQuadFace for the winding → bin mapping.
-                        if (me.cortex.vulkium.VulkiumConfig.get().enableFaceBinCull) {
-                            int[] fb = up.faceBinCounts;
-                            int posX = Math.min(fb[0], 0xFFFF); // east face
-                            int posZ = Math.min(fb[1], 0xFFFF); // south face
-                            int posY = Math.min(fb[2], 0xFFFF); // top
-                            int negX = Math.min(fb[3], 0xFFFF); // west face
-                            int negZ = Math.min(fb[4], 0xFFFF); // north face
-                            int negY = Math.min(fb[5], 0xFFFF); // bottom
-                            MemoryUtil.memPutInt(ptr + 16, posX | (posZ << 16));
-                            MemoryUtil.memPutInt(ptr + 20, posY | (negX << 16));
-                            MemoryUtil.memPutInt(ptr + 24, negZ | (negY << 16));
-                        } else {
-                            // Face-bin cull disabled — every opaque quad falls through to
-                            // the unsigned tail bin in populateTasks, which covers
-                            // [0, totalOpaque) regardless of bin sums. Arena permutation
-                            // stays but has no semantic effect: all quads emit every frame
-                            // regardless of camera direction.
-                            MemoryUtil.memPutInt(ptr + 16, 0);
-                            MemoryUtil.memPutInt(ptr + 20, 0);
-                            MemoryUtil.memPutInt(ptr + 24, 0);
-                        }
+                        // Meshlet face-bin cull TEMPORARILY DISABLED pending investigation of
+                        // a Windows / NVIDIA 581.04 / RTX 3060 GPU hang: with per-face counts
+                        // populated in renderRanges.xyz the task shader's populateTasks emits
+                        // up to 7 bins per section (6 face + unsigned tail) and the mesh
+                        // shader's getOffset linear-search widens accordingly. Within ~2k
+                        // sections ingested the Windows driver stops signaling the frame
+                        // semaphore — MC's submit times out after 5 s. Not reproducible on
+                        // Linux/RTX 3060. Disabling the xyz write (leaving total opaque in
+                        // ranges.w) restores pre-meshlet GPU command shape: populateTasks
+                        // falls through to a single unsigned bin covering [0, totalOpaque),
+                        // so every quad still renders. TerrainUploader's classification and
+                        // arena permutation into [+X][+Z][+Y][-X][-Z][-Y][unsigned] order
+                        // are harmless (the unsigned bin spans the whole range regardless of
+                        // internal ordering) and are kept in place so re-enabling is a
+                        // one-hunk change once the root cause is pinned down.
+                        MemoryUtil.memPutInt(ptr + 16, 0);
+                        MemoryUtil.memPutInt(ptr + 20, 0);
+                        MemoryUtil.memPutInt(ptr + 24, 0);
                         MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
                     }
                 }
