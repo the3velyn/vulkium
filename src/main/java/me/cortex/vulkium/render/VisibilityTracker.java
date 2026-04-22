@@ -37,6 +37,13 @@ public final class VisibilityTracker {
     private int frontCount = 0;
     private int[] back = new int[0];
 
+    /** Per-regionId membership bitmap, updated alongside the sorted visible-id list. Enables
+     *  O(1) {@link #isRegionVisible} lookups — without this, consumers who need "is this
+     *  specific region in view?" (e.g. {@link TranslucentSectionSorter}) would have to binary-
+     *  search or linear-scan the front array every frame. Size-matched to {@code maxRegionIndex}
+     *  at each update; slots past the current max stay false since the loop doesn't touch them. */
+    private boolean[] visibleMask = new boolean[0];
+
     /** Scratch pair of parallel arrays used during update(): ids + their manhattan distances. */
     private int[] scratchIds = new int[0];
     private int[] scratchDist = new int[0];
@@ -76,6 +83,15 @@ public final class VisibilityTracker {
         int max = rm.maxRegionIndex();
         ensureScratchCapacity(max);
 
+        // Clear the visible mask for this frame's range. Entries past max from a previous
+        // larger frame can stay — the {@link #isRegionVisible} bounds check rejects them
+        // before the lookup. Only [0, max) is authoritative.
+        if (visibleMask.length < max) {
+            visibleMask = new boolean[Math.max(max, visibleMask.length == 0 ? 64 : visibleMask.length * 2)];
+        } else {
+            java.util.Arrays.fill(visibleMask, 0, max, false);
+        }
+
         // Distance threshold uses the same units as RegionManager.distance() (section coords).
         // RegionManager.distance returns the manhattan distance from region-center to camera in
         // section units. A safe over-estimate: renderDistance sections in each axis + 4 for the
@@ -104,6 +120,7 @@ public final class VisibilityTracker {
 
             scratchIds[n] = id;
             scratchDist[n] = d;
+            visibleMask[id] = true;
             n++;
         }
 
@@ -174,6 +191,15 @@ public final class VisibilityTracker {
      *  {@link #visibleRegionCount()} to iterate without the lambda-capture cost of
      *  {@link #forEachVisibleRegion(IntConsumer)}. Read-only; do not mutate. */
     public int[] visibleRegionsArray() { return front; }
+
+    /** O(1) "is this regionId in the current visible set" lookup. Used by the translucent
+     *  sort path, which iterates {@code translucentSections} directly (not via the sorted
+     *  visible-list) and needs to match the opaque path's frustum+distance cull so far-away
+     *  translucent geometry doesn't render while the opaque geometry behind it has been
+     *  culled — see the "translucent outlives opaque at >48 chunks" bug. */
+    public boolean isRegionVisible(int regionId) {
+        return regionId >= 0 && regionId < visibleMask.length && visibleMask[regionId];
+    }
 
     public long lastUpdateDurationNs() {
         return lastUpdateNs;

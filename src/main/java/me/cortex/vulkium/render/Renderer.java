@@ -123,6 +123,33 @@ public final class Renderer {
         long sectionPtr = rm != null ? rm.sectionBufferAddress() : 0L;
         int regionCount = rm != null ? rm.regionCount() : 0;
         long terrainPtr = terrainUploader != null ? terrainUploader.arenaBuffer().deviceAddress() : 0L;
+
+        // Section-keep-distance sweep. Runs every 60 frames to amortize the live-map walk.
+        // 256+ = keep all (no-op); any other value (including 32 = "Vanilla") actually sweeps.
+        // Vulkium doesn't inherit MC's unload path — the RenderSectionMixin deliberately skips
+        // eviction on the rotating-cache reassignment — so 32 = "Vanilla-ish" means *this*
+        // sweep runs at radius 32, not "let MC do it".
+        int keepDist = me.cortex.vulkium.VulkiumConfig.get().regionKeepDistance;
+        if (keepDist < 256 && (FrameDriver.frameCount() % 60L) == 0L) {
+            me.cortex.vulkium.managers.SectionManager.get()
+                .sweepKeepDistance(cx, cz, keepDist, 256);
+        }
+        // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
+        // getEffectiveRenderDistance() gives the server-clamped effective value (raw slider on
+        // SP, min(slider, serverRenderDistance) on MP), which is exactly what we want — vulkium
+        // doesn't need to cull further out than MC is actually loading chunks.
+        //
+        // Runs BEFORE translucent sort and OpaqueDispatchList build so both consumers see
+        // fresh per-frame visibility (same frustum + distance filter). Without this ordering
+        // the translucent sort's visibility filter reads stale last-frame data — floating
+        // glass/water at the edge of the camera frustum during rotation.
+        if (cam.cullFrustum != null && rm != null) {
+            int rd = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
+            long tVis = me.cortex.vulkium.diag.PerfTracker.begin();
+            visibility.update(cam.cullFrustum, cx, cy, cz, rd);
+            me.cortex.vulkium.diag.PerfTracker.end("visibility.update", tVis);
+        }
+
         // Translucent section sort: CPU-side back-to-front, writes GPU-compact section IDs
         // directly into a host-mapped BDA staging buffer (no UploadStream round-trip, so the
         // upload ring stays clean for chunk-mesh uploads). The shader picks this list up via
@@ -139,30 +166,10 @@ public final class Renderer {
                 me.cortex.vulkium.managers.SectionManager.get().translucentSectionKeys(),
                 rm,
                 me.cortex.vulkium.managers.SectionManager.get(),
+                visibility,
                 cx, cy, cz);
             me.cortex.vulkium.diag.PerfTracker.end("translucentSort", tTs);
             translucentSortPtr = translucentSorter.deviceAddress();
-        }
-
-        // Section-keep-distance sweep. Runs every 60 frames to amortize the live-map walk.
-        // 256+ = keep all (no-op); any other value (including 32 = "Vanilla") actually sweeps.
-        // Vulkium doesn't inherit MC's unload path — the RenderSectionMixin deliberately skips
-        // eviction on the rotating-cache reassignment — so 32 = "Vanilla-ish" means *this*
-        // sweep runs at radius 32, not "let MC do it".
-        int keepDist = me.cortex.vulkium.VulkiumConfig.get().regionKeepDistance;
-        if (keepDist < 256 && (FrameDriver.frameCount() % 60L) == 0L) {
-            me.cortex.vulkium.managers.SectionManager.get()
-                .sweepKeepDistance(cx, cz, keepDist, 256);
-        }
-        // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
-        // getEffectiveRenderDistance() gives the server-clamped effective value (raw slider on
-        // SP, min(slider, serverRenderDistance) on MP), which is exactly what we want — vulkium
-        // doesn't need to cull further out than MC is actually loading chunks.
-        if (cam.cullFrustum != null && rm != null) {
-            int rd = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
-            long tVis = me.cortex.vulkium.diag.PerfTracker.begin();
-            visibility.update(cam.cullFrustum, cx, cy, cz, rd);
-            me.cortex.vulkium.diag.PerfTracker.end("visibility.update", tVis);
         }
 
         if (opaqueDispatchList != null && rm != null) {

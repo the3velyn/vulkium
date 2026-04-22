@@ -75,15 +75,24 @@ public final class TranslucentSectionSorter implements AutoCloseable {
     private int lastCount;
     public int count() { return lastCount; }
 
-    /** Sort-cache key. When (cameraChunk, translucentVersion) is unchanged from the last sort
-     *  call, the back-to-front order is identical — skip the entire scan + Arrays.sort +
-     *  mapped-buffer rewrite, which is the single biggest remaining CPU line in PerfTracker
-     *  (~160µs/frame on a full oceanfront). Initialized to a sentinel that can never match a
-     *  real first call, so the first frame always takes the fast-path through the real sort. */
+    /** Sort-cache key. When (cameraChunk, translucentVersion, visibleRegionCount) is
+     *  unchanged from the last sort call, the back-to-front order and the visibility-filter
+     *  result are identical — skip the entire scan + Arrays.sort + mapped-buffer rewrite,
+     *  which is the single biggest remaining CPU line in PerfTracker (~160µs/frame on a
+     *  full oceanfront). Initialized to a sentinel that can never match a real first call,
+     *  so the first frame always takes the fast-path through the real sort.
+     *
+     *  <p>{@code visibleRegionCount} is included so frustum-driven visibility changes
+     *  invalidate the cache — without it, rotating the camera could leave the sort pointing
+     *  at a list built from an older frustum, which combined with the CPU-side visibility
+     *  filter would render / skip the wrong set of translucent sections. Rotation-in-place
+     *  that happens to preserve the count is a known edge-case gap; the per-workgroup
+     *  regionVisibility GPU gate catches it when HZB region cull is on. */
     private int cachedCx = Integer.MIN_VALUE;
     private int cachedCy = Integer.MIN_VALUE;
     private int cachedCz = Integer.MIN_VALUE;
     private int cachedVersion = Integer.MIN_VALUE;
+    private int cachedVisibleRegionCount = Integer.MIN_VALUE;
     private boolean cacheValid = false;
 
     public TranslucentSectionSorter(int maxRegions) {
@@ -123,6 +132,7 @@ public final class TranslucentSectionSorter implements AutoCloseable {
     public void sort(it.unimi.dsi.fastutil.longs.LongOpenHashSet translucentKeys,
                      RegionManager regionMgr,
                      me.cortex.vulkium.managers.SectionManager sectionMgr,
+                     VisibilityTracker visibility,
                      int cameraX, int cameraY, int cameraZ) {
         // Sort-cache fast path. The sorted output is a pure function of (camera chunk pos,
         // translucentVersion) — if neither has changed since the last call, the last frame's
@@ -130,12 +140,20 @@ public final class TranslucentSectionSorter implements AutoCloseable {
         // deviceAddress continue to point at the already-correct result. This dominates in
         // stationary frames: the GPU reads the same list from the same BDA, the sort is a no-op,
         // and translucentSort drops to ~2µs/frame (just the equality checks).
+        //
+        // Camera-chunk-position + translucentVersion captures everything that affects the sort
+        // output: the version bump fires on every live/translucent-set mutation AND every
+        // camera movement triggers a new cacheKey (cameraX/Y/Z). Visibility changes on a
+        // stationary frame (e.g. HZB cull bit flips) don't invalidate the sort since the task
+        // shader's per-workgroup regionVisibility gate re-filters on the GPU side anyway.
         int version = sectionMgr.translucentVersion();
+        int visRegionCount = visibility != null ? visibility.visibleRegionCount() : 0;
         if (cacheValid
                 && cameraX == cachedCx
                 && cameraY == cachedCy
                 && cameraZ == cachedCz
-                && version == cachedVersion) {
+                && version == cachedVersion
+                && visRegionCount == cachedVisibleRegionCount) {
             // Cache hit — the current slot still holds the valid sorted list and no write
             // happened this frame, so no slot rotation either. deviceAddress() continues
             // to point at that slot; the GPU reads stable data without any CPU WAR race.
@@ -151,6 +169,16 @@ public final class TranslucentSectionSorter implements AutoCloseable {
             long key = it.nextLong();
             int ref = sectionMgr.getRegionRef(key);
             if (ref < 0 || n >= capacity) continue;
+
+            // Skip sections whose region isn't visible. Mirrors OpaqueDispatchList's filter
+            // against the same VisibilityTracker — without this, translucent water / glass
+            // renders at distances where the opaque terrain behind it was frustum/distance-
+            // culled ("floating glass" beyond MC's RD). visibility can be null during very
+            // early frames (renderer initializing) — fall through to no-filter in that case.
+            if (visibility != null) {
+                int regionId = ref >>> 8;
+                if (!visibility.isRegionVisible(regionId)) continue;
+            }
 
             // Convert pos-based ref → GPU-compact ref. setSectionData writes data to the
             // compact slot, and the shader dispatches by compact slot, so the sort list must
@@ -209,6 +237,7 @@ public final class TranslucentSectionSorter implements AutoCloseable {
         cachedCy = cameraY;
         cachedCz = cameraZ;
         cachedVersion = version;
+        cachedVisibleRegionCount = visRegionCount;
         cacheValid = true;
     }
 
