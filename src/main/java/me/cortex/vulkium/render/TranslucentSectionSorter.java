@@ -34,9 +34,26 @@ import org.lwjgl.system.MemoryUtil;
  * blend). Sentinel value {@code 0xFFFFFFFF} signals "no section — emit zero mesh workgroups".
  */
 public final class TranslucentSectionSorter implements AutoCloseable {
-    /** Host-mapped BDA staging. Writes never go through UploadStream. */
-    private final StagingBuffer buffer;
+    /** Ring-buffer of {@link StagingBuffer}s — three slots so the CPU can always write a
+     *  slot that no in-flight GPU submit is reading. Matches the fix in
+     *  {@link OpaqueDispatchList}; see that class's javadoc for the full rationale. Short
+     *  version: {@code MAX_SUBMITS_IN_FLIGHT=2} in Mojang's {@code VulkanCommandEncoder},
+     *  so with three ring slots the CPU-write never overlaps a GPU-read. Without this,
+     *  NVIDIA 581.04 / Windows hangs immediately on world join with
+     *  {@code translucencySortingLevel=QUADS}: the sorter rewrites this buffer every
+     *  frame during ingest and races with the translucent task shader's BDA read. Linux
+     *  hides the hazard via stricter internal serialization. */
+    private static final int RING_SLOTS = 3;
+    private final StagingBuffer[] buffers = new StagingBuffer[RING_SLOTS];
     private final int capacity;
+    /** Which ring slot {@link #sort} most recently wrote (or left at its last contents
+     *  when the sort-cache short-circuits). {@link #deviceAddress()} returns THIS slot. */
+    private int currentSlot = 0;
+    /** Frame counter — incremented each time {@link #sort} actually writes (cache miss).
+     *  Drives slot rotation via {@code frameCounter % RING_SLOTS}. Cache hits do NOT
+     *  advance — the cached data still lives in the previous slot and nothing rewrote
+     *  it, so the GPU continues reading the correct contents. */
+    private long frameCounter = 0L;
 
     /** Reusable CPU-side scratch to avoid per-frame allocation. */
     private int[] ids;
@@ -46,12 +63,11 @@ public final class TranslucentSectionSorter implements AutoCloseable {
      *  biggest CPU hotspot until this change. */
     private long[] sortPairs;
 
-    /** Highest {@code n} (entry count) written in any prior frame. Each subsequent frame must
-     *  re-sentinel positions past its own (possibly smaller) {@code n} up through this
-     *  watermark, otherwise stale entries from the high-water frame linger on the GPU side
-     *  and the task shader redirects to ghost section refs — visible as phantom translucent
-     *  quads that "self-correct" only after the dispatch width shrinks below their index. */
-    private int maxEntriesEverWritten;
+    /** Per-slot highest {@code n} (entry count) written. Each slot tracks its own
+     *  independent write history — when we cycle back to this slot three frames later,
+     *  we only need to sweep sentinels over positions up to THIS slot's prior high-water
+     *  mark, not the global max. */
+    private final int[] maxEntriesEverWrittenPerSlot = new int[RING_SLOTS];
 
     /** Real (non-sentinel) entry count produced by the most recent {@link #sort}. Callers use
      *  this as the translucent mesh-task dispatch width — replacing the old brute-force
@@ -73,21 +89,26 @@ public final class TranslucentSectionSorter implements AutoCloseable {
     public TranslucentSectionSorter(int maxRegions) {
         int maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
         this.capacity = maxSections;
-        // 4 bytes per entry (uint32). At maxRegions=1024 → 1 MB backing buffer.
-        this.buffer = StagingBuffer.allocateHostMappedBda((long) capacity * 4L);
+        // 4 bytes per entry (uint32). At maxRegions=1024 → 1 MB backing buffer × 3 slots = 3 MB.
+        for (int s = 0; s < RING_SLOTS; s++) {
+            StagingBuffer sb = StagingBuffer.allocateHostMappedBda((long) capacity * 4L);
+            long base = sb.mappedPointer();
+            for (int i = 0; i < capacity; i++) {
+                MemoryUtil.memPutInt(base + (long) i * 4L, 0xFFFFFFFF);
+            }
+            sb.flush(0L, (long) capacity * 4L);
+            buffers[s] = sb;
+        }
         this.ids = new int[maxSections];
         this.dists = new int[maxSections];
         this.sortPairs = new long[maxSections];
-        // Seed once with sentinels; subsequent frames overwrite only the active prefix +
-        // trailing sentinel, so anything past `n` remains 0xFFFFFFFF.
-        long base = buffer.mappedPointer();
-        for (int i = 0; i < capacity; i++) {
-            MemoryUtil.memPutInt(base + (long) i * 4L, 0xFFFFFFFF);
-        }
-        buffer.flush(0L, (long) capacity * 4L);
     }
 
-    public long deviceAddress() { return buffer.deviceAddress(); }
+    /** Device address of the CURRENT ring slot — either the slot {@link #sort} last wrote
+     *  (cache miss), or the slot whose cached result is still valid (cache hit). Plumbed
+     *  into {@code sceneUniform.sortingRegionListPtr} every frame; the task shader indexes
+     *  into this frame's slot via BDA. */
+    public long deviceAddress() { return buffers[currentSlot].deviceAddress(); }
 
     /**
      * Populate the sort list from the live section table. Sections are ordered farthest-first.
@@ -115,8 +136,15 @@ public final class TranslucentSectionSorter implements AutoCloseable {
                 && cameraY == cachedCy
                 && cameraZ == cachedCz
                 && version == cachedVersion) {
+            // Cache hit — the current slot still holds the valid sorted list and no write
+            // happened this frame, so no slot rotation either. deviceAddress() continues
+            // to point at that slot; the GPU reads stable data without any CPU WAR race.
             return;
         }
+        // Cache miss — advance to the next ring slot BEFORE writing, so we never overwrite
+        // a slot that an in-flight GPU submit is still reading.
+        currentSlot = (int) ((frameCounter++) % RING_SLOTS);
+        final StagingBuffer buffer = buffers[currentSlot];
         int n = 0;
         var it = translucentKeys.longIterator();
         while (it.hasNext()) {
@@ -156,21 +184,22 @@ public final class TranslucentSectionSorter implements AutoCloseable {
         // translucent scenes (oceans). Sorts the first n entries ascending by packed key.
         java.util.Arrays.sort(sortPairs, 0, n);
 
-        // Write directly into the mapped pointer. Active entries at [0, n), then sentinels
-        // from [n, maxEntriesEverWritten] — we must re-sentinel every slot up to the prior
-        // high-water mark, otherwise stale refs from a previous (larger-n) frame still sit in
-        // the buffer and the task shader dispatches phantom workgroups against them.
+        // Write directly into the CURRENT SLOT's mapped pointer. Active entries at [0, n),
+        // then sentinels from [n, maxEntriesEverWrittenPerSlot[currentSlot]] — we must
+        // re-sentinel every position up to THIS slot's prior high-water mark, otherwise
+        // stale refs from this slot's previous (larger-n) use linger and the task shader
+        // dispatches phantom workgroups against them.
         long base = buffer.mappedPointer();
         for (int i = 0; i < n; i++) {
             // Low 32 bits of the packed sort key hold the gpuRef.
             MemoryUtil.memPutInt(base + (long) i * 4L, (int) sortPairs[i]);
         }
-        // Inclusive-end sentinel sweep from n through the high-water mark. Bounded by capacity.
-        int sentinelEnd = Math.max(n, maxEntriesEverWritten);
+        int prevMax = maxEntriesEverWrittenPerSlot[currentSlot];
+        int sentinelEnd = Math.max(n, prevMax);
         for (int i = n; i <= sentinelEnd; i++) {
             MemoryUtil.memPutInt(base + (long) i * 4L, 0xFFFFFFFF);
         }
-        if (n > maxEntriesEverWritten) maxEntriesEverWritten = n;
+        if (n > prevMax) maxEntriesEverWrittenPerSlot[currentSlot] = n;
         buffer.flush(0L, (long) (sentinelEnd + 1) * 4L);
         lastCount = n;
 
@@ -185,6 +214,11 @@ public final class TranslucentSectionSorter implements AutoCloseable {
 
     @Override
     public void close() {
-        buffer.close();
+        for (int s = 0; s < RING_SLOTS; s++) {
+            if (buffers[s] != null) {
+                try { buffers[s].close(); } catch (Throwable ignored) { /* swallow */ }
+                buffers[s] = null;
+            }
+        }
     }
 }
