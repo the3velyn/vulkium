@@ -86,22 +86,20 @@ void main() {
     }
     vec4 albedo = texture(tex_diffuse, sampleUv);
     uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
-    float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
-    // Alpha cutoff against MIPPED alpha. Mojang's atlas mipmap generator uses
-    // coverage-preserving mip generation (Castaño-style) so mipped alpha holds the
-    // original coverage ratio — using it here gives smooth distance fade for CUTOUT
-    // geometry (tall grass, leaves) exactly as vanilla does with the mipmap option on.
+    // Cutoff threshold must MATCH the threshold MC used when it built coverage-preserved
+    // mipmaps for the atlas. MipmapGenerator.ALPHA_CUTOFF = 0.5 and the CUTOUT_TERRAIN
+    // RenderPipeline registers shaderDefine ALPHA_CUTOUT = 0.5 — vanilla cutout terrain
+    // tests at 0.5, not 0.1. Using a lower threshold (e.g. 0.1) pulls in alpha values
+    // that coverage-preservation scaled UP specifically to survive the 0.5 test — so at
+    // distance, mip-averaged leaves/grass pass the 0.1 cutoff en masse and render as
+    // opaque rectangles. 0.5 gives vanilla-identical distance fade: preserved-coverage
+    // fraction of fragments passes, MIPPED RGB applied, smooth silhouette.
     //
-    // An earlier version tested against textureLod(..., 0.0).a instead, to keep silhouettes
-    // pixel-sharp. That bypassed mipmap for CUTOUT entirely: distant grass was sampled at
-    // mip 0 for alpha, so fragments either hit an exact grass texel (alpha=1, rendered) or
-    // a gap texel (alpha=0, discarded). The surviving fragments' RGB was mipped but their
-    // positions were sparse, so the perceived result was pixel-sharp — the "mipmap does
-    // nothing on leaves and tall grass" symptom. Mipped alpha gives the smooth fade that
-    // matches the mipped RGB. If this produces "opaque rectangles at distance" on some
-    // specific atlas texture, revisit: likely that texture wasn't authored with
-    // coverage-preserving mipmaps in mind, and the fix is in atlas generation rather than
-    // the shader.
+    // cutoffBits=1 (CUTOUT layer) → 0.5. cutoffBits=0 (SOLID/TRANSLUCENT) → 0.0 (no
+    // discard: SOLID never has transparent pixels; TRANSLUCENT needs the full alpha for
+    // blending). The old idx=2 path (0.5 at bit 2) was never wired from the CPU side and
+    // is unreachable — removing it.
+    float cut = (alphaCutoffIdx == 1u) ? 0.5 : 0.0;
     if (albedo.a <= cut) discard;
 
     vec4 multiplier = interpolateMultiplier();
