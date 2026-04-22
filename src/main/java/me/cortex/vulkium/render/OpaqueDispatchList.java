@@ -22,14 +22,42 @@ import org.lwjgl.system.MemoryUtil;
  * <p>No sort — opaque depth-test handles ordering. Structurally mirrors
  * {@code TranslucentSectionSorter} (host-mapped BDA, uint32 entries, sentinel-swept
  * watermark) so the shader redirect pattern stays consistent across both passes.
+ *
+ * <p><b>Ring buffer, not a single slot.</b> The CPU rewrites this buffer every frame and
+ * the task shader reads it via BDA. With {@code MAX_SUBMITS_IN_FLIGHT=2} (Mojang's
+ * {@code VulkanCommandEncoder}), a prior frame's task shader can still be reading the
+ * buffer when the next frame's CPU-side {@code build()} is already overwriting it — a
+ * WAR race with no synchronization. Symptom on NVIDIA 581.04 / RTX 3060 / Windows: 10-20
+ * seconds of working rendering, then a sudden GPU hang that takes MC's
+ * {@code VulkanCommandEncoder.submit} into its 5-second semaphore timeout. Not
+ * reproducible on Linux (same hardware, different driver), so the driver's own serialization
+ * happens to hide it there.
+ *
+ * <p>Fix: triple-buffer. Frame N writes to slot {@code N % 3} and plumbs that slot's
+ * {@code deviceAddress()} into the scene UBO for the current frame. With three slots and
+ * at most two submits in flight, the slot we write is guaranteed to not be in-flight on
+ * the GPU. No CPU-side fence or timeline wait needed; the submission order + Mojang's
+ * own submit-semaphore wait already force frame N+3's write to land after frame N's read
+ * has retired.
  */
 public final class OpaqueDispatchList implements AutoCloseable {
-    private final StagingBuffer buffer;
+    /** Three slots: current frame + up to {@code MAX_SUBMITS_IN_FLIGHT=2} prior frames still
+     *  reading. Four would be safer if Mojang ever bumps that cap, but we'd then need to
+     *  mirror the bump. Three matches today's Mojang constant exactly. */
+    private static final int RING_SLOTS = 3;
+
+    private final StagingBuffer[] buffers = new StagingBuffer[RING_SLOTS];
     private final int capacity;
     private int lastCount;
-    /** Highest prior-frame count — positions from lastCount..maxEverWritten need sentinel
-     *  re-stamping each frame so stale entries don't drive ghost dispatches. */
-    private int maxEverWritten;
+    /** Highest prior-frame count per slot — positions from lastCount..maxEverWritten need
+     *  sentinel re-stamping each frame so stale entries don't drive ghost dispatches.
+     *  Tracked per-slot because each ring slot has its own independent write history. */
+    private final int[] maxEverWrittenPerSlot = new int[RING_SLOTS];
+    /** Which ring slot {@link #build} wrote into last. Callers index
+     *  {@link #deviceAddress()} off this. */
+    private int currentSlot = 0;
+    /** Frame counter used to pick a ring slot. Incremented at the START of {@link #build}. */
+    private long frameCounter = 0L;
     /** Reused sort scratch for front-to-back. Packed as (distance << 32) | (regionId << 8) |
      *  compactId so {@code Arrays.sort(long[])} produces an ascending-distance order and the
      *  low 32 bits are the emitted dispatch entry. Sized to capacity so no reallocation on
@@ -40,15 +68,22 @@ public final class OpaqueDispatchList implements AutoCloseable {
     public OpaqueDispatchList(int maxRegions) {
         int maxSections = maxRegions * RegionManager.SECTIONS_PER_REGION;
         this.capacity = maxSections;
-        this.buffer = StagingBuffer.allocateHostMappedBda((long) capacity * 4L);
-        long base = buffer.mappedPointer();
-        for (int i = 0; i < capacity; i++) {
-            MemoryUtil.memPutInt(base + (long) i * 4L, 0xFFFFFFFF);
+        for (int s = 0; s < RING_SLOTS; s++) {
+            StagingBuffer sb = StagingBuffer.allocateHostMappedBda((long) capacity * 4L);
+            long base = sb.mappedPointer();
+            for (int i = 0; i < capacity; i++) {
+                MemoryUtil.memPutInt(base + (long) i * 4L, 0xFFFFFFFF);
+            }
+            sb.flush(0L, (long) capacity * 4L);
+            buffers[s] = sb;
         }
-        buffer.flush(0L, (long) capacity * 4L);
     }
 
-    public long deviceAddress() { return buffer.deviceAddress(); }
+    /** The device address of the CURRENT frame's ring slot — the one most recently written by
+     *  {@link #build}. Callers plug this into the scene UBO's
+     *  {@code opaqueDispatchListPtr}; the task shader reads from this frame's slot while
+     *  the previous two frames can still safely be in flight on their own slots. */
+    public long deviceAddress() { return buffers[currentSlot].deviceAddress(); }
 
     /** Count of real (non-sentinel) entries produced by the most recent {@link #build}. */
     public int count() { return lastCount; }
@@ -87,7 +122,11 @@ public final class OpaqueDispatchList implements AutoCloseable {
                      long readbackPtr, long sectionReadbackPtr,
                      boolean sortFrontToBack,
                      int camSectionX, int camSectionY, int camSectionZ) {
-        final long base = buffer.mappedPointer();
+        // Advance the ring slot FIRST so deviceAddress() returns the slot we're about to
+        // write, not the one another frame may still be reading.
+        currentSlot = (int) ((frameCounter++) % RING_SLOTS);
+        final StagingBuffer buf = buffers[currentSlot];
+        final long base = buf.mappedPointer();
         int n = 0;
 
         // Lazy-allocate the sort scratch. One-shot cost on first sorted frame; stable
@@ -162,15 +201,17 @@ public final class OpaqueDispatchList implements AutoCloseable {
             }
         }
 
-        // Sentinel-sweep trailing positions from n..maxEverWritten so prior frames' higher
-        // counts don't leave ghost entries for the GPU to dispatch.
-        int sweepEnd = Math.max(maxEverWritten, n);
+        // Sentinel-sweep trailing positions from n..maxEverWrittenForThisSlot so prior uses
+        // of THIS slot (3 frames ago) don't leave ghost entries that would drive ghost
+        // dispatches. Each ring slot tracks its own high-water mark independently.
+        int prevMax = maxEverWrittenPerSlot[currentSlot];
+        int sweepEnd = Math.max(prevMax, n);
         for (int i = n; i < sweepEnd; i++) {
             MemoryUtil.memPutInt(base + (long) i * 4L, 0xFFFFFFFF);
         }
-        if (n > maxEverWritten) maxEverWritten = n;
+        if (n > prevMax) maxEverWrittenPerSlot[currentSlot] = n;
 
-        buffer.flush(0L, (long) (sweepEnd + 1) * 4L);
+        buf.flush(0L, (long) (sweepEnd + 1) * 4L);
         lastCount = n;
         return n;
     }
@@ -178,7 +219,12 @@ public final class OpaqueDispatchList implements AutoCloseable {
     @Override
     public void close() {
         if (closed) return;
-        buffer.close();
+        for (int s = 0; s < RING_SLOTS; s++) {
+            if (buffers[s] != null) {
+                try { buffers[s].close(); } catch (Throwable ignored) { /* swallow */ }
+                buffers[s] = null;
+            }
+        }
         closed = true;
     }
 }
