@@ -26,7 +26,7 @@ layout(triangles, max_vertices=128, max_primitives=64) out;
 
 layout(location=1) out Interpolants {
 #ifdef RENDER_FOG
-    float16_t fogLerp;
+    float fogLerp;
 #endif
     vec2 uv;
     vec3 v_colour;
@@ -54,8 +54,7 @@ void emitVertex(uint outId, uint vertexBaseId, uint innerId) {
     vec3 exactPos = pos+subchunkOffset.xyz;
 
     #ifdef RENDER_FOG
-    float fogLerp = clamp(computeFogLerp(exactPos, fogEnvStart, fogEnvEnd, fogRenderStart, fogRenderEnd) * fogColour.a, 0, 1);
-    OUT[outId].fogLerp = float16_t(fogLerp);
+    OUT[outId].fogLerp = clamp(computeFogLerp(exactPos, fogEnvStart, fogEnvEnd, fogRenderStart, fogRenderEnd) * fogColour.a, 0, 1);
     #endif
     OUT[outId].uv = decodeVertexUV(V);
 

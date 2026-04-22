@@ -105,4 +105,7 @@ void main() {
     vec4 multiplier = interpolateMultiplier();
     // vanilla rendertype_translucent: fragColor = texSample * vertexColor (rgb AND a).
     colour = vec4(albedo.rgb * multiplier.rgb, albedo.a * multiplier.a);
+#ifdef RENDER_FOG
+    applyFog(colour.rgb);
+#endif
 }
