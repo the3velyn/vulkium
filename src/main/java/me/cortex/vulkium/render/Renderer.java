@@ -219,7 +219,6 @@ public final class Renderer {
             // (X, Z, Y) order. subchunkOffset must also be in that order so the subtraction in
             // transformVertex stays axis-consistent before the Y/Z swap at MVP multiplication.
             .subchunkOffset(fx, fz, fy, 0.0f)
-            .fogColour(0, 0, 0, 0)
             // Buffer-reference pointers populated as each subsystem lands its buffers.
             .regionIndicesPtr(0L)
             .regionDataPtr(regionPtr)
@@ -244,9 +243,26 @@ public final class Renderer {
             .screenSize(
                 net.minecraft.client.Minecraft.getInstance().getWindow().getWidth()  * 0.5f,
                 net.minecraft.client.Minecraft.getInstance().getWindow().getHeight() * 0.5f)
-            .fog(0f, 1f, false)
             .regionCount(regionCount)
             .frameId((int) (FrameDriver.frameCount() & 0xFF));
+
+        // Vanilla fog. cam.fogData is populated by MC's FogRenderer.setupFog every frame
+        // based on biome, view target, weather, RD, etc. Plumb it straight through and let
+        // terrain/fog.glsl apply the linear-max-of-two formula. When config.renderFog is
+        // false we zero the curves (envEnd=envStart=0, rdEnd=rdStart=0) so the linear
+        // function clamps to 0 → no fog.
+        boolean fogOn = VulkiumConfig.get().renderFog;
+        net.minecraft.client.renderer.fog.FogData fd = cam.fogData;
+        if (fogOn && fd != null && fd.color != null) {
+            sceneUniform
+                .fogColour(fd.color.x, fd.color.y, fd.color.z, fd.color.w)
+                .fog(fd.environmentalStart, fd.environmentalEnd,
+                     fd.renderDistanceStart, fd.renderDistanceEnd);
+        } else {
+            sceneUniform
+                .fogColour(0, 0, 0, 0)
+                .fog(0, 0, 0, 0);
+        }
         sceneUniform.flush();
 
         // Submit staging copies NOW (at START_MAIN), not at AFTER_OPAQUE_TERRAIN. This gives

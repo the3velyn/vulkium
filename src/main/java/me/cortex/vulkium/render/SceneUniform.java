@@ -11,17 +11,16 @@ import java.nio.ByteBuffer;
  * thread calls the typed setters, then hands the buffer's device address (or a push-descriptor
  * binding) to dispatched pipelines.
  *
- * <p>Layout assumes the NO-fog variant (matches {@code #ifndef RENDER_FOG} codepath). The
- * fog variant inserts an additional {@code mat4 MVPInv} right after MVP — wire that in when
- * fog is enabled per-frame if/when needed.
+ * <p>The scene block is a single layout (no RENDER_FOG variant). Fog params are always
+ * present; disabling fog just clamps the start/end ranges so the linear curve stays at 0.
  *
  * <p>Offsets computed from std140 rules: mat4 is 64 bytes 16-aligned; vec4/ivec4 is 16 bytes
  * 16-aligned; 64-bit buffer-reference pointers are 8 bytes 8-aligned. Trailing scalars
- * (vec2, float, bool, uint16, uint8) are packed in declared order with std140 padding.
+ * are packed in declared order with std140 padding.
  */
 public final class SceneUniform implements AutoCloseable {
 
-    // --- std140 offsets (no-fog variant) ---------------------------------------------
+    // --- std140 offsets ---------------------------------------------------------------
     public static final int OFFSET_MVP                     = 0;
     public static final int OFFSET_CHUNK_POSITION          = 64;
     public static final int OFFSET_SUBCHUNK_OFFSET         = 80;
@@ -40,18 +39,18 @@ public final class SceneUniform implements AutoCloseable {
     public static final int OFFSET_ORIGIN_ARR_PTR          = 192;
     public static final int OFFSET_STATISTICS_PTR          = 200;
     public static final int OFFSET_SCREEN_SIZE             = 208;
-    public static final int OFFSET_FOG_START               = 216;
-    public static final int OFFSET_FOG_END                 = 220;
-    public static final int OFFSET_IS_CYLINDRICAL_FOG      = 224;
-    public static final int OFFSET_REGION_COUNT            = 228;   // uint16
-    public static final int OFFSET_FRAME_ID                = 230;   // uint8
-    // New 8-byte BDA pointer tucked into what was padding between frameId@230 and the
-    // 240-byte block boundary. std140 aligns buffer_reference at 8 — offset 232 qualifies.
-    // Points at the compact opaque-dispatch list; task shader redirects through it to cut
-    // ~6-12× of wasted task-shader launches on full-RD scenes.
-    public static final int OFFSET_OPAQUE_DISPATCH_LIST_PTR = 232;
-    /** Round up to 16-byte multiple for UBO binding. */
-    public static final int SCENE_UBO_SIZE                 = 240;
+    // Vanilla fog model — four linear-curve floats. See terrain/fog.glsl.
+    public static final int OFFSET_FOG_ENV_START           = 216;
+    public static final int OFFSET_FOG_ENV_END             = 220;
+    public static final int OFFSET_FOG_RENDER_START        = 224;
+    public static final int OFFSET_FOG_RENDER_END          = 228;
+    public static final int OFFSET_REGION_COUNT            = 232;   // uint16
+    public static final int OFFSET_FRAME_ID                = 234;   // uint8
+    // 8-byte BDA pointer at the next 8-aligned offset after frameId@234 + 1 byte + 5-byte
+    // pad → 240. Previously at 232 when the fog block was 3 floats instead of 4.
+    public static final int OFFSET_OPAQUE_DISPATCH_LIST_PTR = 240;
+    /** Round up to 16-byte multiple for UBO binding. Ptr at 240 + 8 bytes = 248 → pad to 256. */
+    public static final int SCENE_UBO_SIZE                 = 256;
 
     private final StagingBuffer buffer;
     private final ByteBuffer view;
@@ -115,10 +114,16 @@ public final class SceneUniform implements AutoCloseable {
         return this;
     }
 
-    public SceneUniform fog(float start, float end, boolean cylindrical) {
-        view.putFloat(OFFSET_FOG_START, start);
-        view.putFloat(OFFSET_FOG_END, end);
-        view.putInt(OFFSET_IS_CYLINDRICAL_FOG, cylindrical ? 1 : 0);
+    /** Vanilla fog params. MC distinguishes environmental fog (spherical distance, for
+     *  underwater / lava / Nether) from render-distance fog (cylindrical, for RD fade).
+     *  Final lerp = max of both linear curves, each clamped to [0, 1]. See
+     *  {@code terrain/fog.glsl#computeFogLerp}. Source is {@code cam.fogData} from MC's
+     *  {@link net.minecraft.client.renderer.fog.FogRenderer}. */
+    public SceneUniform fog(float envStart, float envEnd, float rdStart, float rdEnd) {
+        view.putFloat(OFFSET_FOG_ENV_START,    envStart);
+        view.putFloat(OFFSET_FOG_ENV_END,      envEnd);
+        view.putFloat(OFFSET_FOG_RENDER_START, rdStart);
+        view.putFloat(OFFSET_FOG_RENDER_END,   rdEnd);
         return this;
     }
 

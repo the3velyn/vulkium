@@ -54,7 +54,7 @@ void emitVertex(uint outId, uint vertexBaseId, uint innerId) {
     vec3 exactPos = pos+subchunkOffset.xyz;
 
     #ifdef RENDER_FOG
-    float fogLerp = clamp(computeFogLerp(exactPos, isCylindricalFog, fogStart, fogEnd) * fogColour.a, 0, 1);
+    float fogLerp = clamp(computeFogLerp(exactPos, fogEnvStart, fogEnvEnd, fogRenderStart, fogRenderEnd) * fogColour.a, 0, 1);
     OUT[outId].fogLerp = float16_t(fogLerp);
     #endif
     OUT[outId].uv = decodeVertexUV(V);

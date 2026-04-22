@@ -61,12 +61,6 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   attachments at `PrimaryTerrainPass` pipeline create time + a resolve; TAA needs motion
   vectors and a history buffer.
 
-- **Vanilla fog implementation.** Current no-fog path is the default; the fog-variant
-  pipeline exists (`pipelineFog`, `fragModuleFog`) but doesn't match vanilla's fog curve.
-  Map MC's fog distance / fog color / fog mode uniforms into our scene UBO and reproduce
-  the `shaders/include/fog.glsl` curve (linear, exp2, underwater variant, etc.). Touches
-  `SceneUniform.fog` setter, `terrain/fog.glsl`, and the `renderFog` config flag.
-
 
 ## Performance
 

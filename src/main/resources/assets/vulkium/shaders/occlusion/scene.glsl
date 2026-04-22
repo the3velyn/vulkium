@@ -121,9 +121,6 @@ layout(buffer_reference, std430, buffer_reference_align=4) restrict buffer Stati
 layout(std140, binding=0) uniform SceneData {
     // align(16)
     mat4 MVP;
-    #ifdef RENDER_FOG
-    mat4 MVPInv;
-    #endif
     ivec4 chunkPosition;
     vec4 subchunkOffset;
     vec4 fogColour;
@@ -143,19 +140,25 @@ layout(std140, binding=0) uniform SceneData {
     StatisticsBufferPtr statistics_buffer;
 
     vec2 screenSize;
-    float fogStart;
-    float fogEnd;
-    bool isCylindricalFog;
+    // Vanilla fog model (MC 26.2 FogRenderer.setupFog / FogData):
+    //   - environmental (spherical-distance): underwater / lava / Nether haze
+    //   - render-distance (cylindrical-distance): edge-of-RD fade
+    // Final fog = max(envLinear, rdLinear). Linear between start/end, clamped [0, 1].
+    // See terrain/fog.glsl and MC's assets/minecraft/shaders/include/fog.glsl.
+    float fogEnvStart;
+    float fogEnvEnd;
+    float fogRenderStart;
+    float fogRenderEnd;
 
     // align(2)
     uint16_t regionCount;
     // align(1)
     uint8_t frameId;
 
-    // align(8) — appended at 232 (filling what was tail padding before the 240-byte UBO
-    // boundary). Compact opaque-dispatch list: task shader redirects gl_WorkGroupID.x
-    // through it when pointer is non-null, otherwise falls back to the original
-    // one-workgroup-per-section-slot dispatch. See OpaqueDispatchList.java.
+    // align(8) — appended at 240 after the fog block grew from 3 floats to 4. Compact
+    // opaque-dispatch list: task shader redirects gl_WorkGroupID.x through it when pointer
+    // is non-null, otherwise falls back to the original one-workgroup-per-section-slot
+    // dispatch. See OpaqueDispatchList.java.
     SortingRegionListPtr opaqueDispatchList;
 };
 
