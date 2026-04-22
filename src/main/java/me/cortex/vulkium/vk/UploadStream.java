@@ -1,12 +1,11 @@
 package me.cortex.vulkium.vk;
 
+import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import me.cortex.vulkium.blaze3d.MojangVulkanBridge;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkBufferCopy;
-import org.lwjgl.vulkan.VkSubmitInfo;
-import org.lwjgl.vulkan.VkTimelineSemaphoreSubmitInfo;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -198,11 +197,31 @@ public final class UploadStream implements AutoCloseable {
             }
         });
 
-        // 3. Signal this frame's timeline value via an empty queue submit. Queue submits are
-        // strictly ordered on the graphics queue, so this fences *after* the copy submit
-        // just issued. Consumers that later block on awaitUntil(sig) see the copy as complete.
+        // 3. Piggyback the timeline signal onto Mojang's pending submission batch. Previously
+        // this was a standalone vkQueueSubmit, which was (a) an extra queue submit per frame
+        // — observed to correlate with sudden GPU hangs on NVIDIA Windows drivers under heavy
+        // ingest — and (b) a latent ordering hazard: encoder.execute() from recordAndSubmit()
+        // only APPENDS the copy cmdbuf to Mojang's submissionBuilder, it does not force a
+        // queue submit. So the standalone signal submit was reaching the queue BEFORE Mojang
+        // actually flushed the batch containing our copy cmdbuf — awaitUntil(sig) on the
+        // consumer side would unblock before the copy had executed. Quick to miss because
+        // within a single frame downstream draws are still ordered after the copy on the
+        // queue (submission order), but across the ring's 6-section wrap the race would let
+        // an older section be recycled for writes while its copy cmdbuf was still pending.
+        //
+        // VulkanCommandEncoder.signalSemaphore(handle, value, stageMask) adds a timeline
+        // signal to the pending batch (flushed at Mojang's next submit() call, e.g. end of
+        // frame). Our copy cmdbuf and our signal now live in the SAME submit, so the signal
+        // fires only after the copy retires — correct semantics, one fewer queue submit.
         long sig = timeline.nextSignalValue();
-        submitSignalOnly(sig);
+        VulkanCommandEncoder encoder = MojangVulkanBridge.commandEncoder();
+        if (encoder == null) {
+            throw new IllegalStateException("Mojang VulkanCommandEncoder not available — Vulkan backend not active?");
+        }
+        // 0x10000 = VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT — match the stage Mojang uses when
+        // it signals its own submitSemaphore, so our timeline reaches `sig` at the same
+        // point in the submit lifecycle (after every previous command retires).
+        encoder.signalSemaphore(timeline.handle(), sig, 0x10000L);
 
         // Stamp EVERY section that received host writes this frame with `sig`. Mid-frame
         // advances can touch multiple sections in a single commit (heavy ingest bursts like
@@ -288,9 +307,15 @@ public final class UploadStream implements AutoCloseable {
             }
         });
 
-        // 3. Signal and stamp every touched section.
+        // 3. Piggyback the signal onto Mojang's batch — see the rationale comment in
+        // commitFrame(). Same fix applies here: the separate vkQueueSubmit used to race
+        // ahead of Mojang's batch flush and unblock consumers before the copy executed.
         long sig = timeline.nextSignalValue();
-        submitSignalOnly(sig);
+        VulkanCommandEncoder encoder = MojangVulkanBridge.commandEncoder();
+        if (encoder == null) {
+            throw new IllegalStateException("Mojang VulkanCommandEncoder not available — Vulkan backend not active?");
+        }
+        encoder.signalSemaphore(timeline.handle(), sig, 0x10000L);
         for (int i = 0; i < sectionCount; i++) {
             if (flushLo[i] != -1L) {
                 sectionSignalValue[i] = sig;
@@ -304,24 +329,10 @@ public final class UploadStream implements AutoCloseable {
         flushHi[idx] = -1L;
     }
 
-    /** Empty VkSubmitInfo whose only purpose is to signal {@code value} on the timeline. */
-    private void submitSignalOnly(long value) {
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkTimelineSemaphoreSubmitInfo timelineInfo = VkTimelineSemaphoreSubmitInfo.calloc(stack)
-                .sType$Default()
-                .pSignalSemaphoreValues(stack.longs(value));
-
-            VkSubmitInfo submit = VkSubmitInfo.calloc(stack)
-                .sType$Default()
-                .pNext(timelineInfo.address())
-                .pSignalSemaphores(stack.longs(timeline.handle()));
-
-            int r = VK10.vkQueueSubmit(MojangVulkanBridge.vkGraphicsQueue(), submit, VK10.VK_NULL_HANDLE);
-            if (r != VK10.VK_SUCCESS) {
-                throw new RuntimeException("vkQueueSubmit (UploadStream signal) failed: VkResult=" + r);
-            }
-        }
-    }
+    // submitSignalOnly removed — timeline signaling now rides Mojang's submission batch via
+    // VulkanCommandEncoder.signalSemaphore. Previously this method issued its own
+    // vkQueueSubmit which could reach the queue before Mojang flushed the pending copy
+    // cmdbufs, unblocking consumers too early.
 
     /** @return number of pending copies that have not yet been submitted. */
     public int pendingCount() { return pending.size(); }
