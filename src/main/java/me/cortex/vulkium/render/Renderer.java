@@ -236,9 +236,7 @@ public final class Renderer {
             .transformationArrPtr(transformationBuffer != null ? transformationBuffer.deviceAddress() : 0L)
             .originArrPtr(originBuffer != null ? originBuffer.deviceAddress() : 0L)
             .statisticsPtr(0L)
-            .opaqueDispatchListPtr(opaqueDispatchList != null
-                && VulkiumConfig.get().enableOpaqueDispatchList
-                ? opaqueDispatchList.deviceAddress() : 0L)
+            .opaqueDispatchListPtr(opaqueDispatchList != null ? opaqueDispatchList.deviceAddress() : 0L)
             // nvidium convention: screenSize is HALF the framebuffer resolution in pixels.
             // Mesh shader bbox cull does `((pos.xy/pos.w)+1) * screenSize` → NDC [-1..1] +1 = [0..2]
             // then × (W/2, H/2) = [0..W, 0..H] pixel coords. Use MC's window — MojangColorFormat
@@ -612,6 +610,25 @@ public final class Renderer {
     }
 
     public void shutdown() {
+        // Wait for every in-flight submit to retire before we destroy anything. With heavy
+        // terrain loaded Mojang's queue has up to MAX_SUBMITS_IN_FLIGHT=2 frames still
+        // executing, each referencing our buffers via BDA (arena, region/section data,
+        // OpaqueDispatchList's ring slots, scene UBO, visibility buffers). Closing those
+        // while the GPU is mid-read is a use-after-free that manifests on Windows/NVIDIA as
+        // a hard crash when the user flips the in-game vulkium toggle off. Not observable on
+        // Linux — that driver's resource-tracking noticed the hazard and serialized — but
+        // Windows 581.04 walks off the end.
+        //
+        // vkDeviceWaitIdle is the big hammer. We only hit this path on the master toggle
+        // (rare) and on real client shutdown, so the per-toggle ~1-2 frames of stall is
+        // acceptable. If this ever becomes hot, replace with a narrower wait on Mojang's
+        // submitSemaphore via VulkanCommandEncoder.waitSemaphore + a targeted awaitFence.
+        try {
+            org.lwjgl.vulkan.VK10.vkDeviceWaitIdle(me.cortex.vulkium.blaze3d.MojangVulkanBridge.vkDevice());
+        } catch (Throwable t) {
+            LOGGER.warn("vkDeviceWaitIdle failed in shutdown(); proceeding anyway", t);
+        }
+
         // Close in reverse construction order so dependent VK handles teardown before their
         // predecessors (pipelines hold references to modules + VkDevice; uploader holds its
         // arena's DeviceBuffer; UploadStream holds a StagingBuffer).
