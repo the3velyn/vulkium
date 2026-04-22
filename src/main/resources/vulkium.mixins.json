@@ -13,9 +13,7 @@
     "chunk.ChunkSectionsToRenderMixin",
     "chunk.LevelRendererPrepareChunkRendersMixin",
     "chunk.LevelRendererAllChangedMixin",
-    "gui.OptionsRenderDistanceMixin",
     "gui.VideoSettingsScreenMixin",
-    "world.ChunkMapViewDistanceMixin",
     "camera.GameRendererBobMixin",
     "camera.LevelRendererProjMixin"
   ],

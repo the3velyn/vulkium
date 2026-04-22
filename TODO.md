@@ -28,17 +28,6 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   attachments at `PrimaryTerrainPass` pipeline create time + a resolve; TAA needs motion
   vectors and a history buffer.
 
-## Config cleanup
-
-- **`extraRd` — investigate and probably remove.** The option adds beyond-RD chunk streaming
-  on vulkium's side (loads an `renderDistance + extraRd` radius of chunks), but the actual
-  chunk loading is server-sided — `ChunkMapViewDistanceMixin` raises the server-side cap
-  from 32 to 128, but the server still respects its own configured view distance. On
-  multiplayer the extra radius is effectively ignored; on single-player it works but
-  creates an expectation of extra chunks that doesn't carry to multiplayer. Either wire
-  it properly with server-side cooperation or drop the field + its GUI slider. Likely
-  drop.
-
 ## Performance
 
 - **Region/section sorter ring-buffering** (done as of `6e7857c` / `908f7d3`) — both
