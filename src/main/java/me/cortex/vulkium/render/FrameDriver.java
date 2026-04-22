@@ -398,7 +398,13 @@ public final class FrameDriver {
                     me.cortex.vulkium.diag.GpuTimerPool gpu = Renderer.get().gpuTimers();
                     if (includeOpaque) {
                         if (gpu != null) gpu.begin(cmd, "opaqueDraw");
-                        pass.record(cmd, scene, dispatchCount, false /* renderFog */,
+                        // Pick the fog-variant opaque pipeline when cfg.renderFog is on.
+                        // Previously this was hardcoded to false → the no-fog pipeline
+                        // always ran and the UBO's fog fields were never sampled, so
+                        // enabling fog in the GUI had no visual effect regardless of the
+                        // shader work landing in 0dc377f.
+                        pass.record(cmd, scene, dispatchCount,
+                                    VulkiumConfig.get().renderFog,
                                     atlasViewFinal, atlasSamplerFinal,
                                     lightmapViewFinal, lightmapSamplerFinal);
                         if (gpu != null) gpu.end(cmd, "opaqueDraw");

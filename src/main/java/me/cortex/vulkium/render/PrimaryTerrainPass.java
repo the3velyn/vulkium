@@ -165,16 +165,25 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .cullMode(VK10.VK_CULL_MODE_FRONT_BIT)
                     .build();
 
-            // Translucent variant: compile task+mesh with TRANSLUCENT_PASS=1. Task emits from
-            // the high-16 of renderRanges.w. Mesh reads with baseOffset shifted past opaque
-            // quads. Pipeline has blend on, depth write off (read-only against opaque depth).
-            Map<String, String> transDefines = Map.of("TRANSLUCENT_PASS", "1");
+            // Translucent variant: compile task+mesh with TRANSLUCENT_PASS=1 AND RENDER_FOG=1.
+            // Task emits from the high-16 of renderRanges.w. Mesh reads with baseOffset
+            // shifted past opaque quads. Pipeline has blend on, depth write off (read-only
+            // against opaque depth).
+            //
+            // RENDER_FOG is always on here so translucent terrain participates in fog
+            // (vanilla-parity — MC fogs translucent_terrain identically to cutout_terrain).
+            // We only ship one translucent pipeline rather than fog/no-fog variants since
+            // the compute cost of the per-vertex fog lerp is negligible on mesh-shader
+            // dispatch throughput; when the user disables fog (config.renderFog=false),
+            // Renderer zeroes fogColour.a so the fogLerp * fogColour.a product in mesh.glsl
+            // is 0 and the frag-shader mix is a no-op.
+            Map<String, String> transDefines = Map.of("TRANSLUCENT_PASS", "1", "RENDER_FOG", "1");
             taskTrans = ShaderModule.compileFromResource("terrain/task.glsl", ShaderStage.TASK, transDefines);
             meshTrans = ShaderModule.compileFromResource("terrain/mesh.glsl", ShaderStage.MESH, transDefines);
             pipeTrans = MeshPipeline.builder(pLayout)
                     .task(taskTrans)
                     .mesh(meshTrans)
-                    .fragment(fragNo)
+                    .fragment(fragFog)
                     .colorFormat(COLOR_FORMAT)
                     .depthFormat(DEPTH_FORMAT)
                     .depthTest(true)

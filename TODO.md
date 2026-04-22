@@ -5,45 +5,12 @@ hook per item plus what's known so far; fuller context lives in the linked file/
 
 ## Known bugs
 
-- **Camera-dependent over-culling of regions.** Some regions get culled when they shouldn't
-  depending on camera orientation — visible terrain vanishes as the player turns. Likely
-  in `VisibilityTracker.update` (frustum + distance cull) or the HZB region-cull compute
-  path. Repro: face one direction, observe chunks present; rotate and they disappear
-  rather than going off-screen. Needs per-region cull-reason logging to isolate.
-
-- **0.3× performance after first F3+A on world join.** Reloading chunks the first time via
-  F3+A drops steady-state FPS to ~30% of pre-F3+A. Does not recover without client
-  restart. Related to but distinct from the in-game master-toggle regression fixed in
-  `P0-3`. Probably a handle/descriptor/buffer not being released on `queueFlushAll` /
-  inline eviction, or MC's own section-compile path re-binding a resource vulkium still
-  expects to own. Instrumentation: log per-frame `live.size()`, arena usage, descriptor
-  pool stats before/after F3+A.
-
-- **`translucencySortingLevel=NONE` disables translucent rendering.** `FrameDriver:162-165`
-  gates the translucent draw on `TranslucentSectionSorter.count()`. With `NONE`, sort()
-  never runs so count stays 0 → early return → no translucent dispatch. Fix: either
-  populate an unsorted list when NONE, or replace the gate with "have translucent
-  sections?" rather than "sorter has entries?". Cosmetic bug in NONE mode only — sort
-  defaults to QUADS so normal users don't hit it.
-
 - **Clouds render in front of water/translucent.** Our translucent pass fires at
   `AFTER_TRANSLUCENT_TERRAIN` which happens BEFORE cloud render in MC's sequence. Clouds
   then overwrite translucent's depth. Fix: move translucent draw to `END_MAIN` (after
   clouds have written depth) so translucent depth-tests against cloud depth correctly.
-  See `FrameDriver.register()`.
-
-- **Mipmap toggle does nothing visually.** The sampler and config both claim mipmap
-  support but enabling/disabling MC's mipmap option has no visible effect on vulkium-
-  rendered terrain. Possible: wrong `maxLod` on our sampler, or `VkImageView` created
-  against a non-mip texture view of Mojang's atlas. Check `MojangAtlasTap.blockAtlasMipLevels()`
-  vs. the sampler's `maxLod`, and whether we're sampling through `textureLod(…, mipLevel)`
-  with a mip level derived from screen-space derivatives. **Refined observation
-  (2026-04-21):** fully-opaque blocks do appear mipmapped correctly — it's the
-  non-opaque (CUTOUT) geometry like leaves and tall grass that never mipmaps. Strong
-  suspicion: the sharp-alpha-test path in `terrain/frag.frag` (the `textureLod(..., 0)`
-  branch for cutoffBits > 0) always samples mip 0, so distant CUTOUT quads lose mipmap
-  filtering and stay pixel-sharp. Check also for discontinuities where CUTOUT meets
-  opaque — a texel-sharp edge vs. mip-filtered neighbour is diagnostic.
+  See `FrameDriver.register()`. Prior comment in `onAfterTranslucentTerrain` claims that
+  location was the fix for this — apparently not, needs runtime experimentation.
 
 - **Immovable chunk slices on initial load.** When joining a world, some slices of
   chunks never render until the player moves a little. Moving seems to "remind" vulkium
@@ -61,13 +28,23 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   attachments at `PrimaryTerrainPass` pipeline create time + a resolve; TAA needs motion
   vectors and a history buffer.
 
+## Config cleanup
+
+- **`extraRd` — investigate and probably remove.** The option adds beyond-RD chunk streaming
+  on vulkium's side (loads an `renderDistance + extraRd` radius of chunks), but the actual
+  chunk loading is server-sided — `ChunkMapViewDistanceMixin` raises the server-side cap
+  from 32 to 128, but the server still respects its own configured view distance. On
+  multiplayer the extra radius is effectively ignored; on single-player it works but
+  creates an expectation of extra chunks that doesn't carry to multiplayer. Either wire
+  it properly with server-side cooperation or drop the field + its GUI slider. Likely
+  drop.
 
 ## Performance
 
-- **Region/section sorter ring-buffering** (done as of `6e7857c` + this commit) — both
-  lists are now triple-buffered to eliminate the CPU↔GPU WAR race. Preserve this invariant
-  when adding new per-frame host-mapped BDA buffers. If another subsystem needs one,
-  template off `OpaqueDispatchList` / `TranslucentSectionSorter`.
+- **Region/section sorter ring-buffering** (done as of `6e7857c` / `908f7d3`) — both
+  lists are triple-buffered to eliminate the CPU↔GPU WAR race. Preserve this invariant
+  when adding new per-frame host-mapped BDA buffers; template off `OpaqueDispatchList` /
+  `TranslucentSectionSorter`.
 
 ## Process / tooling
 
