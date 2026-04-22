@@ -37,7 +37,13 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   rendered terrain. Possible: wrong `maxLod` on our sampler, or `VkImageView` created
   against a non-mip texture view of Mojang's atlas. Check `MojangAtlasTap.blockAtlasMipLevels()`
   vs. the sampler's `maxLod`, and whether we're sampling through `textureLod(…, mipLevel)`
-  with a mip level derived from screen-space derivatives.
+  with a mip level derived from screen-space derivatives. **Refined observation
+  (2026-04-21):** fully-opaque blocks do appear mipmapped correctly — it's the
+  non-opaque (CUTOUT) geometry like leaves and tall grass that never mipmaps. Strong
+  suspicion: the sharp-alpha-test path in `terrain/frag.frag` (the `textureLod(..., 0)`
+  branch for cutoffBits > 0) always samples mip 0, so distant CUTOUT quads lose mipmap
+  filtering and stay pixel-sharp. Check also for discontinuities where CUTOUT meets
+  opaque — a texel-sharp edge vs. mip-filtered neighbour is diagnostic.
 
 - **Immovable chunk slices on initial load.** When joining a world, some slices of
   chunks never render until the player moves a little. Moving seems to "remind" vulkium

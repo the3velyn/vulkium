@@ -113,7 +113,14 @@ void main() {
     vec2 uvMin = clamp(ssMin * 0.5 + 0.5, vec2(0.0), vec2(1.0));
     vec2 uvMax = clamp(ssMax * 0.5 + 0.5, vec2(0.0), vec2(1.0));
     vec2 extentPx = (uvMax - uvMin) * vec2(textureSize(u_hzb, 0));
-    float mip = max(0.0, ceil(log2(max(extentPx.x, extentPx.y))));
+    // Mip select: pick the smallest M such that two mip-M texels span the AABB extent.
+    // 4-corner samples then cover EXACTLY the AABB's screen footprint. The earlier
+    // ceil(log2(E)) picked M where ONE texel spans E — so 4 corners spanned 2×E and
+    // included neighbour terrain, inflating hzbMin and falsely occluding sections whose
+    // real footprint was fine (symptom: camera-dependent over-cull when a nearby block
+    // happens to land inside the oversampled footprint of a distant section). Using
+    // ceil(log2(E/2)) = ceil(log2(E)) - 1 tightens the sample to the AABB.
+    float mip = max(0.0, ceil(log2(max(extentPx.x, extentPx.y))) - 1.0);
     float maxMip = float(textureQueryLevels(u_hzb) - 1);
     mip = min(mip, maxMip);
 
