@@ -198,9 +198,46 @@ public final class RegionManager implements AutoCloseable {
         region.verifyIntegrity();
     }
 
+    /** Sentinel returned by {@link #allocateSection} when the {@code maxRegions} capacity
+     *  has been exhausted — every slot in the {@code regions[]} array is live and no new
+     *  region can be created. Callers treat this the same as
+     *  {@link me.cortex.vulkium.managers.SectionCapture#UNKNOWN_SECTION} and skip the
+     *  subsequent header write / upload; the captured geometry is dropped for this cycle
+     *  and MC's recompile path (block edit, F3+A, chunk reload) will re-queue later. */
+    public static final int ALLOCATE_OVERFLOW = -1;
+
+    /** Throttle overflow warnings — without this, at ~1000 fps a single overflow event
+     *  spams the log with tens of thousands of identical lines. */
+    private static long lastOverflowWarnNs = 0L;
+
     public int allocateSection(int sectionX, int sectionY, int sectionZ) {
         long regionKey = SectionPos.asLong(sectionX >> 3, sectionY >> 2, sectionZ >> 3);
-        int regionId = regionMap.computeIfAbsent(regionKey, k -> idProvider.provide());
+
+        // Peek first so we can reject overflow BEFORE idProvider.provide() assigns an id
+        // we'd immediately have to release. The `regions.length` cap is the physical ceiling
+        // — the device-side regionBuffer / sectionBuffer are sized to the same capacity, so
+        // a writer past that index corrupts unrelated memory or crashes.
+        int regionId = regionMap.getOrDefault(regionKey, -1);
+        if (regionId < 0) {
+            int newId = idProvider.provide();
+            if (newId >= regions.length) {
+                // Over capacity. Give back the id and reject the allocation — the caller
+                // drops this section silently this frame; MC's recompile path refires it
+                // later (and by then eviction should have made room).
+                idProvider.release(newId);
+                long nowNs = System.nanoTime();
+                if (nowNs - lastOverflowWarnNs > 5_000_000_000L /* 5 s */) {
+                    lastOverflowWarnNs = nowNs;
+                    org.slf4j.LoggerFactory.getLogger("vulkium/region")
+                        .warn("Region buffer overflow at maxRegions={}. Increase cfg.maxRegions"
+                            + " or lower cfg.regionKeepDistance; new captures dropped until a"
+                            + " region evicts.", regions.length);
+                }
+                return ALLOCATE_OVERFLOW;
+            }
+            regionMap.put(regionKey, newId);
+            regionId = newId;
+        }
 
         if (regions[regionId] == null) {
             regions[regionId] = new Region(regionId, sectionX >> 3, sectionY >> 2, sectionZ >> 3);

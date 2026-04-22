@@ -188,6 +188,19 @@ public final class SectionManager {
                 int sy = SectionPos.y(p.key);
                 int sz = SectionPos.z(p.key);
                 int ref = regionManager.allocateSection(sx, sy, sz);
+                if (ref == me.cortex.vulkium.managers.RegionManager.ALLOCATE_OVERFLOW) {
+                    // Region ledger full. Drop this capture — its geometry is absent from the
+                    // scene until a region evicts and MC's recompile path refires. Previously
+                    // unhandled overflow resulted in the next idProvider.provide() returning
+                    // an id past the regions[] array bound, producing either a hard OOB crash
+                    // or (with the old index-unchecked buffer writes) GPU renders of stale
+                    // arena content as "new" chunks — the reported "already-loaded chunks in
+                    // new regions" symptom.
+                    live.remove(p.key);
+                    freeEntry(p.entry);
+                    drained++;
+                    return;
+                }
                 sectionToRegionRef.put(p.key, ref);
             }
         }

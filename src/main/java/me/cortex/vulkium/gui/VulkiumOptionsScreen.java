@@ -121,8 +121,11 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
 
         this.list.addSmall(
             intSlider("Max regions",
-                "Region-ledger capacity. One region = 8×4×8 sections. " + TIP_RESTART.getString(),
-                256, 4096, cfg.maxRegions, v -> cfg.maxRegions = v));
+                "Region-ledger capacity. One region = 8×4×8 sections (2048 sections = 8 MB of "
+                    + "section metadata per 256 regions, 16-byte region metadata on top). "
+                    + "Raise when loading many areas at high keep-distance; overflow drops "
+                    + "new captures until a region evicts. " + TIP_RESTART.getString(),
+                256, 32768, cfg.maxRegions, v -> cfg.maxRegions = v));
 
         // --- nvidium-parity options --------------------------------------------------------
         // Sliders here mirror nvidium's settings page so users coming from nvidium find the
