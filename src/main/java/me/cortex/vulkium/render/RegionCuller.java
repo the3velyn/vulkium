@@ -45,11 +45,15 @@ public final class RegionCuller implements AutoCloseable {
     private final ComputeDispatch dispatch;
     private boolean closed;
 
+    /** Push constant layout: single uint32 carrying {@code regionUpperBound}. See the
+     *  shader's PC block. */
+    private static final int PUSH_CONSTANT_SIZE = 4;
+
     public RegionCuller() {
         this.dispatch = ComputeDispatch.create(
             "occlusion/region_cull.comp",
             Map.of(),
-            0,
+            PUSH_CONSTANT_SIZE,
             List.of(
                 new ComputeDispatch.Binding(0, VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER, 1),
                 new ComputeDispatch.Binding(1, VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 1)
@@ -115,14 +119,18 @@ public final class RegionCuller implements AutoCloseable {
             }
         }
 
-        dispatch.record(
-            cmd,
-            null,
-            bindings -> bindings
-                .uniformBuffer(0, sceneBuffer, 0L, SceneUniform.SCENE_UBO_SIZE)
-                .combinedImageSampler(1, hzbView, hzbSampler,
-                    VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
-            groupsX, 1, 1);
+        try (org.lwjgl.system.MemoryStack pcStack = org.lwjgl.system.MemoryStack.stackPush()) {
+            java.nio.ByteBuffer pc = pcStack.calloc(PUSH_CONSTANT_SIZE);
+            pc.putInt(0, regionUpperBound);
+            dispatch.record(
+                cmd,
+                pc,
+                bindings -> bindings
+                    .uniformBuffer(0, sceneBuffer, 0L, SceneUniform.SCENE_UBO_SIZE)
+                    .combinedImageSampler(1, hzbView, hzbSampler,
+                        VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL),
+                groupsX, 1, 1);
+        }
 
         // Make the regionVisibility writes visible to the subsequent task-shader reads.
         // regionVisibility is reached via buffer-device-address, so the barrier is memory

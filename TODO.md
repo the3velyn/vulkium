@@ -21,13 +21,31 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   drain runs after `OpaqueDispatchList.build` and the new section headers arrive on the
   GPU one frame late.
 
-- **Crash when looking upward with lots of regions loaded.** Occurs with a large
-  `maxRegions` / low `regionKeepDistance` (many regions live at once), specifically
-  triggered by angling the camera upward. Unknown signature so far — could be a dispatch-
-  count limit (mesh-shader maxTaskWorkGroupCount[0] is typically 65535 on NVIDIA; if
-  opaque falls back to `rm.maxRegionIndex() * SECTIONS_PER_REGION = 1033 × 256 ≈ 264k`
-  when `OpaqueDispatchList.count() == 0`, it exceeds the limit), or degenerate frustum /
-  HZB sampling at steep pitches. Needs logs to narrow.
+- **Crash when looking upward with lots of regions loaded.** Bisected to HZB region cull
+  (`enableHzbRegionCull=true`) as the trigger — disabling it avoids the crash, disabling
+  the broader HZB build alone does not. Signature is a 5s VK semaphore timeout that
+  surfaces in MC's `StagedVertexBuffer.tryRecycle` (hand/item rendering) after a ~2s GPU
+  stall. Defensive push-constant bounds check added in `region_cull.comp` — if the bug
+  was "threads past `maxRegionIndex` feed garbage AABBs into projection → NaN/Inf UVs →
+  textureLod hang on Blackwell," this should fix it. If it still crashes after that,
+  the root cause is elsewhere in the HZB region-cull path (barrier ordering across the
+  HZB → region-cull → task-shader pipeline, or the depth-tap layout transition fighting
+  Mojang's subsequent depth writes for hand-item rendering).
+
+- **`regionKeepDistance=32` ("Vanilla") behaves identically to "Keep All".** The GUI
+  label says 32 should evict sections whose owning chunk has been unloaded (vanilla
+  behavior), but in practice vulkium never evicts at that setting. Likely a bug in the
+  sweep path's threshold check or in how the unload signal reaches
+  `SectionManager.sweepKeepDistance`. Acceptance: setting to 32, flying far, then
+  returning to origin leaves `SectionManager.live.size()` well below the "keep all"
+  high-water mark.
+
+- **Translucent geometry outlives opaque at far distances (>~48 chunks).** Past the
+  opaque eviction radius, opaque blocks unload but the translucent layer from the same
+  chunk stays rendered — visually reads as "floating glass/water". Expected: opaque
+  should stay as long as translucent, OR translucent should evict with opaque. The
+  mismatch suggests the eviction path treats the two layers separately; the translucent
+  branch isn't seeing the same distance test.
 
 ## Feature gaps
 

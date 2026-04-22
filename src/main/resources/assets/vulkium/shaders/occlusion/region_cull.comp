@@ -35,6 +35,17 @@ layout(local_size_x = 64) in;
 
 layout(set = 0, binding = 1) uniform sampler2D u_hzb;
 
+// Exclusive upper bound on region slots to process — passed from the CPU as the current
+// RegionManager.maxRegionIndex. Threads past this index bounds-check and return without
+// touching regionData / regionVisibility / HZB. Prior behavior dispatched past the bound
+// and relied on "indeterminate but safely-allocated" reads from padding slots, which on
+// NVIDIA Blackwell (RTX 5080 / Windows) correlated with the "looking-up with many regions
+// loaded" GPU hang — garbage AABBs project to NaN/Inf NDC, poisoning the mip selection
+// (log2 of Inf) and the subsequent textureLod. Bounds-checking sidesteps both.
+layout(push_constant) uniform PC {
+    uint regionUpperBound;
+};
+
 bool projectAabb(vec3 mn, vec3 mx, out vec2 ssMin, out vec2 ssMax, out float nearestZ) {
     ssMin = vec2(1e30);
     ssMax = vec2(-1e30);
@@ -55,11 +66,13 @@ bool projectAabb(vec3 mn, vec3 mx, out vec2 ssMin, out vec2 ssMax, out float nea
 }
 
 void main() {
-    // Caller dispatches ceil(maxRegionIndex / 64) workgroups, so regionId is bounded by
-    // maxRegionIndex + 63 in the worst case. Dispatched threads past maxRegionIndex read
-    // indeterminate-but-safely-allocated regionData/regionVisibility slots (buffers are
-    // sized to maxRegions ≥ maxRegionIndex) — their outputs are never read by task shaders.
+    // Caller dispatches ceil(maxRegionIndex / 64) workgroups; threads at [maxRegionIndex,
+    // groupsX*64) fall past the live-region range. Exit before touching regionData so we
+    // don't feed garbage AABBs into the projection+textureLod path.
     uint regionId = gl_GlobalInvocationID.x;
+    if (regionId >= regionUpperBound) {
+        return;
+    }
 
     // Pull AABB. unpackRegionPosition returns section coords in standard (X, Y, Z) order;
     // chunkPosition is packed nvidium-order (cx, cz, cy) so we swap to standard before diffing.
