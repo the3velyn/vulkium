@@ -45,6 +45,18 @@ public final class VulkiumConfig {
      */
     public boolean drawTerrain = true;
 
+    /** DEV_ONLY — diagnostic bisection for the Windows/NVIDIA GPU hang. When
+     *  {@code drawTerrain == true}, setting this to {@code false} skips the opaque
+     *  mesh-shader dispatch at {@code AFTER_OPAQUE_TERRAIN}. Combined with
+     *  {@link #devDrawTranslucentPass}, bisects which of the two vulkium draw passes
+     *  triggers the hang. Remove before release. */
+    public boolean devDrawOpaquePass = true;
+
+    /** DEV_ONLY — diagnostic bisection counterpart to {@link #devDrawOpaquePass}.
+     *  Skips the translucent mesh-shader dispatch at {@code AFTER_TRANSLUCENT_TERRAIN}
+     *  when {@code false}. Remove before release. */
+    public boolean devDrawTranslucentPass = true;
+
     /** Build the HZB pyramid each frame from the just-rendered depth (at END_MAIN so it
      *  captures vulkium's own terrain). Only worth enabling together with
      *  {@link #enableHzbRegionCull}. */
@@ -79,29 +91,6 @@ public final class VulkiumConfig {
      *  Default off because open-air is the more common "always-paid" Minecraft viewpoint;
      *  flip on if your typical scenes lean dense. Costs ~13µs CPU on opaqueList.build. */
     public boolean enableFrontToBackSort = false;
-
-    /** Diagnostic toggle — when false, the CPU-side {@code OpaqueDispatchList} compaction is
-     *  bypassed (scene UBO's opaqueDispatchListPtr is written as 0). The task shader then
-     *  reverts to its legacy one-workgroup-per-section-slot linear dispatch over
-     *  {@code maxRegionIndex × 256} IDs with per-thread sectionEmpty no-ops.
-     *
-     *  <p>Use to isolate "missing-close-chunks" regressions: if bypassing fixes them, the
-     *  bug lives in {@link me.cortex.vulkium.render.OpaqueDispatchList#build} or its
-     *  {@link me.cortex.vulkium.render.VisibilityTracker} feed (region-level frustum cull
-     *  over-aggressive). If bypassing does NOT fix them, the bug is upstream of dispatch
-     *  (ingest / region allocation / section ingest race). Default on; toggle for A/B only. */
-    public boolean enableOpaqueDispatchList = true;
-
-    /** Diagnostic toggle — when false, SectionManager writes 0 into renderRanges.xyz so
-     *  task_common.glsl's populateTasks falls through to the unsigned-tail bin for EVERY
-     *  opaque quad (no face-direction cull). TerrainUploader still permutes the arena
-     *  into face-bin order, which is harmless — the unsigned bin covers the whole range.
-     *
-     *  <p>Use to isolate face-classification regressions: if flipping this to false makes
-     *  "close chunks missing" go away, the bug is in TerrainUploader.classifyQuadFace
-     *  (an axis's sign predicate wrong, or specific geometry falling into the wrong bin).
-     *  If still missing, the bug is unrelated to face binning. Default on. */
-    public boolean enableFaceBinCull = true;
 
     /** Max sections the render thread drains from the ingest queue per frame. Vulkium
      *  suppresses MC's own terrain draw, so any queued-but-not-yet-ingested section is an

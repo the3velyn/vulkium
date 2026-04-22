@@ -116,9 +116,12 @@ public final class FrameDriver {
             updateMvpFromCamera(scene, camState);
             me.cortex.vulkium.diag.PerfTracker.end("updateMvp", tMvp);
         }
-        long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
-        dispatchTerrainDraw(true, false);
-        me.cortex.vulkium.diag.PerfTracker.end("dispatchOpaque", tDraw);
+        // DEV_ONLY: bisection flag for Windows/NVIDIA hang diagnosis.
+        if (cfg.devDrawOpaquePass) {
+            long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
+            dispatchTerrainDraw(true, false);
+            me.cortex.vulkium.diag.PerfTracker.end("dispatchOpaque", tDraw);
+        }
         me.cortex.vulkium.diag.PerfTracker.end("onAfterOpaqueTerrain", tTotal);
     }
 
@@ -150,13 +153,7 @@ public final class FrameDriver {
         int dispatchCount;
         if (includeOpaque && !includeTranslucent) {
             OpaqueDispatchList list = r.opaqueDispatchList();
-            // Diagnostic: when enableOpaqueDispatchList=false we want the legacy linear
-            // dispatch width regardless of whether the list itself got built this frame
-            // (Renderer also writes 0 to the scene-UBO's opaqueDispatchListPtr so the task
-            // shader uses its fallback path).
-            boolean useCompact = list != null
-                && me.cortex.vulkium.VulkiumConfig.get().enableOpaqueDispatchList;
-            int n = useCompact ? list.count() : 0;
+            int n = list != null ? list.count() : 0;
             dispatchCount = n > 0 ? n : (rm == null ? visibleRegionCount
                 : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION);
         } else if (includeTranslucent && !includeOpaque) {
@@ -174,12 +171,8 @@ public final class FrameDriver {
         }
         if (dispatchCount == 0) return;
 
-        int liveSections = me.cortex.vulkium.managers.SectionManager.get().liveView().size();
-        long captured = me.cortex.vulkium.managers.SectionCapture.sectionsCaptured();
-        long drained = me.cortex.vulkium.managers.SectionManager.get().drainedCount();
-        logDispatchThrottled("draw: visRegions={} dispatch={} live={} captured={} drained={} queueLag={} fbW={} fbH={}",
-            visibleRegionCount, dispatchCount, liveSections,
-            captured, drained, (captured - drained),
+        logDispatchThrottled("draw: visibleRegions={} dispatchSections={} fbW={} fbH={}",
+            visibleRegionCount, dispatchCount,
             me.cortex.vulkium.blaze3d.MojangColorFormat.width(),
             me.cortex.vulkium.blaze3d.MojangColorFormat.height());
 
@@ -439,9 +432,12 @@ public final class FrameDriver {
         // translucent hook. The opaque hook's commit already pushed this frame's arena /
         // region-header / dispatch-list writes to the GPU. Dropping this commit removes one
         // command-buffer submission per frame.
-        long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
-        dispatchTerrainDraw(false, true);
-        me.cortex.vulkium.diag.PerfTracker.end("dispatchTranslucent", tDraw);
+        // DEV_ONLY: bisection flag for Windows/NVIDIA hang diagnosis.
+        if (VulkiumConfig.get().devDrawTranslucentPass) {
+            long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
+            dispatchTerrainDraw(false, true);
+            me.cortex.vulkium.diag.PerfTracker.end("dispatchTranslucent", tDraw);
+        }
         me.cortex.vulkium.diag.PerfTracker.end("onAfterTranslucentTerrain", tTotal);
     }
 
