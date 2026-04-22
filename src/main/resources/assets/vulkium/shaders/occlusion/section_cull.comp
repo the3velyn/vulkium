@@ -79,9 +79,28 @@ void main() {
 
     // Section AABB in camera-relative blocks. subchunkOffset packed nvidium (fx, fz, fy);
     // swap to standard.
+    //
+    // AABB expansion: pad the true 16³-block section by EXPAND blocks on each side before
+    // projection. Two effects, both corrective:
+    //   1. HZB stale-data tolerance. The HZB is built from the PREVIOUS frame's depth.
+    //      Under camera rotation, a section that maps to an on-screen NDC this frame may
+    //      map to UVs where last frame had a close foreground object — inflating hzbMin
+    //      and falsely occluding the (now-visible) section. A padded AABB projects to a
+    //      wider screen footprint, so the 4-corner HZB sample spans a wider area and
+    //      picks up the far depth that's actually behind the section, not just the stale
+    //      close pixel. Symptom fixed: camera rotation no longer hides previously-visible
+    //      sections.
+    //   2. Frustum-edge tolerance. A section sitting exactly on the screen edge can have
+    //      all 8 corners project to NDC values just past ±1 even though it's on-screen
+    //      in practice (sub-pixel rounding + conservative extent). Padding gives the
+    //      projected bounds a small safety margin so edge sections survive the NDC test.
+    // 1 block (~1/16 of the section) is enough to cover both. Negligible impact on real
+    // occlusion-culling quality: fully-occluded sections stay occluded because their HZB
+    // depth is unambiguously in front of the whole expanded AABB too.
+    const float SECTION_CULL_AABB_EXPAND = 1.0;
     vec3 camFracStd = vec3(subchunkOffset.x, subchunkOffset.z, subchunkOffset.y);
-    vec3 blockMin = vec3(relChunkStd) * 16.0 - camFracStd;
-    vec3 blockMax = blockMin + vec3(16.0);
+    vec3 blockMin = vec3(relChunkStd) * 16.0 - camFracStd - vec3(SECTION_CULL_AABB_EXPAND);
+    vec3 blockMax = blockMin + vec3(16.0 + 2.0 * SECTION_CULL_AABB_EXPAND);
 
     vec2 ssMin = vec2(1e30);
     vec2 ssMax = vec2(-1e30);
@@ -130,6 +149,14 @@ void main() {
     float s11 = textureLod(u_hzb, uvMax, mip).r;
     float hzbMin = min(min(s00, s10), min(s01, s11));
 
-    bool occluded = nearestZ < hzbMin;
+    // Reverse-Z precision bias. At the horizon / far distances, nearestZ and hzbMin both
+    // approach 0 (reverse-Z far plane). Tiny float32 jitter from camera rotation then
+    // flips `nearestZ < hzbMin` back and forth, producing the user-observed flicker on
+    // horizontal-centerline sections. Adding 0.0005 to nearestZ is ≤ half a millionth of
+    // the near-plane value but multiple ULPs of the far-plane value — it covers the
+    // precision window where the test is ambiguous without materially changing the cull
+    // result for clearly-occluded sections (which have nearestZ << hzbMin by >> 0.0005).
+    const float HZB_OCCLUSION_BIAS = 0.0005;
+    bool occluded = (nearestZ + HZB_OCCLUSION_BIAS) < hzbMin;
     sectionVisibility.data[sectionId] = occluded ? uint8_t(0) : uint8_t(1);
 }

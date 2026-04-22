@@ -70,11 +70,14 @@ void main() {
 
     // Camera-relative section coords (standard XYZ), then scale to blocks and shave the
     // subchunk offset (nvidium-packed (fx, fz, fy) → swap back to standard).
+    // AABB expansion: see section_cull.comp for the full rationale. 1 block of padding
+    // handles HZB stale-data under camera rotation and frustum-edge rounding.
+    const float REGION_CULL_AABB_EXPAND = 1.0;
     vec3 relMinSec = vec3(secMin - camChunkStd);
     vec3 relMaxSec = relMinSec + vec3(secSize + ivec3(1));
     vec3 camFracStd = vec3(subchunkOffset.x, subchunkOffset.z, subchunkOffset.y);
-    vec3 blockMin = relMinSec * 16.0 - camFracStd;
-    vec3 blockMax = relMaxSec * 16.0 - camFracStd;
+    vec3 blockMin = relMinSec * 16.0 - camFracStd - vec3(REGION_CULL_AABB_EXPAND);
+    vec3 blockMax = relMaxSec * 16.0 - camFracStd + vec3(REGION_CULL_AABB_EXPAND);
 
     vec2 ssMin, ssMax;
     float nearestZ;
@@ -117,6 +120,10 @@ void main() {
     // Reverse-Z: occluded iff the region's closest-to-camera corner has a smaller depth
     // value than the farthest rendered pixel in the AABB footprint — i.e., every rendered
     // pixel in that area is in front of every point of the region.
-    bool occluded = nearestZ < hzbMin;
+    //
+    // Bias: see section_cull.comp. Covers reverse-Z float precision near the far plane
+    // where both operands approach 0 and ULP-level jitter flips the test.
+    const float HZB_OCCLUSION_BIAS = 0.0005;
+    bool occluded = (nearestZ + HZB_OCCLUSION_BIAS) < hzbMin;
     regionVisibility.data[regionId] = occluded ? uint8_t(0) : uint8_t(1);
 }
