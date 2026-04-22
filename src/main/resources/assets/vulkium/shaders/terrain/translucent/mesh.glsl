@@ -51,11 +51,19 @@ void emitVertex(uint outId, uint vertexBaseId, uint innerId) {
     gl_MeshVerticesEXT[outId].gl_Position = MVP*vec4(pos,1.0);
 
 
-    vec3 exactPos = pos+subchunkOffset.xyz;
-
+    // `pos` is already camera-exact-relative in MC axis (MVP is projection × viewRotation
+    // only, no translation — so pos must be camera-relative for the draw to land correctly).
+    // Use it directly for fog; the prior `pos + subchunkOffset` double-offset and mixed
+    // MC+nvidium axes, which snapped fog onto the chunk grid and skewed distance.
     #ifdef RENDER_FOG
-    OUT[outId].fogLerp = clamp(computeFogLerp(exactPos, fogEnvStart, fogEnvEnd, fogRenderStart, fogRenderEnd) * fogColour.a, 0, 1);
+    OUT[outId].fogLerp = clamp(computeFogLerp(pos, fogEnvStart, fogEnvEnd, fogRenderStart, fogRenderEnd) * fogColour.a, 0, 1);
     #endif
+
+    // Keep the old exactPos expression solely for the per-quad depth-accumulation sort
+    // (QUADS-level translucency). The sort uses relative magnitudes between quads, which
+    // a constant per-frame offset doesn't disturb — not worth changing now since any
+    // correctness regression would land directly in the translucent ordering path.
+    vec3 exactPos = pos + subchunkOffset.xyz;
     OUT[outId].uv = decodeVertexUV(V);
 
     vec4 tint = decodeVertexColour(V);

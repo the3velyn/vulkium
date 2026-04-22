@@ -77,9 +77,17 @@ vec4 pV3;
 
 void putVertex(uint id, Vertex V) {
     #ifdef RENDER_FOG
-    vec3 pos = decodeVertexPosition(V)+payload.origin;
-    vec3 exactPos = pos+subchunkOffset.xyz;
-    OUT[id].fogLerp = clamp(computeFogLerp(exactPos, fogEnvStart, fogEnvEnd, fogRenderStart, fogRenderEnd) * fogColour.a, 0, 1);
+    // Camera-relative vertex position for fog distance. Must mirror transformVertex's
+    // composition exactly — anything else snaps fog onto the camera's chunk grid instead
+    // of the camera's exact position (16-block step inside a chunk). subchunkOffset is
+    // the camera's fractional-within-chunk position in nvidium axis (X, Z, Y); subtracting
+    // it gives a camera-exact-relative vertex, same as the pipeline used for rendering.
+    // Then swap back to MC axis so fog_cylindrical_distance's pos.xz / pos.y decomposition
+    // (horizontal / vertical) matches vanilla's convention.
+    vec3 decoded = decodeVertexPosition(V);
+    vec3 relNv = vec3(decoded.x, decoded.z, decoded.y) + payload.origin - subchunkOffset.xyz;
+    vec3 relMC = vec3(relNv.x, relNv.z, relNv.y);
+    OUT[id].fogLerp = clamp(computeFogLerp(relMC, fogEnvStart, fogEnvEnd, fogRenderStart, fogRenderEnd) * fogColour.a, 0, 1);
     #endif
 }
 
