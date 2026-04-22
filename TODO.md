@@ -39,12 +39,27 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   vs. the sampler's `maxLod`, and whether we're sampling through `textureLod(…, mipLevel)`
   with a mip level derived from screen-space derivatives.
 
+- **Immovable chunk slices on initial load.** When joining a world, some slices of
+  chunks never render until the player moves a little. Moving seems to "remind" vulkium
+  that those chunks need to be drawn — suggests the sections are captured + uploaded but
+  don't make it into `OpaqueDispatchList` (or `VisibilityTracker`'s visible-region array)
+  until something bumps the state. Likely fix is in the first-frame-after-capture path:
+  either `visibility.update` doesn't include newly-captured regions, or the dirty-region
+  drain runs after `OpaqueDispatchList.build` and the new section headers arrive on the
+  GPU one frame late.
+
 ## Feature gaps
 
 - **Antialiasing.** No MSAA / TAA / FXAA path. MC 26.2's forward pass renders into the
   main color attachment which we LOAD_OP_LOAD. Adding MSAA would require multisampled
   attachments at `PrimaryTerrainPass` pipeline create time + a resolve; TAA needs motion
   vectors and a history buffer.
+
+- **Vanilla fog implementation.** Current no-fog path is the default; the fog-variant
+  pipeline exists (`pipelineFog`, `fragModuleFog`) but doesn't match vanilla's fog curve.
+  Map MC's fog distance / fog color / fog mode uniforms into our scene UBO and reproduce
+  the `shaders/include/fog.glsl` curve (linear, exp2, underwater variant, etc.). Touches
+  `SceneUniform.fog` setter, `terrain/fog.glsl`, and the `renderFog` config flag.
 
 - **Meshlet face-bin cull.** Infrastructure landed (`fdbbf9c`, `03a69d9`), currently
   disabled pending GPU-side axis diagnosis. Re-enable once diagnosed. File:

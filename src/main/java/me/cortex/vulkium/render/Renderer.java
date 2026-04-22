@@ -623,10 +623,30 @@ public final class Renderer {
         // (rare) and on real client shutdown, so the per-toggle ~1-2 frames of stall is
         // acceptable. If this ever becomes hot, replace with a narrower wait on Mojang's
         // submitSemaphore via VulkanCommandEncoder.waitSemaphore + a targeted awaitFence.
-        try {
-            org.lwjgl.vulkan.VK10.vkDeviceWaitIdle(me.cortex.vulkium.blaze3d.MojangVulkanBridge.vkDevice());
-        } catch (Throwable t) {
-            LOGGER.warn("vkDeviceWaitIdle failed in shutdown(); proceeding anyway", t);
+        //
+        // Gate: toggle-on also calls shutdown() (handler is idempotent), but at that point
+        // every subsystem field is already null from the prior toggle-off's shutdown — so
+        // there's nothing live to protect. Calling vkDeviceWaitIdle anyway was correlating
+        // with a re-enable hang on Windows/NVIDIA: allChanged() on toggle-on dirties every
+        // MC section; MC's recompile workers queue new cmd buffers; and the vkDeviceWaitIdle
+        // between those two apparently catches MC's state at a moment the driver doesn't
+        // like. Suspicion, not proof — but skipping the wait when nothing needs protection
+        // restores toggle-on behavior without undoing the toggle-off fix.
+        boolean haveLiveResources = sceneUniform != null
+            || primaryTerrain != null
+            || uploadStream != null
+            || terrainUploader != null
+            || regionCuller != null
+            || opaqueDispatchList != null
+            || translucentSorter != null
+            || hzbTexture != null
+            || hzbBuilder != null;
+        if (haveLiveResources) {
+            try {
+                org.lwjgl.vulkan.VK10.vkDeviceWaitIdle(me.cortex.vulkium.blaze3d.MojangVulkanBridge.vkDevice());
+            } catch (Throwable t) {
+                LOGGER.warn("vkDeviceWaitIdle failed in shutdown(); proceeding anyway", t);
+            }
         }
 
         // Close in reverse construction order so dependent VK handles teardown before their
