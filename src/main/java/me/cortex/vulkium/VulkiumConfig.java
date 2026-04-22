@@ -163,6 +163,14 @@ public final class VulkiumConfig {
      *  and make before/after A/B comparisons sharper. Clamped to ≥50ms at apply time. */
     public int perfTrackerFlushMs = 500;
 
+    /** DEV_ONLY — logs a per-frame snapshot of section/region/visibility/dispatch counters
+     *  every 500ms when enabled. Use to diagnose "immovable chunk slices on initial load":
+     *  a gap between {@code live} and {@code dispatched} (with camera stationary) narrows
+     *  which subsystem is missing sections, so we can fix the root cause instead of
+     *  guessing. Off by default — leave off in release builds. Toggle at runtime by editing
+     *  {@code config/vulkium.json} and relaunching. */
+    public boolean diagImmovableChunks = false;
+
     public static VulkiumConfig get() {
         if (INSTANCE == null) {
             synchronized (VulkiumConfig.class) {

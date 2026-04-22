@@ -49,6 +49,11 @@ public final class SectionCapture {
 
     private SectionCapture() {}
 
+    /** Running count of mesh captures since boot. Used by the immovable-chunks diagnostic
+     *  (see {@code VulkiumConfig.diagImmovableChunks}) to correlate "MC is still compiling"
+     *  vs "vulkium is still catching up" when sections are missing on first load. */
+    public static long captureCount() { return SECTIONS_CAPTURED.get(); }
+
     /** Called from {@code CompileTaskMixin} at doTask HEAD. */
     public static void beginSectionCompile(long sectionPosKey) {
         COMPILING_SECTION.set(sectionPosKey);
