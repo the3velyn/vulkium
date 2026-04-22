@@ -87,18 +87,22 @@ void main() {
     vec4 albedo = texture(tex_diffuse, sampleUv);
     uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
     float cut = (alphaCutoffIdx == 1u) ? 0.1 : ((alphaCutoffIdx == 2u) ? 0.5 : 0.0);
-    // Alpha cutoff + mipmaps: at coarse LODs, mipped alpha averages texel neighbours, so
-    // pixels that are empty at mip 0 (transparent gaps between grass blades / kelp fronds)
-    // inherit neighbouring-texel alpha and cross the cutoff — distant tall-grass textures
-    // look like opaque rectangles. Test the cutoff against the SHARP (mip-0) alpha so the
-    // silhouette stays clean, while RGB still uses the mipped sample for clean distant
-    // colour. Only do the extra fetch for cutout (cut>0); opaque rarely discards anyway.
-    if (cut > 0.0) {
-        float sharpAlpha = textureLod(tex_diffuse, sampleUv, 0.0).a;
-        if (sharpAlpha <= cut) discard;
-    } else if (albedo.a <= cut) {
-        discard;
-    }
+    // Alpha cutoff against MIPPED alpha. Mojang's atlas mipmap generator uses
+    // coverage-preserving mip generation (Castaño-style) so mipped alpha holds the
+    // original coverage ratio — using it here gives smooth distance fade for CUTOUT
+    // geometry (tall grass, leaves) exactly as vanilla does with the mipmap option on.
+    //
+    // An earlier version tested against textureLod(..., 0.0).a instead, to keep silhouettes
+    // pixel-sharp. That bypassed mipmap for CUTOUT entirely: distant grass was sampled at
+    // mip 0 for alpha, so fragments either hit an exact grass texel (alpha=1, rendered) or
+    // a gap texel (alpha=0, discarded). The surviving fragments' RGB was mipped but their
+    // positions were sparse, so the perceived result was pixel-sharp — the "mipmap does
+    // nothing on leaves and tall grass" symptom. Mipped alpha gives the smooth fade that
+    // matches the mipped RGB. If this produces "opaque rectangles at distance" on some
+    // specific atlas texture, revisit: likely that texture wasn't authored with
+    // coverage-preserving mipmaps in mind, and the fix is in atlas generation rather than
+    // the shader.
+    if (albedo.a <= cut) discard;
 
     vec4 multiplier = interpolateMultiplier();
     // vanilla rendertype_translucent: fragColor = texSample * vertexColor (rgb AND a).
