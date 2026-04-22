@@ -29,6 +29,15 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   drain runs after `OpaqueDispatchList.build` and the new section headers arrive on the
   GPU one frame late.
 
+- **Crash when looking up with many regions loaded.** Tilting the camera upward (high
+  pitch) with a large visible-region set reliably crashes the client. Likely tied to a
+  limit somewhere that scales with visible-region count in the upward-facing frustum
+  (the "look up" direction maximizes the number of sky-facing regions within the view
+  volume). Suspect sites: `OpaqueDispatchList` capacity overflow, task-shader dispatch
+  count above a driver cap, or a CPU-side array sized from `maxRegionIndex` that doesn't
+  re-grow. First diagnostic step: log `visibleRegionCount` and `dispatched` right before
+  the crash to see which number is spiking.
+
 ## Feature gaps
 
 - **Antialiasing.** No MSAA / TAA / FXAA path. MC 26.2's forward pass renders into the
