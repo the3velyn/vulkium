@@ -266,24 +266,45 @@ public final class SectionManager {
                         MemoryUtil.memPutInt(ptr +  8,
                             0xF0 | syBits | ((translucentQuads & 0x3FFF) << 18));
                         MemoryUtil.memPutInt(ptr + 12, addr);
-                        // Meshlet face-bin cull TEMPORARILY DISABLED pending investigation of
-                        // a Windows / NVIDIA 581.04 / RTX 3060 GPU hang: with per-face counts
-                        // populated in renderRanges.xyz the task shader's populateTasks emits
-                        // up to 7 bins per section (6 face + unsigned tail) and the mesh
-                        // shader's getOffset linear-search widens accordingly. Within ~2k
-                        // sections ingested the Windows driver stops signaling the frame
-                        // semaphore — MC's submit times out after 5 s. Not reproducible on
-                        // Linux/RTX 3060. Disabling the xyz write (leaving total opaque in
-                        // ranges.w) restores pre-meshlet GPU command shape: populateTasks
-                        // falls through to a single unsigned bin covering [0, totalOpaque),
-                        // so every quad still renders. TerrainUploader's classification and
-                        // arena permutation into [+X][+Z][+Y][-X][-Z][-Y][unsigned] order
-                        // are harmless (the unsigned bin spans the whole range regardless of
-                        // internal ordering) and are kept in place so re-enabling is a
-                        // one-hunk change once the root cause is pinned down.
-                        MemoryUtil.memPutInt(ptr + 16, 0);
-                        MemoryUtil.memPutInt(ptr + 20, 0);
-                        MemoryUtil.memPutInt(ptr + 24, 0);
+                        // Meshlet face-bin cull RE-ENABLED. The Windows/NVIDIA hang this was
+                        // disabled for turned out to be unrelated — it was OpaqueDispatchList
+                        // and TranslucentSectionSorter both being single host-mapped BDA
+                        // buffers the CPU rewrote every frame while GPU was still reading them
+                        // (WAR race under MAX_SUBMITS_IN_FLIGHT=2). Fixed in 6e7857c and
+                        // 908f7d3 (both triple-buffered). Face-bin classification was
+                        // visually correct after 03a69d9's Y/Z axis-swap fix — the user
+                        // confirmed "seems correct now!" before the separate hang chase
+                        // swept this along for the ride.
+                        //
+                        // TerrainUploader permutes opaque quads into
+                        // [+X][+Z][+Y][-X][-Z][-Y][unsigned] arena order. This write tells
+                        // populateTasks how many live in each bin; it skips the 3 bins whose
+                        // outward face points AWAY from the camera → ~3-of-6 bins per section
+                        // dispatch zero mesh workgroups, ~35–50% reduction in emitted opaque
+                        // quads on typical outdoor scenes.
+                        //
+                        // Bin layout (matches task_common.glsl populateTasks read order with
+                        // the nvidium-inherited Y/Z axis swap — relChunkPos.y is rel-Z,
+                        // relChunkPos.z is rel-Y):
+                        //   ranges.x[0:16]  = +X (east face),   emits when rel-X ≤ 0
+                        //   ranges.x[16:32] = +Z (south face),  emits when rel-Z ≤ 0
+                        //   ranges.y[0:16]  = +Y (top),         emits when rel-Y ≤ 0
+                        //   ranges.y[16:32] = -X (west face),   emits when rel-X ≥ 0
+                        //   ranges.z[0:16]  = -Z (north face),  emits when rel-Z ≥ 0
+                        //   ranges.z[16:32] = -Y (bottom),      emits when rel-Y ≥ 0
+                        //   ranges.w[0:16]  = total opaque quads (populateTasks computes the
+                        //                     unsigned-tail size as total - sum(face bins))
+                        //   ranges.w[16:32] = starting offset (= 0)
+                        int[] fb = up.faceBinCounts;
+                        int posX = Math.min(fb[0], 0xFFFF); // east face
+                        int posZ = Math.min(fb[1], 0xFFFF); // south face
+                        int posY = Math.min(fb[2], 0xFFFF); // top
+                        int negX = Math.min(fb[3], 0xFFFF); // west face
+                        int negZ = Math.min(fb[4], 0xFFFF); // north face
+                        int negY = Math.min(fb[5], 0xFFFF); // bottom
+                        MemoryUtil.memPutInt(ptr + 16, posX | (posZ << 16));
+                        MemoryUtil.memPutInt(ptr + 20, posY | (negX << 16));
+                        MemoryUtil.memPutInt(ptr + 24, negZ | (negY << 16));
                         MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
                     }
                 }

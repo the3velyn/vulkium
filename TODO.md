@@ -67,10 +67,6 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   the `shaders/include/fog.glsl` curve (linear, exp2, underwater variant, etc.). Touches
   `SceneUniform.fog` setter, `terrain/fog.glsl`, and the `renderFog` config flag.
 
-- **Meshlet face-bin cull.** Infrastructure landed (`fdbbf9c`, `03a69d9`), currently
-  disabled pending GPU-side axis diagnosis. Re-enable once diagnosed. File:
-  `SectionManager.ingest` writes 0s to `renderRanges.xyz`; flip to the commented-out
-  per-face packing to re-enable.
 
 ## Performance
 
