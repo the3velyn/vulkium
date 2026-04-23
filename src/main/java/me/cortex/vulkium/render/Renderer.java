@@ -135,19 +135,9 @@ public final class Renderer {
                 .sweepKeepDistance(cx, cz, keepDist, 256);
         }
         // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
-        //
-        // Distance cap is max(MC render distance, cfg.regionKeepDistance). MC's RD is the
-        // "what the user expects MC to show" knob; keepDistance is vulkium's "keep this much
-        // around us loaded" knob. Without the max(), raising keepDistance above RD had no
-        // visible effect — the extra sections sat in the live table but the visibility pass
-        // culled them at RD. User wanted sections beyond RD to still render ("opaque should
-        // stay loaded at >48 chunks"); this extends the render envelope to wherever vulkium
-        // keeps data.
-        //
-        // Note: MC's projection far plane is still derived from RD, so frustum cull inside
-        // VisibilityTracker.update may still reject regions beyond ~2× RD. Extending the
-        // projection far plane is a separate change — touch cam.projectionMatrix. For now
-        // this at least makes the distance cap match what vulkium retains.
+        // getEffectiveRenderDistance() gives the server-clamped effective value (raw slider on
+        // SP, min(slider, serverRenderDistance) on MP), which is exactly what we want — vulkium
+        // doesn't need to cull further out than MC is actually loading chunks.
         //
         // Runs BEFORE translucent sort and OpaqueDispatchList build so both consumers see
         // fresh per-frame visibility (same frustum + distance filter). Without this ordering
@@ -155,12 +145,8 @@ public final class Renderer {
         // glass/water at the edge of the camera frustum during rotation.
         if (cam.cullFrustum != null && rm != null) {
             int rd = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
-            int keepDistance = VulkiumConfig.get().regionKeepDistance;
-            // "Keep All" (256) → extend to a value well beyond any expected MC world scale
-            // without overflowing the int arithmetic in VisibilityTracker's distanceLimit*3.
-            int visibilityRd = keepDistance >= 256 ? 512 : Math.max(rd, keepDistance);
             long tVis = me.cortex.vulkium.diag.PerfTracker.begin();
-            visibility.update(cam.cullFrustum, cx, cy, cz, visibilityRd);
+            visibility.update(cam.cullFrustum, cx, cy, cz, rd);
             me.cortex.vulkium.diag.PerfTracker.end("visibility.update", tVis);
         }
 
