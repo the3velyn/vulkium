@@ -22,10 +22,15 @@ import org.spongepowered.asm.mixin.injection.Redirect;
 @Mixin(VulkanBackend.class)
 public abstract class VulkanBackendMixin {
 
+    // `static` because MC 26.2-snapshot-4 made {@code VulkanBackend.createVma} static — Mixin
+    // requires redirect-callback statics to mirror their enclosing method's static-ness, and
+    // rejects the mixin with "non-static callback targets a static method" otherwise. Harmless
+    // on snapshot-3 where createVma is instance — a static callback on an instance target
+    // method also works; Mixin's rule is one-way (static target → static callback required).
     @Redirect(method = "createVma",
               at = @At(value = "INVOKE",
                        target = "Lorg/lwjgl/util/vma/Vma;vmaCreateAllocator(Lorg/lwjgl/util/vma/VmaAllocatorCreateInfo;Lorg/lwjgl/PointerBuffer;)I"))
-    private int vulkium$addDeviceAddressFlag(VmaAllocatorCreateInfo info, PointerBuffer pAllocator) {
+    private static int vulkium$addDeviceAddressFlag(VmaAllocatorCreateInfo info, PointerBuffer pAllocator) {
         info.flags(info.flags() | Vma.VMA_ALLOCATOR_CREATE_BUFFER_DEVICE_ADDRESS_BIT);
         return Vma.vmaCreateAllocator(info, pAllocator);
     }
