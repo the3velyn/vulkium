@@ -271,7 +271,21 @@ public final class SectionManager {
                         // 17 was "hide-bit"). Using the high 16 bits avoids clobbering
                         // populateTasks' `fr` starting-offset read of ranges.w>>16.
                         MemoryUtil.memPutInt(ptr,      (sx << 8) | 0xF0);
-                        MemoryUtil.memPutInt(ptr +  4, (sz << 8) | 0xF0);
+                        // header.y packs chunkZ split across bits 8-17 (low 10 bits) and
+                        // 26-31 (high 6 bits), reserving bits 18-25 for the post-sort local
+                        // section-id that {@code RegionManager.removeSection}'s tail-
+                        // compaction writes into this same field (read by
+                        // {@code translucent/task.glsl:42}). Writing chunkZ contiguously into
+                        // bits 8-31 as the code used to do means any chunkZ whose value sets
+                        // any of bits 10-17 (|chunkZ| >= 1024) collides with the section-id
+                        // overlay, and the task shader decodes a garbage chunkZ → quads land
+                        // at arbitrary world positions → catastrophic geometry scramble after
+                        // many evictions. 16-bit signed chunkZ covers ±32K chunks, well past
+                        // any practical MC playthrough; chunks past that wrap.
+                        int szLow  = sz & 0x3FF;
+                        int szHigh = (sz >> 10) & 0x3F;
+                        MemoryUtil.memPutInt(ptr +  4,
+                            (szLow << 8) | (szHigh << 26) | 0xF0);
                         // header.z low 16 = sy<<8|size; high bits 18-31 carry translucentQuads
                         // (14 bits = max 16383). Mask sy<<8 to bits 8-16 so negative sign-extension
                         // doesn't clobber bits 17+.

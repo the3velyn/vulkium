@@ -63,14 +63,23 @@ void main() {
     }
 
     ivec4 header = sectionData.data[sectionId].header;
-    ivec3 chunk = ivec3(header.xyz) >> 8;
-    // chunk.x = chunkX (24-bit signed, full) from header.x>>8 — done, arithmetic shift sign-extends.
-    // chunk.y = chunkZ (24-bit signed, full) from header.y>>8 — done.
+    ivec3 chunk;
+    // chunk.x = chunkX (24-bit signed, full) from header.x>>8 — arithmetic shift sign-extends.
+    chunk.x = header.x >> 8;
+    // chunk.y = chunkZ. Bits 18-25 of header.y hold the post-sort local section-id (written by
+    // RegionManager.removeSection's tail-compaction, read by translucent/task.glsl:42), so
+    // chunkZ is split: low 10 bits at header.y[8:17], high 6 bits at header.y[26:31]. Previously
+    // this decoded as header.y>>8 — contiguous 24-bit chunkZ — which aliased section-id into
+    // the middle of chunkZ after any tail-compaction with sectionId > 0, producing garbage
+    // chunkZ and catastrophic world-position scramble on scenes with many evictions.
+    int chunkZLow  = (header.y >> 8) & 0x3FF;
+    int chunkZHigh = (header.y >> 26) & 0x3F;
+    int chunkZ16 = chunkZLow | (chunkZHigh << 10);
+    chunk.y = (chunkZ16 << 16) >> 16; // sign-extend 16-bit chunkZ → ±32K chunks
     // chunk.z = chunkY in low 9 bits from header.z>>8, PLUS high bits polluted by hide-bit (17)
     //          and translucent-quad-count (bits 18-31 of header.z, which land at bits 10-23 of
     //          chunk.z after the shift). Mask to 9 bits and sign-extend so chunk.z holds chunkY.
-    //          (nvidium's shader masks `chunk.y` here, but that's chunkZ in its layout; the fix
-    //           is on chunk.z for our pack order header.z=chunkY.)
+    chunk.z = header.z >> 8;
     chunk.z &= 0x1ff;
     chunk.z <<= 32 - 9;
     chunk.z >>= 32 - 9;
