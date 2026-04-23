@@ -52,18 +52,9 @@ void main() {
 
     ivec4 header = sectionData.data[sectionId].header;
     uint baseDataOffset = uint(header.w);
-    ivec3 chunk;
-    chunk.x = header.x >> 8;
-    // chunk.y = chunkZ, split decode — see task.glsl for the full rationale. Bits 18-25 of
-    // header.y are the post-sort section-id (read above for the redirect), so chunkZ lives
-    // in header.y[8:17] + header.y[26:31] and must be reconstructed.
-    int chunkZLow  = (header.y >> 8) & 0x3FF;
-    int chunkZHigh = (header.y >> 26) & 0x3F;
-    int chunkZ16 = chunkZLow | (chunkZHigh << 10);
-    chunk.y = (chunkZ16 << 16) >> 16;
+    ivec3 chunk = ivec3(header.xyz)>>8;
     // chunk.z holds chunkY in low 9 bits; mask + sign-extend to recover signed chunkY
     // (bits above 16 in header.z are hide-bit + translucent-count pollution).
-    chunk.z = header.z >> 8;
     chunk.z &= 0x1ff;
     chunk.z <<= 32-9;
     chunk.z >>= 32-9;
