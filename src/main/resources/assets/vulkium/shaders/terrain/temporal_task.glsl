@@ -36,9 +36,18 @@ void main() {
     }
 
     ivec4 header = sectionData.data[sectionId].header;
-    ivec3 chunk = ivec3(header.xyz)>>8;
+    ivec3 chunk;
+    chunk.x = header.x >> 8;
+    // chunk.y = chunkZ split decode — see task.glsl. Bits 18-25 of header.y hold the
+    // post-sort section-id overwritten by RegionManager.removeSection's tail-compaction, so
+    // chunkZ lives in header.y[8:17] + header.y[26:31] (16-bit signed = ±32K chunks).
+    int chunkZLow  = (header.y >> 8) & 0x3FF;
+    int chunkZHigh = (header.y >> 26) & 0x3F;
+    int chunkZ16 = chunkZLow | (chunkZHigh << 10);
+    chunk.y = (chunkZ16 << 16) >> 16;
     // chunk.z holds chunkY in low 9 bits (bits 8-16 of header.z), with pollution above
     // from the hide-bit and translucent count. Mask + sign-extend to recover signed chunkY.
+    chunk.z = header.z >> 8;
     chunk.z &= 0x1ff;
     chunk.z <<= 32-9;
     chunk.z >>= 32-9;
