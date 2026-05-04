@@ -17,13 +17,17 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   same scene (post: ~14 ms vs pre: ~0.8 ms; gpu.hzbBuild and gpu.regionCull unchanged),
   doesn't recover without full client restart, F3+A doesn't fix. Confirmed independent
   of vulkium's toggle-handler choices: tested {shutdown + flushAll + allChanged}, {no
-  shutdown, flushAll + allChanged}, {only allChanged}, and {pure flag flip with no
-  side-effects} — all four variants give the same ~60 fps post-toggle. Cost lives in
-  MC-side GPU state created while MC's terrain pipeline runs during the disable
-  window. Suspect MC's section uber-buffer / Dynamic Uniforms growth (logs show
-  "Resizing Chunk Sections UBO" repeatedly during the off period); freeing it on
-  re-enable would require Mojang-internal API. Resume here when looking at MC's
-  ChunkSectionsToRender / SectionRenderDispatcher lifecycle.
+  shutdown, flushAll + allChanged}, {only allChanged}, {pure flag flip}, and {always-
+  cancel MC's pipeline so MC never runs during the disable window} — all variants
+  regress identically. The always-cancel diagnostic ruled out MC's pipeline running
+  during the disable window as the cause. Adding `mc.levelRenderer.resetLevelRenderData`
+  on the disable→enable transition didn't help either (already covered via
+  `LevelRendererAllChangedMixin` which fires on `LevelExtractor.allChanged`).
+  Remaining hypothesis: GPU power-management. NVIDIA drivers downclock the GPU when
+  load drops (e.g., during a pause menu / Video Settings UI), and the lower clock
+  state may not recover even after the workload returns. Verify with `nvidia-smi -q
+  -d CLOCK` before/after toggle. If confirmed, the workaround is OS/driver-level (set
+  PowerMizer to "Prefer maximum performance"), not vulkium code.
 
 - **Sub-chunk doesn't show its final change when that change empties the section.**
   Removing the last block in a section (e.g. the lone block that makes the section

@@ -40,29 +40,13 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                     + "immediately; no restart needed). Default: ON.",
                 !cfg.forceDisable, v -> {
                     cfg.forceDisable = !v;
-                    // KNOWN ISSUE: re-enabling vulkium after a disable window drops
-                    // gpu.opaqueDraw from ~800µs to ~14ms on the same scene (~15×
-                    // slower terrain GPU) and doesn't recover until full client
-                    // restart. Tested four variants in 2026-05-04:
-                    //   1. shutdown + flushAll + allChanged (this one): 60 fps post-toggle
-                    //   2. no shutdown, flushAll + allChanged: 60 fps post-toggle
-                    //   3. only allChanged: 60 fps post-toggle, arena triples
-                    //   4. pure flag flip: 60 fps post-toggle + chunks missing until F3+A
-                    // All variants regress; the cost lives in MC-side GPU state from the
-                    // pipeline running during the disable window, not in anything we do
-                    // on the transition. Tracking this requires deeper investigation
-                    // into MC's section uber-buffer / dynamic uniforms lifecycle.
-                    //
-                    // Picking variant 1 (the original): full teardown + rebuild gives
-                    // the cleanest visual state on toggle (no missing chunks) at the
-                    // same regressed FPS as the others. Recovery: full client restart.
-                    try {
-                        me.cortex.vulkium.render.Renderer.get().shutdown();
-                    } catch (Throwable t) {
-                        org.slf4j.LoggerFactory.getLogger("vulkium/toggle")
-                            .warn("Renderer shutdown on toggle failed", t);
-                    }
-                    me.cortex.vulkium.managers.SectionManager.get().queueFlushAll();
+                    // Just call allChanged — LevelRendererAllChangedMixin (which we own)
+                    // hooks its HEAD and runs Renderer.shutdown + SectionManager.queueFlushAll
+                    // + LevelRenderer.resetLevelRenderData inside the mixin, so the toggle
+                    // gets the full vulkium + Mojang teardown cleanup as a side-effect of
+                    // a single API call. Matches the F3+A path exactly. (Calling shutdown +
+                    // flushAll directly here was redundant — the mixin re-runs them when
+                    // allChanged fires anyway.)
                     net.minecraft.client.Minecraft mc =
                         net.minecraft.client.Minecraft.getInstance();
                     if (mc != null && mc.levelExtractor != null) {
