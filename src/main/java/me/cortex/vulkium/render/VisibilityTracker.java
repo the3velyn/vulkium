@@ -92,20 +92,21 @@ public final class VisibilityTracker {
             java.util.Arrays.fill(visibleMask, 0, max, false);
         }
 
-        // Distance threshold uses the same units as RegionManager.distance() (section coords).
-        // RegionManager.distance returns the manhattan distance from region-center to camera in
-        // section units. A safe over-estimate: renderDistance sections in each axis + 4 for the
-        // half-region slop (region half-extent is 4 sections on X/Z, 2 on Y). Use 3*(rd+4) so
-        // manhattan-sum corners are admitted.
-        int distanceLimit = renderDistance + 4;
+        // No CPU-side distance cull. The previous (rd+4)*3 manhattan threshold rejected
+        // regions whose section-Manhattan distance exceeded ~3*rd, which collapsed to a
+        // ~108-chunk horizontal cutoff at rd=32 — and any region MC had handed us beyond
+        // that distance (extended terrain, mods, or stale captures from a previous setting)
+        // disappeared with no GUI toggle to disable it. The frustum check below is the
+        // correct gate for "is this region in view"; bounding the iteration by maxRegions
+        // already caps the loop, so the dropped distance test costs nothing in steady state.
 
         int n = 0;
         for (int id = 0; id < max; id++) {
             if (!rm.regionExists(id)) continue;
 
-            // Distance cull (cheap, integer manhattan).
+            // Distance is still computed for the near-to-far sort below, but no longer
+            // gates emission.
             int d = rm.distance(id, camSectionX, camSectionY, camSectionZ);
-            if (d > distanceLimit * 3) continue;
 
             // Frustum cull. Region AABB is 128x64x128 blocks rooted at (rx<<7, ry<<6, rz<<7).
             long key = rm.regionIdToKey(id);
