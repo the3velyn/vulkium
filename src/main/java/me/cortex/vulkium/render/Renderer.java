@@ -71,6 +71,9 @@ public final class Renderer {
     private boolean sectionVisibilityReadbackArmed;
     private TranslucentSectionSorter translucentSorter;
     private OpaqueDispatchList opaqueDispatchList;
+    /** Per-section upload-timestamp buffer for the vanilla chunk fade-in effect. Host-mapped
+     *  BDA; CPU stamps on ingest, GPU reads in the task shader to compute visibility. */
+    private SectionFadeTimes fadeTimes;
     private int hzbWidth;
     private int hzbHeight;
     private long hzbLastBuildNs;
@@ -86,6 +89,23 @@ public final class Renderer {
     private Renderer() {}
 
     public static Renderer get() { return INSTANCE; }
+
+    /** Patch MC's finite-far reverse-Z perspective to reverse-Z infinite-far in place.
+     *  MC 26.2 builds the projection with far = renderDistance * 4 chunks (= 64 * RD blocks),
+     *  so far ≈ 2048 at RD=32. Any vertex behind that plane clips out and produces the
+     *  camera-locked cutoff plane the user reports.
+     *
+     *  Reverse-Z finite (Vulkan, depth [0, 1]):
+     *    m22 = -near/(far-near)
+     *    m32 =  far*near/(far-near)
+     *  Limit far → ∞:
+     *    m22 → 0
+     *    m32 → near
+     *  The existing m32 already equals far*near/(far-near) ≈ near for far ≫ near, so leave
+     *  m32 alone and just zero m22. m23 and m33 are unchanged from the input (-1 and 0). */
+    static void toReverseZInfinite(Matrix4f proj) {
+        proj.m22(0.0f);
+    }
 
     /** Populate the scene UBO for this frame from MC's render state. Called at START_MAIN. */
     public void prepareFrame(AbstractLevelRenderContext ctx) {
@@ -108,7 +128,16 @@ public final class Renderer {
         // chunkPosition subtraction; using a full modelView (with camera translation baked in)
         // double-offsets positions. FrameDriver.onEndMain re-refreshes this value later in the
         // frame using the same rotation-only matrix.
-        Matrix4f mvp = new Matrix4f(cam.projectionMatrix).mul(cam.viewRotationMatrix);
+        //
+        // MC 26.2's projectionMatrix has a FINITE far plane at ~rd*64 blocks (RD=32 →
+        // 2048). Vertices past that plane clip out, producing the camera-locked horizontal
+        // cutoff users saw at high render distances. Patch the matrix in place to
+        // reverse-Z infinite far: zero m22, leave m32 = near (already encoded as far*near/
+        // (far-near) ≈ near for far >> near). Same handedness, same near, no depth-test
+        // breakage with our GREATER_OR_EQUAL pipeline.
+        Matrix4f mvp = new Matrix4f(cam.projectionMatrix);
+        toReverseZInfinite(mvp);
+        mvp.mul(cam.viewRotationMatrix);
 
         Vec3 pos = cam.pos == null ? Vec3.ZERO : cam.pos;
         int cx = (int) Math.floor(pos.x) >> 4;
@@ -134,19 +163,25 @@ public final class Renderer {
             me.cortex.vulkium.managers.SectionManager.get()
                 .sweepKeepDistance(cx, cz, keepDist, 256);
         }
-        // Region-level frustum + distance cull. Uses MC's cullFrustum directly — no sodium dep.
-        // getEffectiveRenderDistance() gives the server-clamped effective value (raw slider on
-        // SP, min(slider, serverRenderDistance) on MP), which is exactly what we want — vulkium
-        // doesn't need to cull further out than MC is actually loading chunks.
+        // Region-level frustum cull, against OUR own frustum. MC's cam.cullFrustum is built
+        // from the unmodified projectionMatrix (finite far ≈ rd*64 blocks), so reusing it
+        // here would re-introduce the camera-locked cutoff at the region level even though
+        // our draw-pass MVP is patched to infinite far. Build a JOML FrustumIntersection
+        // from {patched proj} × {viewRotation} × {translate(-camPos)} and test world AABBs
+        // against that — matches the exact set of regions that will actually clip-pass in
+        // the mesh-shader pipeline.
         //
         // Runs BEFORE translucent sort and OpaqueDispatchList build so both consumers see
-        // fresh per-frame visibility (same frustum + distance filter). Without this ordering
-        // the translucent sort's visibility filter reads stale last-frame data — floating
-        // glass/water at the edge of the camera frustum during rotation.
-        if (cam.cullFrustum != null && rm != null) {
+        // fresh per-frame visibility (same frustum filter).
+        if (rm != null) {
+            Matrix4f cullMat = new Matrix4f(cam.projectionMatrix);
+            toReverseZInfinite(cullMat);
+            cullMat.mul(cam.viewRotationMatrix);
+            cullMat.translate((float) -pos.x, (float) -pos.y, (float) -pos.z);
+            org.joml.FrustumIntersection cullFrustum = new org.joml.FrustumIntersection(cullMat);
             int rd = net.minecraft.client.Minecraft.getInstance().options.getEffectiveRenderDistance();
             long tVis = me.cortex.vulkium.diag.PerfTracker.begin();
-            visibility.update(cam.cullFrustum, cx, cy, cz, rd);
+            visibility.update(cullFrustum, cx, cy, cz, rd);
             me.cortex.vulkium.diag.PerfTracker.end("visibility.update", tVis);
         }
 
@@ -250,6 +285,7 @@ public final class Renderer {
             .originArrPtr(originBuffer != null ? originBuffer.deviceAddress() : 0L)
             .statisticsPtr(0L)
             .opaqueDispatchListPtr(opaqueDispatchList != null ? opaqueDispatchList.deviceAddress() : 0L)
+            .fadeTimesPtr(fadeTimes != null ? fadeTimes.deviceAddress() : 0L)
             // nvidium convention: screenSize is HALF the framebuffer resolution in pixels.
             // Mesh shader bbox cull does `((pos.xy/pos.w)+1) * screenSize` → NDC [-1..1] +1 = [0..2]
             // then × (W/2, H/2) = [0..W, 0..H] pixel coords. Use MC's window — MojangColorFormat
@@ -259,6 +295,25 @@ public final class Renderer {
                 net.minecraft.client.Minecraft.getInstance().getWindow().getHeight() * 0.5f)
             .regionCount(regionCount)
             .frameId((int) (FrameDriver.frameCount() & 0xFF));
+
+        // Vanilla chunk-fade params. Mirrors LevelRenderer: fadeDurationMs = floor(
+        // options.chunkSectionFadeInTime * 1000); a section was marked wasPreviouslyEmpty=true
+        // on first-ever upload and receives a full fadeDuration; subsequent rebuilds receive
+        // fadeDuration=0 (no re-fade). Our vulkium-side "first-ever upload" gate lives in
+        // SectionManager.ingest — if sectionToRegionRef had no prior entry we stamp
+        // fadeTimes with `now`; subsequent rebuilds skip the stamp so the original timestamp
+        // (already past-end-of-fade) is preserved. Option 0.0 → duration 0 → shader treats
+        // visibility as 1 unconditionally (no fade). Low 32 bits of Unix millis: elapsed deltas
+        // ≤ fadeDurationMs (max a few seconds) don't exercise uint32 wraparound.
+        int fadeDurationMs = 0;
+        if (VulkiumConfig.get().chunkLoadAnimation) {
+            try {
+                Double t = net.minecraft.client.Minecraft.getInstance().options
+                    .chunkSectionFadeInTime().get();
+                if (t != null) fadeDurationMs = (int) Math.max(0L, Math.round(t * 1000.0));
+            } catch (Throwable ignored) { /* option read races with client init; default 0 = no fade */ }
+        }
+        sceneUniform.fade((int) System.currentTimeMillis(), fadeDurationMs);
 
         // Vanilla fog. cam.fogData is populated by MC's FogRenderer.setupFog every frame
         // based on biome, view target, weather, RD, etc. Plumb it straight through and let
@@ -318,10 +373,47 @@ public final class Renderer {
         return sectionVisibilityReadbackArmed && sectionVisibilityReadback != null
             ? sectionVisibilityReadback.mappedPointer() : 0L;
     }
+
+    /**
+     * Stamp the host-visible visibility readbacks to 0xFF for a newly-activated region slot.
+     *
+     * <p>{@link me.cortex.vulkium.managers.util.IdProvider} recycles region ids when regions
+     * are evicted, so a freshly-allocated region may inherit a readback byte that still reads
+     * 0 from its previous occupant's last cull — typically the occupant was marked occluded
+     * just before eviction. {@link OpaqueDispatchList#build} then skips the new region at
+     * list-build time, and the sections inside it never reach the task shader until the next
+     * cull-copy round-trip overwrites the slot. Camera motion accelerates that round-trip on
+     * NVIDIA drivers (the submission pace picks up), which is what surfaced as "immovable
+     * chunk slices until the player moves a little".
+     *
+     * <p>Writing 0xFF to our own mapped copy is safe: any in-flight GPU copy to the same
+     * byte lands after we return and either confirms 0xFF (region stays included) or writes
+     * the real cull result (handled correctly by the subsequent frame's dispatch).
+     * Over-inclusion is harmless; the GPU-side region/section visibility gate in the task
+     * shader catches occluded regions regardless of whether the CPU list-builder trusted the
+     * readback.
+     */
+    public void onRegionActivated(int regionId) {
+        if (regionVisibilityReadback != null && regionId >= 0
+                && (long) regionId < regionVisibilityReadback.size()) {
+            org.lwjgl.system.MemoryUtil.memPutByte(
+                regionVisibilityReadback.mappedPointer() + (long) regionId, (byte) 0xFF);
+        }
+        if (sectionVisibilityReadback != null && regionId >= 0) {
+            long base = (long) regionId * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION;
+            long len = me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION;
+            if (base + len <= sectionVisibilityReadback.size()) {
+                org.lwjgl.system.MemoryUtil.memSet(
+                    sectionVisibilityReadback.mappedPointer() + base, 0xFF, len);
+            }
+        }
+    }
+
     /** @return the GPU timer pool, or {@code null} when the hardware doesn't support
      *  timestamp queries. Callers must null-check every access. */
     public me.cortex.vulkium.diag.GpuTimerPool gpuTimers() { return gpuTimers; }
     public OpaqueDispatchList opaqueDispatchList() { return opaqueDispatchList; }
+    public SectionFadeTimes fadeTimes() { return fadeTimes; }
     public TranslucentSectionSorter translucentSorter() { return translucentSorter; }
     public TerrainUploader terrainUploader() { return terrainUploader; }
     public UploadStream uploadStream() { return uploadStream; }
@@ -570,6 +662,8 @@ public final class Renderer {
                 me.cortex.vulkium.VulkiumConfig.get().maxRegions);
             opaqueDispatchList = new OpaqueDispatchList(
                 me.cortex.vulkium.VulkiumConfig.get().maxRegions);
+            fadeTimes = new SectionFadeTimes(
+                me.cortex.vulkium.VulkiumConfig.get().maxRegions);
             primaryTerrain = new PrimaryTerrainPass();
             terrainUploader = new TerrainUploader();
             regionCuller = new RegionCuller();
@@ -744,6 +838,10 @@ public final class Renderer {
         if (opaqueDispatchList != null) {
             try { opaqueDispatchList.close(); } catch (Throwable t) { LOGGER.warn("OpaqueDispatchList close failed", t); }
             opaqueDispatchList = null;
+        }
+        if (fadeTimes != null) {
+            try { fadeTimes.close(); } catch (Throwable t) { LOGGER.warn("SectionFadeTimes close failed", t); }
+            fadeTimes = null;
         }
         if (uploadStream != null) {
             try { uploadStream.close(); } catch (Throwable t) { LOGGER.warn("UploadStream close failed", t); }

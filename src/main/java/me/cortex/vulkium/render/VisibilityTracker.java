@@ -2,9 +2,8 @@ package me.cortex.vulkium.render;
 
 import me.cortex.vulkium.Vulkium;
 import me.cortex.vulkium.managers.RegionManager;
-import net.minecraft.client.renderer.culling.Frustum;
 import net.minecraft.core.SectionPos;
-import net.minecraft.world.phys.AABB;
+import org.joml.FrustumIntersection;
 
 import java.util.function.IntConsumer;
 
@@ -66,7 +65,7 @@ public final class VisibilityTracker {
      *                        culled, but we keep the check in section units since
      *                        {@link RegionManager#distance} returns section-coord distance.
      */
-    public void update(Frustum frustum,
+    public void update(FrustumIntersection frustum,
                        int camSectionX, int camSectionY, int camSectionZ,
                        int renderDistance) {
         long start = System.nanoTime();
@@ -109,15 +108,19 @@ public final class VisibilityTracker {
             int d = rm.distance(id, camSectionX, camSectionY, camSectionZ);
 
             // Frustum cull. Region AABB is 128x64x128 blocks rooted at (rx<<7, ry<<6, rz<<7).
+            // Tested against our own JOML FrustumIntersection built from the patched
+            // (reverse-Z infinite) MVP, NOT MC's cullFrustum — MC's frustum is built from
+            // the finite-far projection so it rejects everything past the ~2048-block
+            // far plane, recreating the same camera-locked cutoff at the region level
+            // even after we patched the projection for our draw pass.
             long key = rm.regionIdToKey(id);
             int rx = SectionPos.x(key);
             int ry = SectionPos.y(key);
             int rz = SectionPos.z(key);
-            double minX = (double) (rx << 7);
-            double minY = (double) (ry << 6);
-            double minZ = (double) (rz << 7);
-            AABB aabb = new AABB(minX, minY, minZ, minX + 128.0, minY + 64.0, minZ + 128.0);
-            if (!frustum.isVisible(aabb)) continue;
+            float minX = (float) (rx << 7);
+            float minY = (float) (ry << 6);
+            float minZ = (float) (rz << 7);
+            if (!frustum.testAab(minX, minY, minZ, minX + 128f, minY + 64f, minZ + 128f)) continue;
 
             scratchIds[n] = id;
             scratchDist[n] = d;

@@ -82,41 +82,7 @@ public final class FrameDriver {
             Renderer.get().prepareFrame(ctx);
             me.cortex.vulkium.diag.PerfTracker.end("prepareFrame", tPrep);
         }
-
-        if (cfg.diagImmovableChunks) {
-            logImmovableDiagThrottled();
-        }
-
         me.cortex.vulkium.diag.PerfTracker.end("onStartMain", tTotal);
-    }
-
-    private static long lastImmovableDiagNs = 0L;
-
-    /** Log a snapshot of section-count counters every 500ms when {@code diagImmovableChunks}
-     *  is on. The "live" count tracks sections vulkium has captured + ingested; "dispatched"
-     *  is how many entries this frame's {@code OpaqueDispatchList} wrote. With a stationary
-     *  camera a gap between the two narrows the bug to whichever subsystem isn't propagating
-     *  sections through (allocation, visibility, or dispatch-list build). */
-    private static void logImmovableDiagThrottled() {
-        long now = System.nanoTime();
-        if (now - lastImmovableDiagNs < 500_000_000L) return;
-        lastImmovableDiagNs = now;
-        try {
-            int live = SectionManager.get().liveView().size();
-            me.cortex.vulkium.managers.RegionManager rm = Vulkium.regionManager();
-            int regionCount = rm != null ? rm.regionCount() : -1;
-            int maxRegionIndex = rm != null ? rm.maxRegionIndex() : -1;
-            Renderer r = Renderer.get();
-            VisibilityTracker vis = r.visibility();
-            int visibleRegions = vis != null ? vis.visibleRegionCount() : -1;
-            OpaqueDispatchList list = r.opaqueDispatchList();
-            int dispatched = list != null ? list.count() : -1;
-            LOGGER.info("diag.immovable frame={} live={} regions={} maxRegionIdx={} visibleRegions={} dispatched={} captures={}",
-                FRAMES.get(), live, regionCount, maxRegionIndex, visibleRegions, dispatched,
-                me.cortex.vulkium.managers.SectionCapture.captureCount());
-        } catch (Throwable t) {
-            LOGGER.warn("diag.immovable log failed", t);
-        }
     }
 
     private static void onAfterOpaqueTerrain(LevelTerrainRenderContext ctx) {
@@ -504,11 +470,14 @@ public final class FrameDriver {
         org.joml.Matrix4f mvp;
         org.joml.Matrix4f captured = new org.joml.Matrix4f();
         if (me.cortex.vulkium.blaze3d.BobViewTap.readProjection(captured)) {
+            // captured projection still carries MC's finite far plane; extend to infinite.
+            me.cortex.vulkium.render.Renderer.toReverseZInfinite(captured);
             mvp = captured.mul(camState.viewRotationMatrix);
         } else {
             org.joml.Matrix4f pose = new org.joml.Matrix4f();
             boolean havePose = me.cortex.vulkium.blaze3d.BobViewTap.readPose(pose);
             mvp = new org.joml.Matrix4f(camState.projectionMatrix);
+            me.cortex.vulkium.render.Renderer.toReverseZInfinite(mvp);
             if (havePose) mvp.mul(pose);
             mvp.mul(camState.viewRotationMatrix);
         }
