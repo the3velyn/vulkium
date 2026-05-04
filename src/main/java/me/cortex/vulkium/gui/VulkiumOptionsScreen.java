@@ -40,28 +40,29 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                     + "immediately; no restart needed). Default: ON.",
                 !cfg.forceDisable, v -> {
                     cfg.forceDisable = !v;
-                    // Full teardown + rebuild on every transition. Without this, flipping
-                    // off→on in-session left vulkium's renderer state stale — per the 2026-04-20
-                    // memory, FPS would drop to vanilla baseline and not recover until a full
-                    // client restart. Tearing down everything and letting the next prepareFrame
-                    // re-run ensureInit() matches the boot-path exactly.
+                    // KNOWN ISSUE: re-enabling vulkium after a disable window drops
+                    // gpu.opaqueDraw from ~800µs to ~14ms on the same scene (~15×
+                    // slower terrain GPU) and doesn't recover until full client
+                    // restart. Tested four variants in 2026-05-04:
+                    //   1. shutdown + flushAll + allChanged (this one): 60 fps post-toggle
+                    //   2. no shutdown, flushAll + allChanged: 60 fps post-toggle
+                    //   3. only allChanged: 60 fps post-toggle, arena triples
+                    //   4. pure flag flip: 60 fps post-toggle + chunks missing until F3+A
+                    // All variants regress; the cost lives in MC-side GPU state from the
+                    // pipeline running during the disable window, not in anything we do
+                    // on the transition. Tracking this requires deeper investigation
+                    // into MC's section uber-buffer / dynamic uniforms lifecycle.
                     //
-                    // Safe to call synchronously from the click handler: OptionInstance's
-                    // onValueUpdate fires on the main/render thread between frames, not mid-draw,
-                    // so VK resource teardown doesn't race with recording.
+                    // Picking variant 1 (the original): full teardown + rebuild gives
+                    // the cleanest visual state on toggle (no missing chunks) at the
+                    // same regressed FPS as the others. Recovery: full client restart.
                     try {
                         me.cortex.vulkium.render.Renderer.get().shutdown();
                     } catch (Throwable t) {
-                        // Don't block the toggle; log and continue to allChanged.
                         org.slf4j.LoggerFactory.getLogger("vulkium/toggle")
                             .warn("Renderer shutdown on toggle failed", t);
                     }
                     me.cortex.vulkium.managers.SectionManager.get().queueFlushAll();
-                    // Force MC to re-mark every section dirty and recompile. When vulkium
-                    // re-enables, MC's section compile path re-triggers our capture mixin so
-                    // vulkium gets fresh data. When vulkium disables, it re-primes MC's own
-                    // uber-buffer draw path with valid state instead of whatever it had while
-                    // we were cancelling its renderGroup.
                     net.minecraft.client.Minecraft mc =
                         net.minecraft.client.Minecraft.getInstance();
                     if (mc != null && mc.levelExtractor != null) {
@@ -144,6 +145,15 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                 "Apply MC-style fog in vulkium's terrain pass. NOT YET WIRED — toggle has no "
                     + "effect at the moment; tracked as placeholder for the fog wire-up step.",
                 cfg.renderFog, v -> cfg.renderFog = v));
+
+        this.list.addSmall(
+            boolOption("Chunk load animation",
+                "Fade newly-loaded chunks in from the fog color over the duration set by "
+                    + "vanilla's \"Chunk Fade Time\" option (Video Settings → Chunk Fade). "
+                    + "When off, vulkium shows new chunks instantly regardless of the vanilla "
+                    + "setting. When on, the vanilla setting drives the fade length; setting "
+                    + "that to None also disables the effect.",
+                cfg.chunkLoadAnimation, v -> cfg.chunkLoadAnimation = v));
 
         this.list.addSmall(
             enumSlider("Translucency sort", TranslucencySortingLevel.class,
