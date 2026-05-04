@@ -108,7 +108,16 @@ public final class MojangBackendFixup {
         injectFeature(new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT, "storageBuffer8BitAccess",
             VkPhysicalDeviceVulkan12Features.STORAGEBUFFER8BITACCESS));
 
-        LOGGER.info("Injected VK_EXT_mesh_shader + meshShader + taskShader + meshShaderQueries + bufferDeviceAddress + storageBuffer8BitAccess into Mojang's VulkanBackend required-set.");
+        // depthClamp — vulkium uses MC's unmodified projection (so depth values match
+        // MC's entities exactly) but enables depthClampEnable=true on its mesh-shader
+        // pipeline, so vertices past MC's finite far plane get their depth clamped to
+        // maxDepth instead of being clipped. Without this device feature the pipeline
+        // create call rejects depthClampEnable=true and our terrain disappears past
+        // ~2048 blocks again. Core 1.0 feature, lives in VkPhysicalDeviceFeatures.
+        injectFeature(new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT, "depthClamp",
+            org.lwjgl.vulkan.VkPhysicalDeviceFeatures.DEPTHCLAMP));
+
+        LOGGER.info("Injected VK_EXT_mesh_shader + meshShader + taskShader + meshShaderQueries + bufferDeviceAddress + storageBuffer8BitAccess + depthClamp into Mojang's VulkanBackend required-set.");
     }
 
     private static void injectExtension(String name) {

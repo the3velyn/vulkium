@@ -124,20 +124,19 @@ public final class Renderer {
         if (state == null || state.cameraRenderState == null) return;
         CameraRenderState cam = state.cameraRenderState;
 
-        // MVP = projection * viewRotation. Rotation-only matrix pairs with our in-shader
-        // chunkPosition subtraction; using a full modelView (with camera translation baked in)
-        // double-offsets positions. FrameDriver.onEndMain re-refreshes this value later in the
-        // frame using the same rotation-only matrix.
+        // MVP = MC's UNMODIFIED projection × viewRotation. Earlier we patched m22=0 to
+        // turn the projection infinite-far; that fixed the camera-locked 2048-block cutoff
+        // but made our depth values diverge from MC's by exactly m22 (≈2.4e-5 at RD=32).
+        // With reverse-Z GREATER_OR_EQUAL, that tiny constant offset always lets vulkium
+        // terrain win the depth test against MC-rendered entities at the same world point —
+        // entities visibly sank into the ground as elevation increased.
         //
-        // MC 26.2's projectionMatrix has a FINITE far plane at ~rd*64 blocks (RD=32 →
-        // 2048). Vertices past that plane clip out, producing the camera-locked horizontal
-        // cutoff users saw at high render distances. Patch the matrix in place to
-        // reverse-Z infinite far: zero m22, leave m32 = near (already encoded as far*near/
-        // (far-near) ≈ near for far >> near). Same handedness, same near, no depth-test
-        // breakage with our GREATER_OR_EQUAL pipeline.
-        Matrix4f mvp = new Matrix4f(cam.projectionMatrix);
-        toReverseZInfinite(mvp);
-        mvp.mul(cam.viewRotationMatrix);
+        // Solution: use MC's matrix verbatim so depth values match exactly, and rely on
+        // depthClampEnable=true in PrimaryTerrainPass to keep far-plane vertices alive
+        // (they get clamped to the maxDepth instead of clipped). The region-level frustum
+        // cull below still uses an infinite-far variant so we don't reject regions past
+        // MC's 2048-block far plane.
+        Matrix4f mvp = new Matrix4f(cam.projectionMatrix).mul(cam.viewRotationMatrix);
 
         Vec3 pos = cam.pos == null ? Vec3.ZERO : cam.pos;
         int cx = (int) Math.floor(pos.x) >> 4;

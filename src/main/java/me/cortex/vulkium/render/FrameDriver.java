@@ -467,17 +467,17 @@ public final class FrameDriver {
      *  per-group render hooks. */
     private static void updateMvpFromCamera(me.cortex.vulkium.render.SceneUniform scene,
                                              net.minecraft.client.renderer.state.level.CameraRenderState camState) {
+        // Use MC's UNMODIFIED projection so vulkium's terrain depth values match MC's
+        // entity depth values exactly. Far-plane clipping is handled at the pipeline
+        // level via depthClampEnable=true in PrimaryTerrainPass.
         org.joml.Matrix4f mvp;
         org.joml.Matrix4f captured = new org.joml.Matrix4f();
         if (me.cortex.vulkium.blaze3d.BobViewTap.readProjection(captured)) {
-            // captured projection still carries MC's finite far plane; extend to infinite.
-            me.cortex.vulkium.render.Renderer.toReverseZInfinite(captured);
             mvp = captured.mul(camState.viewRotationMatrix);
         } else {
             org.joml.Matrix4f pose = new org.joml.Matrix4f();
             boolean havePose = me.cortex.vulkium.blaze3d.BobViewTap.readPose(pose);
             mvp = new org.joml.Matrix4f(camState.projectionMatrix);
-            me.cortex.vulkium.render.Renderer.toReverseZInfinite(mvp);
             if (havePose) mvp.mul(pose);
             mvp.mul(camState.viewRotationMatrix);
         }

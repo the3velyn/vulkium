@@ -111,8 +111,17 @@ public final class MeshPipeline implements AutoCloseable {
                     .viewportCount(1)
                     .scissorCount(1);
 
+                // depthClampEnable=true: we use MC's unmodified projection so terrain
+                // depth values match MC's entities exactly, but MC's projection has a
+                // finite far plane at ~rd*64 blocks. Without depth clamp, vertices past
+                // that plane would be clipped (the camera-locked 2048-block cutoff). With
+                // depth clamp, those vertices' depth is clamped to maxDepth and they
+                // continue to rasterize at the correct screen position. Combined with the
+                // infinite-far cull frustum in VisibilityTracker, far regions stay visible
+                // without introducing the entity-vs-block depth-test mismatch.
                 VkPipelineRasterizationStateCreateInfo raster = VkPipelineRasterizationStateCreateInfo.calloc(stack)
                     .sType$Default()
+                    .depthClampEnable(true)
                     .polygonMode(VK10.VK_POLYGON_MODE_FILL)
                     .cullMode(cullMode)
                     .frontFace(VK10.VK_FRONT_FACE_COUNTER_CLOCKWISE)
