@@ -122,7 +122,6 @@ public final class FrameDriver {
         me.cortex.vulkium.diag.PerfTracker.end("onAfterOpaqueTerrain", tTotal);
     }
 
-    private static long lastDispatchLog = 0L;
     private static boolean depthFormatLogged = false;
     private static boolean atlasInfoLogged = false;
 
@@ -133,12 +132,10 @@ public final class FrameDriver {
         me.cortex.vulkium.render.SceneUniform scene = r.sceneUniform();
         VisibilityTracker vis = r.visibility();
         if (pass == null || scene == null || vis == null) {
-            logDispatchThrottled("draw: null subsystem pass={} scene={} vis={}", pass, scene, vis);
             return;
         }
         int visibleRegionCount = vis.visibleRegionCount();
         if (visibleRegionCount == 0) {
-            logDispatchThrottled("draw: visibleRegionCount=0 (cull rejected every region)");
             return;
         }
 
@@ -181,11 +178,6 @@ public final class FrameDriver {
                 : rm.maxRegionIndex() * me.cortex.vulkium.managers.RegionManager.SECTIONS_PER_REGION;
         }
         if (dispatchCount == 0) return;
-
-        logDispatchThrottled("draw: visibleRegions={} dispatchSections={} fbW={} fbH={}",
-            visibleRegionCount, dispatchCount,
-            me.cortex.vulkium.blaze3d.MojangColorFormat.width(),
-            me.cortex.vulkium.blaze3d.MojangColorFormat.height());
 
         // Open our OWN render pass on Mojang's color attachment via vkCmdBeginRendering inside
         // a PRIMARY cmd buffer. Previous secondary-buffer approach assumed Fabric's
@@ -413,9 +405,6 @@ public final class FrameDriver {
                                     lightmapViewFinal, lightmapSamplerFinal);
                         if (gpu != null) gpu.end(cmd, "translucentDraw");
                     }
-                    logDispatchThrottled("draw: opaque={} translucent={} dispatchCount={} atlas={}",
-                        includeOpaque, includeTranslucent, dispatchCount, atlasViewFinal != 0L);
-
                     org.lwjgl.vulkan.KHRDynamicRendering.vkCmdEndRenderingKHR(cmd);
                 }
             });
@@ -499,12 +488,4 @@ public final class FrameDriver {
     }
 
     public static long frameCount() { return FRAMES.get(); }
-
-    /** Log at most once every ~1s during drawTerrain diagnostics. */
-    private static void logDispatchThrottled(String fmt, Object... args) {
-        long now = System.nanoTime();
-        if (now - lastDispatchLog < 1_000_000_000L) return;
-        lastDispatchLog = now;
-        LOGGER.info(fmt, args);
-    }
 }

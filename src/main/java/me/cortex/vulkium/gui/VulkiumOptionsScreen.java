@@ -36,8 +36,10 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
 
         this.list.addSmall(
             boolOption("Vulkium enabled",
-                "Master switch. OFF hands rendering back to MC's vanilla terrain path (takes effect "
-                    + "immediately; no restart needed). Default: ON.",
+                "Master switch. OFF hands rendering back to MC's vanilla terrain path. "
+                    + "Restart recommended after toggling — switching back ON during the same "
+                    + "session leaves the GPU in a state where vulkium's terrain draws run "
+                    + "~15× slower until the client is fully restarted. " + TIP_RESTART.getString(),
                 !cfg.forceDisable, v -> {
                     cfg.forceDisable = !v;
                     // Just call allChanged — LevelRendererAllChangedMixin (which we own)
