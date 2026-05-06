@@ -80,12 +80,15 @@ public final class SectionCapture {
             // SectionCompiler still produced a Results object, but with no MeshData per
             // layer — there's nothing to ingest. The previous live entry for this key is
             // now stale and would keep rendering the pre-edit geometry, so evict it.
-            // Posts an eviction to the ingest queue; the render thread drains it on the
-            // next frame, removing the section from `live`, freeing its arena slot, and
-            // dropping it from the region ledger. Idempotent for keys we never had — the
-            // drain path tolerates already-evicted keys.
+            //
+            // evictAsEmpty (vs evict) records the key in SectionManager.emptiedByEdit so
+            // that if the user later re-populates the section (e.g. bridges blocks back
+            // over the void), the next ingest skips the chunk-fade stamp — semantically
+            // a re-population from edit is not a fresh chunk load and shouldn't fade.
+            // Idempotent for keys we never had — the drain path tolerates already-
+            // evicted keys.
             if (sectionPosKey != UNKNOWN_SECTION) {
-                SectionManager.get().evict(sectionPosKey);
+                SectionManager.get().evictAsEmpty(sectionPosKey);
             }
             return;
         }
