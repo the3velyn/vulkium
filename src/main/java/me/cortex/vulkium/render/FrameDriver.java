@@ -116,12 +116,9 @@ public final class FrameDriver {
             updateMvpFromCamera(scene, camState);
             me.cortex.vulkium.diag.PerfTracker.end("updateMvp", tMvp);
         }
-        // DEV_ONLY: bisection flag for Windows/NVIDIA hang diagnosis.
-        if (cfg.devDrawOpaquePass) {
-            long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
-            dispatchTerrainDraw(true, false);
-            me.cortex.vulkium.diag.PerfTracker.end("dispatchOpaque", tDraw);
-        }
+        long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
+        dispatchTerrainDraw(true, false);
+        me.cortex.vulkium.diag.PerfTracker.end("dispatchOpaque", tDraw);
         me.cortex.vulkium.diag.PerfTracker.end("onAfterOpaqueTerrain", tTotal);
     }
 
@@ -452,12 +449,9 @@ public final class FrameDriver {
         // translucent hook. The opaque hook's commit already pushed this frame's arena /
         // region-header / dispatch-list writes to the GPU. Dropping this commit removes one
         // command-buffer submission per frame.
-        // DEV_ONLY: bisection flag for Windows/NVIDIA hang diagnosis.
-        if (VulkiumConfig.get().devDrawTranslucentPass) {
-            long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
-            dispatchTerrainDraw(false, true);
-            me.cortex.vulkium.diag.PerfTracker.end("dispatchTranslucent", tDraw);
-        }
+        long tDraw = me.cortex.vulkium.diag.PerfTracker.begin();
+        dispatchTerrainDraw(false, true);
+        me.cortex.vulkium.diag.PerfTracker.end("dispatchTranslucent", tDraw);
         me.cortex.vulkium.diag.PerfTracker.end("onAfterTranslucentTerrain", tTotal);
     }
 

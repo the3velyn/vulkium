@@ -45,18 +45,6 @@ public final class VulkiumConfig {
      */
     public boolean drawTerrain = true;
 
-    /** DEV_ONLY — diagnostic bisection for the Windows/NVIDIA GPU hang. When
-     *  {@code drawTerrain == true}, setting this to {@code false} skips the opaque
-     *  mesh-shader dispatch at {@code AFTER_OPAQUE_TERRAIN}. Combined with
-     *  {@link #devDrawTranslucentPass}, bisects which of the two vulkium draw passes
-     *  triggers the hang. Remove before release. */
-    public boolean devDrawOpaquePass = true;
-
-    /** DEV_ONLY — diagnostic bisection counterpart to {@link #devDrawOpaquePass}.
-     *  Skips the translucent mesh-shader dispatch at {@code AFTER_TRANSLUCENT_TERRAIN}
-     *  when {@code false}. Remove before release. */
-    public boolean devDrawTranslucentPass = true;
-
     /** Build the HZB pyramid each frame from the just-rendered depth (at END_MAIN so it
      *  captures vulkium's own terrain). Only worth enabling together with
      *  {@link #enableHzbRegionCull}. */
@@ -153,23 +141,24 @@ public final class VulkiumConfig {
      *  fog for vulkium's terrain pass without touching the shader variant. */
     public boolean renderFog = true;
 
+    /** Vanilla chunk fade-in effect: newly-uploaded sections fade from fog color to full
+     *  opacity over {@code options.chunkSectionFadeInTime} seconds. When false, vulkium
+     *  pushes a fadeDuration of 0 to the scene UBO so the shader treats every section as
+     *  fully visible immediately. The feature is also disabled when MC's own option is set
+     *  to 0 (Chunk Fade: None); this toggle is an additional vulkium-side master switch
+     *  independent of MC's option. */
+    public boolean chunkLoadAnimation = true;
+
     /** Master toggle for the render-thread per-phase timer. Disabling skips the two
      *  nanoTime() calls per bracketed phase and the auto-flush log spam. Cost when enabled
-     *  is under 0.5% of frame time at 200+ FPS. */
-    public boolean enablePerfTracker = true;
+     *  is under 0.5% of frame time at 200+ FPS. Internal diagnostic — config-file only,
+     *  no GUI exposure. */
+    public boolean enablePerfTracker = false;
 
     /** How often the PerfTracker flushes its running averages to the log, in milliseconds.
      *  Short intervals (≤500ms) let you separate warmup from steady state inside a 10s run
      *  and make before/after A/B comparisons sharper. Clamped to ≥50ms at apply time. */
     public int perfTrackerFlushMs = 500;
-
-    /** DEV_ONLY — logs a per-frame snapshot of section/region/visibility/dispatch counters
-     *  every 500ms when enabled. Use to diagnose "immovable chunk slices on initial load":
-     *  a gap between {@code live} and {@code dispatched} (with camera stationary) narrows
-     *  which subsystem is missing sections, so we can fix the root cause instead of
-     *  guessing. Off by default — leave off in release builds. Toggle at runtime by editing
-     *  {@code config/vulkium.json} and relaunching. */
-    public boolean diagImmovableChunks = false;
 
     public static VulkiumConfig get() {
         if (INSTANCE == null) {

@@ -73,8 +73,3 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   ~10s of correct rendering on NVIDIA Windows, then a 5s VK semaphore timeout. Linux
   hides the hazard via stricter driver serialization.
 
-## Process / tooling
-
-- Deep-test script (`scripts/vulkium-deep-test.sh`) is DEV_ONLY and should be stripped
-  before release along with the `vulkium-*` trigger files and `devDraw*Pass` config
-  flags.
