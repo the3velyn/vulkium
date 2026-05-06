@@ -29,15 +29,12 @@ hook per item plus what's known so far; fuller context lives in the linked file/
   -d CLOCK` before/after toggle. If confirmed, the workaround is OS/driver-level (set
   PowerMizer to "Prefer maximum performance"), not vulkium code.
 
-- **Sub-chunk doesn't show its final change when that change empties the section.**
-  Removing the last block in a section (e.g. the lone block that makes the section
-  non-empty) leaves the previously-rendered geometry on screen instead of clearing the
-  section. Suspected: MC's compile path doesn't fire `CompiledSectionMeshMixin` for a
-  newly-empty section (no `Results` to capture), so vulkium never gets a "this is now
-  empty" signal and `SectionManager.live` retains the stale entry until something else
-  evicts it. Fix probably needs to mirror MC's empty-section detection in our extractor /
-  `SectionCapture` and call `SectionManager.evictLive(key)` when the compile result is
-  empty.
+- ~~**Sub-chunk doesn't show its final change when that change empties the section.**~~
+  FIXED. Root cause: `SectionCapture.onSectionMeshCompiled` early-returned when MC's
+  compile produced zero `renderedLayers` (the empty-section case), so vulkium never
+  removed the previous live entry and the stale geometry stayed on screen. Fix:
+  call `SectionManager.evict(key)` in the empty-layers branch so the live table,
+  region ledger, and arena slot all release the section.
 
 - ~~**Immovable chunk slices on initial load.**~~ FIXED. Root cause was
   `IdProvider` recycling region ids across evict/allocate: a freshly-allocated region

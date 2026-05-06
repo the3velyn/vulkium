@@ -49,11 +49,6 @@ public final class SectionCapture {
 
     private SectionCapture() {}
 
-    /** Running count of mesh captures since boot. Used by the immovable-chunks diagnostic
-     *  (see {@code VulkiumConfig.diagImmovableChunks}) to correlate "MC is still compiling"
-     *  vs "vulkium is still catching up" when sections are missing on first load. */
-    public static long captureCount() { return SECTIONS_CAPTURED.get(); }
-
     /** Called from {@code CompileTaskMixin} at doTask HEAD. */
     public static void beginSectionCompile(long sectionPosKey) {
         COMPILING_SECTION.set(sectionPosKey);
@@ -81,6 +76,17 @@ public final class SectionCapture {
     public static void onSectionMeshCompiled(long sectionPosKey, SectionCompiler.Results results) {
         Map<ChunkSectionLayer, MeshData> layers = results.renderedLayers;
         if (layers.isEmpty()) {
+            // Section compiled to zero geometry (e.g. user broke the last block). MC's
+            // SectionCompiler still produced a Results object, but with no MeshData per
+            // layer — there's nothing to ingest. The previous live entry for this key is
+            // now stale and would keep rendering the pre-edit geometry, so evict it.
+            // Posts an eviction to the ingest queue; the render thread drains it on the
+            // next frame, removing the section from `live`, freeing its arena slot, and
+            // dropping it from the region ledger. Idempotent for keys we never had — the
+            // drain path tolerates already-evicted keys.
+            if (sectionPosKey != UNKNOWN_SECTION) {
+                SectionManager.get().evict(sectionPosKey);
+            }
             return;
         }
         // Hand off to the SectionManager. It copies the raw bytes so MC can recycle its own

@@ -301,17 +301,15 @@ public final class Renderer {
         // fadeDuration=0 (no re-fade). Our vulkium-side "first-ever upload" gate lives in
         // SectionManager.ingest — if sectionToRegionRef had no prior entry we stamp
         // fadeTimes with `now`; subsequent rebuilds skip the stamp so the original timestamp
-        // (already past-end-of-fade) is preserved. Option 0.0 → duration 0 → shader treats
-        // visibility as 1 unconditionally (no fade). Low 32 bits of Unix millis: elapsed deltas
-        // ≤ fadeDurationMs (max a few seconds) don't exercise uint32 wraparound.
+        // (already past-end-of-fade) is preserved. MC option 0.0 → duration 0 → shader treats
+        // visibility as 1 unconditionally (no fade). Driven entirely by MC's
+        // chunkSectionFadeInTime — vulkium has no separate toggle.
         int fadeDurationMs = 0;
-        if (VulkiumConfig.get().chunkLoadAnimation) {
-            try {
-                Double t = net.minecraft.client.Minecraft.getInstance().options
-                    .chunkSectionFadeInTime().get();
-                if (t != null) fadeDurationMs = (int) Math.max(0L, Math.round(t * 1000.0));
-            } catch (Throwable ignored) { /* option read races with client init; default 0 = no fade */ }
-        }
+        try {
+            Double t = net.minecraft.client.Minecraft.getInstance().options
+                .chunkSectionFadeInTime().get();
+            if (t != null) fadeDurationMs = (int) Math.max(0L, Math.round(t * 1000.0));
+        } catch (Throwable ignored) { /* option read races with client init; default 0 = no fade */ }
         sceneUniform.fade((int) System.currentTimeMillis(), fadeDurationMs);
 
         // Vanilla fog. cam.fogData is populated by MC's FogRenderer.setupFog every frame

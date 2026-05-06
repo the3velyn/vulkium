@@ -141,14 +141,6 @@ public final class VulkiumConfig {
      *  fog for vulkium's terrain pass without touching the shader variant. */
     public boolean renderFog = true;
 
-    /** Vanilla chunk fade-in effect: newly-uploaded sections fade from fog color to full
-     *  opacity over {@code options.chunkSectionFadeInTime} seconds. When false, vulkium
-     *  pushes a fadeDuration of 0 to the scene UBO so the shader treats every section as
-     *  fully visible immediately. The feature is also disabled when MC's own option is set
-     *  to 0 (Chunk Fade: None); this toggle is an additional vulkium-side master switch
-     *  independent of MC's option. */
-    public boolean chunkLoadAnimation = true;
-
     /** Master toggle for the render-thread per-phase timer. Disabling skips the two
      *  nanoTime() calls per bracketed phase and the auto-flush log spam. Cost when enabled
      *  is under 0.5% of frame time at 200+ FPS. Internal diagnostic — config-file only,

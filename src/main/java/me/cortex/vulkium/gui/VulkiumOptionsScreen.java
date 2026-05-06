@@ -133,15 +133,6 @@ public final class VulkiumOptionsScreen extends OptionsSubScreen {
                 cfg.renderFog, v -> cfg.renderFog = v));
 
         this.list.addSmall(
-            boolOption("Chunk load animation",
-                "Fade newly-loaded chunks in from the fog color over the duration set by "
-                    + "vanilla's \"Chunk Fade Time\" option (Video Settings → Chunk Fade). "
-                    + "When off, vulkium shows new chunks instantly regardless of the vanilla "
-                    + "setting. When on, the vanilla setting drives the fade length; setting "
-                    + "that to None also disables the effect.",
-                cfg.chunkLoadAnimation, v -> cfg.chunkLoadAnimation = v));
-
-        this.list.addSmall(
             enumSlider("Translucency sort", TranslucencySortingLevel.class,
                 "NONE = no sort (cheapest, visually wrong). SECTIONS = cross-section back-to-front "
                     + "only. QUADS = full (cross-section + POV-driven per-section resort).",
