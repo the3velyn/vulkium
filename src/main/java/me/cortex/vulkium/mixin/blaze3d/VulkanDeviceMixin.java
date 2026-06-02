@@ -4,6 +4,7 @@ import com.mojang.blaze3d.shaders.ShaderSource;
 import com.mojang.blaze3d.vulkan.VulkanDevice;
 import com.mojang.blaze3d.vulkan.VulkanInstance;
 import com.mojang.blaze3d.vulkan.VulkanPhysicalDevice;
+import com.mojang.blaze3d.vulkan.checkpoints.CheckpointExtension;
 import me.cortex.vulkium.blaze3d.MojangVulkanBridge;
 import org.lwjgl.vulkan.VkDevice;
 import org.spongepowered.asm.mixin.Mixin;
@@ -25,6 +26,8 @@ import java.util.Set;
 @Mixin(VulkanDevice.class)
 public class VulkanDeviceMixin {
 
+    // 26.2-pre-2 added a trailing CheckpointExtension parameter to the VulkanDevice
+    // constructor. The mixin descriptor must match exactly or Mixin rejects the @Inject.
     @Inject(method = "<init>", at = @At("TAIL"))
     private void vulkium$captureHandles(
         ShaderSource shaderSource,
@@ -33,6 +36,7 @@ public class VulkanDeviceMixin {
         Set<String> enabledDeviceExtensions,
         VkDevice vkDevice,
         long vma,
+        CheckpointExtension checkpointExtension,
         CallbackInfo ci
     ) {
         MojangVulkanBridge.installPhysicalDeviceContext(physicalDevice, enabledDeviceExtensions);

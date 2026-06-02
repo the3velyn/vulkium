@@ -2,18 +2,16 @@ package me.cortex.vulkium.vk;
 
 import com.mojang.blaze3d.vulkan.VulkanCommandEncoder;
 import me.cortex.vulkium.blaze3d.MojangVulkanBridge;
-import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VkCommandBuffer;
-import org.lwjgl.vulkan.VkCommandBufferBeginInfo;
 
 import java.util.function.Consumer;
 
 /**
  * Records a one-shot primary command buffer via Mojang's
- * {@link VulkanCommandEncoder#allocateTransientCommandBuffer(boolean)} (PRIMARY), runs the
- * caller's recording code, and hands it to Mojang's submission via
- * {@link VulkanCommandEncoder#execute(VkCommandBuffer)}.
+ * {@link VulkanCommandEncoder#allocateAndBeginTransientCommandBuffer()} (PRIMARY, already begun
+ * with ONE_TIME_SUBMIT by Mojang as of 26.2-pre-2), runs the caller's recording code, and hands
+ * it to Mojang's submission via {@link VulkanCommandEncoder#execute(VkCommandBuffer)}.
  *
  * <p>Mojang's {@code execute()} ends their current in-flight primary first, then queues our
  * command buffer in the same frame submission — ordering with their draws is preserved.
@@ -36,18 +34,11 @@ public final class CommandRecorder {
             throw new IllegalStateException("Mojang VulkanCommandEncoder not available — Vulkan backend not active?");
         }
 
-        VkCommandBuffer cmd = encoder.allocateTransientCommandBuffer(true /* PRIMARY */);
-        try (MemoryStack stack = MemoryStack.stackPush()) {
-            VkCommandBufferBeginInfo begin = VkCommandBufferBeginInfo.calloc(stack)
-                .sType$Default()
-                .flags(VK10.VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT);
-
-            int br = VK10.vkBeginCommandBuffer(cmd, begin);
-            if (br != VK10.VK_SUCCESS) {
-                throw new RuntimeException("vkBeginCommandBuffer failed: VkResult=" + br);
-            }
-        }
-
+        // Mojang's allocateAndBeginTransientCommandBuffer now allocates a PRIMARY buffer and
+        // calls vkBeginCommandBuffer with ONE_TIME_SUBMIT internally — same semantics as the
+        // old allocateTransientCommandBuffer(true) + our own vkBeginCommandBuffer. Don't begin
+        // again here (Vulkan: vkBeginCommandBuffer on an already-recording buffer is invalid).
+        VkCommandBuffer cmd = encoder.allocateAndBeginTransientCommandBuffer();
         try {
             recorder.accept(cmd);
         } catch (RuntimeException e) {

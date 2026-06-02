@@ -80,7 +80,17 @@ public final class UploadStream implements AutoCloseable {
         this.sectionSignalValue = new long[sectionCount];
         this.flushLo = new long[sectionCount];
         this.flushHi = new long[sectionCount];
-        resetSectionWriteRange(0);
+        // Initialize EVERY section's range to the -1 sentinel, not just section 0. Java's
+        // default-zero leaves sections 1..N-1 at flushLo=0, which the first commitFrame's
+        // stamping loop reads as "has writes" — every section gets stamped with sig=1, and
+        // advanceSection then thinks the next section is pending and blocks on a value the
+        // GPU can never signal (we're inside Mojang's render scope; Mojang can't submit while
+        // we hold the render thread). The bug was hidden previously because
+        // VkSemaphoreWaitInfo.semaphoreCount=0 made vkWaitSemaphores a no-op; once that was
+        // fixed (count=1), the wait actually blocked and exposed this.
+        for (int i = 0; i < sectionCount; i++) {
+            resetSectionWriteRange(i);
+        }
     }
 
     public static UploadStream create(long sectionSize, int sectionCount) {

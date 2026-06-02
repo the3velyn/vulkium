@@ -6,6 +6,7 @@ import com.mojang.blaze3d.vulkan.init.VulkanPNextStruct;
 import org.lwjgl.PointerBuffer;
 import org.lwjgl.system.MemoryStack;
 import org.lwjgl.vulkan.EXTMeshShader;
+import org.lwjgl.vulkan.KHRFragmentShaderBarycentric;
 import org.lwjgl.vulkan.VK10;
 import org.lwjgl.vulkan.VK12;
 import org.lwjgl.vulkan.VkApplicationInfo;
@@ -14,7 +15,10 @@ import org.lwjgl.vulkan.VkInstance;
 import org.lwjgl.vulkan.VkInstanceCreateInfo;
 import org.lwjgl.vulkan.VkPhysicalDevice;
 import org.lwjgl.vulkan.VkPhysicalDeviceBufferDeviceAddressFeatures;
+import org.lwjgl.vulkan.VkPhysicalDeviceFeatures;
+import org.lwjgl.vulkan.VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR;
 import org.lwjgl.vulkan.VkPhysicalDeviceMeshShaderFeaturesEXT;
+import org.lwjgl.vulkan.VkPhysicalDeviceVulkan11Features;
 import org.lwjgl.vulkan.VkPhysicalDeviceVulkan12Features;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -108,6 +112,28 @@ public final class MojangBackendFixup {
         injectFeature(new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT, "storageBuffer8BitAccess",
             VkPhysicalDeviceVulkan12Features.STORAGEBUFFER8BITACCESS));
 
+        // 26.2-pre-2 stopped auto-enabling these — validation now flags every shader of ours that
+        // declares Int8 / StorageBuffer8/16BitAccess / UniformAndStorageBuffer8/16BitAccess as
+        // VK_ERROR_INVALID_SHADER_NV at vkCreateShaderModule, so 11/14 terrain shaders fail to
+        // create and no terrain renders. Enable the corresponding device features so the SPIR-V
+        // capabilities are satisfied.
+        //
+        // uniformAndStorageBuffer8BitAccess (VK12) — required when 8-bit types live in a UBO
+        // (not just SSBO); our scene UBO + per-draw structs hit this.
+        injectFeature(new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT, "uniformAndStorageBuffer8BitAccess",
+            VkPhysicalDeviceVulkan12Features.UNIFORMANDSTORAGEBUFFER8BITACCESS));
+        // shaderInt8 (VK12) — gates the Int8 SPIR-V capability itself, separate from the storage
+        // accessors. Without it, declaring `uint8_t` anywhere in a shader fails module creation.
+        injectFeature(new VulkanFeature(VulkanBackend.VK12_FEATURES_STRUCT, "shaderInt8",
+            VkPhysicalDeviceVulkan12Features.SHADERINT8));
+        // storageBuffer16BitAccess + uniformAndStorageBuffer16BitAccess (VK11) — same story for
+        // 16-bit. Our quad-packed vertex format uses uint16_t for texcoord/light/face indices
+        // in SSBOs, and the scene UBO has a 16-bit aligned struct member.
+        injectFeature(new VulkanFeature(VulkanBackend.VK11_FEATURES_STRUCT, "storageBuffer16BitAccess",
+            VkPhysicalDeviceVulkan11Features.STORAGEBUFFER16BITACCESS));
+        injectFeature(new VulkanFeature(VulkanBackend.VK11_FEATURES_STRUCT, "uniformAndStorageBuffer16BitAccess",
+            VkPhysicalDeviceVulkan11Features.UNIFORMANDSTORAGEBUFFER16BITACCESS));
+
         // depthClamp — vulkium uses MC's unmodified projection (so depth values match
         // MC's entities exactly) but enables depthClampEnable=true on its mesh-shader
         // pipeline, so vertices past MC's finite far plane get their depth clamped to
@@ -115,9 +141,35 @@ public final class MojangBackendFixup {
         // create call rejects depthClampEnable=true and our terrain disappears past
         // ~2048 blocks again. Core 1.0 feature, lives in VkPhysicalDeviceFeatures.
         injectFeature(new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT, "depthClamp",
-            org.lwjgl.vulkan.VkPhysicalDeviceFeatures.DEPTHCLAMP));
+            VkPhysicalDeviceFeatures.DEPTHCLAMP));
 
-        LOGGER.info("Injected VK_EXT_mesh_shader + meshShader + taskShader + meshShaderQueries + bufferDeviceAddress + storageBuffer8BitAccess + depthClamp into Mojang's VulkanBackend required-set.");
+        // shaderInt64 — terrain/mesh and terrain/task use uint64_t for buffer-device-address
+        // pointers (BDA wraps to a 64-bit pointer type in GLSL). glslang emits the Int64
+        // SPIR-V capability when any uint64_t appears, even in compile-only positions, so we
+        // must enable shaderInt64 to satisfy module creation. Core 1.0 feature.
+        injectFeature(new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT, "shaderInt64",
+            VkPhysicalDeviceFeatures.SHADERINT64));
+
+        // geometryShader — declared by glslang for mesh-shader stages that write per-primitive
+        // outputs like gl_PrimitiveID / gl_Layer (our mesh.glsl does). The Geometry SPIR-V
+        // capability is unioned with mesh-shader primitive emission even though we never use
+        // a geometry stage. Enabling it just satisfies SPIR-V; it doesn't change anything at
+        // runtime since no geometry pipelines are created.
+        injectFeature(new VulkanFeature(VulkanBackend.VK10_FEATURES_STRUCT, "geometryShader",
+            VkPhysicalDeviceFeatures.GEOMETRYSHADER));
+
+        // VK_KHR_fragment_shader_barycentric — terrain/frag.frag uses gl_BaryCoordEXT to
+        // sample per-triangle vertex data without a vertex stage (mesh shaders provide the
+        // vertices via per-primitive outputs, and the fragment shader reconstructs per-pixel
+        // values by barycentric interpolation). Needs both the extension and the feature.
+        injectExtension(KHRFragmentShaderBarycentric.VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME);
+        VulkanPNextStruct baryStruct = new VulkanPNextStruct(
+            KHRFragmentShaderBarycentric.VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FRAGMENT_SHADER_BARYCENTRIC_FEATURES_KHR,
+            VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR.SIZEOF);
+        injectFeature(new VulkanFeature(baryStruct, "fragmentShaderBarycentric",
+            VkPhysicalDeviceFragmentShaderBarycentricFeaturesKHR.FRAGMENTSHADERBARYCENTRIC));
+
+        LOGGER.info("Injected VK_EXT_mesh_shader + VK_KHR_fragment_shader_barycentric + meshShader + taskShader + meshShaderQueries + bufferDeviceAddress + storageBuffer8BitAccess + uniformAndStorageBuffer8BitAccess + shaderInt8 + storageBuffer16BitAccess + uniformAndStorageBuffer16BitAccess + depthClamp + shaderInt64 + geometryShader + fragmentShaderBarycentric into Mojang's VulkanBackend required-set.");
     }
 
     private static void injectExtension(String name) {

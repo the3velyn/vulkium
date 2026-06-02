@@ -72,16 +72,13 @@ public final class PrimaryTerrainPass implements AutoCloseable {
     private final ShaderModule taskTranslucentModule;
     private final ShaderModule meshTranslucentModule;
 
-    // Unified descriptor pool + sets for BOTH scene UBO (set=0) and textures (set=1). Push
-    // descriptor interacted badly (set=0 push silently invalidated set=1 binding → textureSize
-    // returned 0). Both sets allocated from this pool; scene UBO binding updated at init from
-    // the StagingBuffer backing it (fixed buffer handle, mutable data per-frame).
-    private final me.cortex.vulkium.vk.DescriptorPool descriptorPool;
-    private final long sceneDescriptorSet;
-    private final long textureDescriptorSet;
-    private long sceneDescriptorBoundBuffer = 0L;
-    private long lastBoundAtlasView = 0L;
-    private long lastBoundAtlasSampler = 0L;
+    // Draws push the entire descriptor state via vkCmdPushDescriptorSetKHR at record time
+    // (see recordWithPipeline), so there are no static descriptor sets allocated here. The
+    // earlier hybrid path (static set for scene UBO + push for textures) ran into
+    // VUID-VkDescriptorSetAllocateInfo-pSetLayouts-00308: a layout flagged
+    // VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT cannot be the source of an
+    // allocateDescriptorSets call. Keeping the pushDescriptor(true) layout means we go
+    // through vkCmdPushDescriptorSetKHR exclusively.
 
     private boolean closed;
 
@@ -180,6 +177,16 @@ public final class PrimaryTerrainPass implements AutoCloseable {
             Map<String, String> transDefines = Map.of("TRANSLUCENT_PASS", "1", "RENDER_FOG", "1");
             taskTrans = ShaderModule.compileFromResource("terrain/task.glsl", ShaderStage.TASK, transDefines);
             meshTrans = ShaderModule.compileFromResource("terrain/mesh.glsl", ShaderStage.MESH, transDefines);
+            // depthWrite(true): the Fabulous post chain (post/transparency.fsh) sorts each
+            // composite layer by its target's depth attachment. With depthWrite off, the
+            // translucent target's depth would stay at the seed copyDepthFrom(main) ran
+            // BEFORE this pass, which equals the OPAQUE depth — so the compositor sees water
+            // at the same depth as the floor behind it and, when a cloud lands between them,
+            // sorts the cloud last and renders it OVER the water. Writing depth here makes
+            // TranslucentDepth = water-fragment depth, which lets the compositor place water
+            // in front of clouds when the water is closer (vanilla-equivalent). Within-batch
+            // ordering relies on TranslucentSectionSorter sorting back-to-front per camera
+            // chunk, which is already done.
             pipeTrans = MeshPipeline.builder(pLayout)
                     .task(taskTrans)
                     .mesh(meshTrans)
@@ -187,7 +194,7 @@ public final class PrimaryTerrainPass implements AutoCloseable {
                     .colorFormat(COLOR_FORMAT)
                     .depthFormat(DEPTH_FORMAT)
                     .depthTest(true)
-                    .depthWrite(false)
+                    .depthWrite(true)
                     .blend(true)
                     .cullMode(VK10.VK_CULL_MODE_FRONT_BIT)
                     .build();
@@ -221,42 +228,8 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         this.pipelineTranslucent = pipeTrans;
         this.taskTranslucentModule = taskTrans;
         this.meshTranslucentModule = meshTrans;
-
-        // Allocate a pool sized for 2 sets: 1 UBO (scene) + 2 combined-image-samplers (texture).
-        this.descriptorPool = me.cortex.vulkium.vk.DescriptorPool.forTypes(
-            2,
-            new int[] { VK10.VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
-                        VK10.VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER },
-            new int[] { 1, 2 });
-        this.sceneDescriptorSet = descriptorPool.allocateSet(this.sceneUboSetLayout);
-        this.textureDescriptorSet = descriptorPool.allocateSet(this.textureSetLayout);
-    }
-
-    /** Called once the scene UBO's backing buffer is known (per-frame data changes, buffer is stable). */
-    public void bindSceneBuffer(long uboBuffer, long offset, long range) {
-        if (uboBuffer == sceneDescriptorBoundBuffer) return;
-        new me.cortex.vulkium.vk.DescriptorSetWriter(sceneDescriptorSet)
-            .uniformBuffer(0, uboBuffer, offset, range)
-            .update();
-        sceneDescriptorBoundBuffer = uboBuffer;
-    }
-
-    /** Rebuild the texture descriptor set when the atlas view or sampler changes. Cheap no-op
-     *  when handles are identical to last call. */
-    private void updateTextureDescriptors(long atlasView, long atlasSampler) {
-        if (atlasView == lastBoundAtlasView && atlasSampler == lastBoundAtlasSampler) return;
-        new me.cortex.vulkium.vk.DescriptorSetWriter(textureDescriptorSet)
-            .combinedImageSampler(0, atlasView, atlasSampler,
-                    VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-            .combinedImageSampler(1, atlasView, atlasSampler,
-                    VK10.VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL)
-            .update();
-        lastBoundAtlasView = atlasView;
-        lastBoundAtlasSampler = atlasSampler;
-        org.slf4j.LoggerFactory.getLogger("vulkium/descriptor").info(
-            "Updated texture descriptor set: view=0x{} sampler=0x{} set=0x{} layout=0x{}",
-            Long.toHexString(atlasView), Long.toHexString(atlasSampler),
-            Long.toHexString(textureDescriptorSet), Long.toHexString(pipelineLayout.handle()));
+        // No descriptor pool / static sets: the layout is push-descriptor-only and the draw
+        // path uses vkCmdPushDescriptorSetKHR exclusively. See recordWithPipeline below.
     }
 
     /** The shared {@link PipelineLayout} both variants are built against. */
@@ -369,7 +342,6 @@ public final class PrimaryTerrainPass implements AutoCloseable {
         if (closed) return;
         closed = true;
         // Reverse construction order: pool → pipelines → pipeline layout → set layouts → modules.
-        descriptorPool.close();
         pipelineTranslucent.close();
         pipelineFog.close();
         pipelineNoFog.close();

@@ -77,9 +77,14 @@ public final class TimelineSemaphore implements AutoCloseable {
      */
     public boolean awaitUntil(long value, long timeoutNs) {
         try (MemoryStack stack = MemoryStack.stackPush()) {
+            // LWJGL's pSemaphores/pValues setters do not auto-populate semaphoreCount in
+            // VkSemaphoreWaitInfo (validation: VUID-VkSemaphoreWaitInfo-semaphoreCount-arraylength,
+            // "semaphoreCount must be greater than 0"). Set it explicitly so the wait sees
+            // exactly one (handle, value) pair.
             var info = VkSemaphoreWaitInfo.calloc(stack)
                 .sType$Default()
                 .flags(0)
+                .semaphoreCount(1)
                 .pSemaphores(stack.longs(handle))
                 .pValues(stack.longs(value));
             int result = VK12.vkWaitSemaphores(MojangVulkanBridge.vkDevice(), info, timeoutNs);

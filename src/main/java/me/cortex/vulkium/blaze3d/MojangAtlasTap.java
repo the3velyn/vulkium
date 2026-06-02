@@ -34,26 +34,53 @@ public final class MojangAtlasTap {
 
     private MojangAtlasTap() {}
 
+    private static boolean lookupLogged;
+
     /**
      * @return the {@code VkImageView} handle of Mojang's block atlas texture, or
      *         {@code VK_NULL_HANDLE} if the atlas isn't ready or not backed by Vulkan.
      */
-    /** Look up the block-atlas TextureAtlas via AtlasManager.forEach, matching
-     *  {@code atlas.location() == TextureAtlas.LOCATION_BLOCKS}. AtlasManager.getAtlasOrThrow
-     *  in MC 26.2 uses the ATLAS id (e.g. "minecraft:blocks"), not the texture location. */
+    /** Look up the block-atlas TextureAtlas via AtlasManager. In 26.2-pre-2, LOCATION_BLOCKS
+     *  is {@code @Deprecated} (Mojang is migrating away from per-atlas location constants) but
+     *  still resolves to {@code minecraft:textures/atlas/blocks.png}. {@code AtlasManager.forEach}
+     *  iterates {@code atlasById} (atlas-ID → atlas); we match by {@code atlas.location()} which
+     *  still equals the texture ID the atlas was registered under. Logs once on first call so a
+     *  silent miss is visible in the log instead of producing 0L atlases. */
+    @SuppressWarnings("deprecation")
     private static TextureAtlas findBlockAtlas() {
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) return null;
         final TextureAtlas[] found = new TextureAtlas[1];
+        final int[] scanned = new int[1];
+        final StringBuilder seen = new StringBuilder();
         try {
             mc.getAtlasManager().forEach((id, atlas) -> {
+                scanned[0]++;
+                if (!lookupLogged) {
+                    if (seen.length() > 0) seen.append(", ");
+                    seen.append(id).append("=").append(atlas.location());
+                }
                 if (found[0] != null) return;
                 if (TextureAtlas.LOCATION_BLOCKS.equals(atlas.location())) {
                     found[0] = atlas;
                 }
             });
         } catch (RuntimeException e) {
+            if (!lookupLogged) {
+                lookupLogged = true;
+                LOGGER.warn("AtlasManager scan threw; block-atlas lookup will return null this frame.", e);
+            }
             return null;
+        }
+        if (!lookupLogged) {
+            lookupLogged = true;
+            if (found[0] != null) {
+                LOGGER.info("Block atlas resolved via AtlasManager scan ({} atlases): id/location pairs=[{}]",
+                    scanned[0], seen);
+            } else {
+                LOGGER.warn("Block atlas NOT FOUND in AtlasManager scan ({} atlases). LOCATION_BLOCKS={} pairs=[{}]",
+                    scanned[0], TextureAtlas.LOCATION_BLOCKS, seen);
+            }
         }
         return found[0];
     }

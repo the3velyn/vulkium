@@ -124,6 +124,8 @@ public final class FrameDriver {
 
     private static boolean depthFormatLogged = false;
     private static boolean atlasInfoLogged = false;
+    private static boolean dispatchEntryLogged = false;
+    private static boolean earlyReturnLogged = false;
 
     /** Split draw: opaque-only, translucent-only, or both in a single render pass. */
     private static void dispatchTerrainDraw(boolean includeOpaque, boolean includeTranslucent) {
@@ -135,7 +137,21 @@ public final class FrameDriver {
             return;
         }
         int visibleRegionCount = vis.visibleRegionCount();
+        if (!dispatchEntryLogged) {
+            dispatchEntryLogged = true;
+            LOGGER.info("First dispatchTerrainDraw entry: includeOpaque={} includeTranslucent={} visibleRegionCount={} (drawTerrain={}, fabulous translucentTarget={})",
+                includeOpaque, includeTranslucent, visibleRegionCount,
+                VulkiumConfig.get().drawTerrain,
+                net.minecraft.client.Minecraft.getInstance() != null
+                    && net.minecraft.client.Minecraft.getInstance().levelRenderer != null
+                    && net.minecraft.client.Minecraft.getInstance().levelRenderer.translucentTarget() != null
+                    ? "present" : "null");
+        }
         if (visibleRegionCount == 0) {
+            if (!earlyReturnLogged) {
+                earlyReturnLogged = true;
+                LOGGER.info("Early-return: visibleRegionCount==0. No regions tracked → no draws issued. Section ingest pipeline may not be capturing meshes.");
+            }
             return;
         }
 
@@ -197,9 +213,12 @@ public final class FrameDriver {
         // the right relative order, so vulkium writing to the same per-layer targets makes the
         // final composite land water in front of clouds where closer.
         //
-        // Depth: both layers depth-test against MAIN's depth view. MC's clouds/entities share
-        // this depth too, so depth-sort between vulkium's geometry and MC's world effects
-        // stays coherent.
+        // Depth: paired with the SAME target as color (see depth pickup below). Generalizes
+        // beyond translucent: any future per-layer target vulkium draws into needs its OWN
+        // depth attachment populated, because the Fabulous post chain
+        // (assets/minecraft/post_effect/transparency.json) reads each layer's <Layer>Depth
+        // sampler to depth-sort the composite. Pairing color+depth from the same target keeps
+        // the compositor input correct without per-layer special-casing.
         com.mojang.blaze3d.pipeline.RenderTarget colorRt = mainRt;
         if (includeTranslucent && !includeOpaque) {
             try {
@@ -220,12 +239,20 @@ public final class FrameDriver {
         int colorFormat = com.mojang.blaze3d.vulkan.VulkanConst.toVk(vkView2.texture().getFormat());
         if (colorView == 0L) return;
 
-        // Depth always from the main render target — every MC world-render pass shares this
-        // depth buffer, so depth-tests against clouds/entities/etc. remain consistent.
+        // Depth: pair with the chosen color target so the post-chain compositor reads back
+        // a depth attachment that matches the colors we wrote. For opaque this is mainRt; for
+        // translucent under fabulous this is translucentTarget — and translucentTarget's depth
+        // gets seeded from main via copyDepthFrom inside MC's addMainPass BEFORE
+        // AFTER_TRANSLUCENT_TERRAIN fires, so vulkium's depth-tests against opaque/entity depth
+        // remain coherent. Fall back to main when the target has no depth view (rare; e.g.
+        // a per-target bundle entry without a depth attachment).
         long depthView = 0L;
         long depthImage = 0L;
         int depthFormat = org.lwjgl.vulkan.VK10.VK_FORMAT_UNDEFINED;
-        com.mojang.blaze3d.textures.GpuTextureView depthGpuView = mainRt.getDepthTextureView();
+        com.mojang.blaze3d.textures.GpuTextureView depthGpuView = colorRt.getDepthTextureView();
+        if (depthGpuView == null) {
+            depthGpuView = mainRt.getDepthTextureView();
+        }
         if (depthGpuView instanceof com.mojang.blaze3d.vulkan.VulkanGpuTextureView vkDepth) {
             depthView = vkDepth.vkImageView();
             depthImage = vkDepth.texture().vkImage();
