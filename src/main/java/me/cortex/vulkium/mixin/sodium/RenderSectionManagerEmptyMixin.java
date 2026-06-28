@@ -9,6 +9,7 @@ import org.slf4j.LoggerFactory;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
 import org.spongepowered.asm.mixin.injection.Inject;
+import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 import java.util.ArrayList;
@@ -44,6 +45,17 @@ import java.util.List;
 @Mixin(value = RenderSectionManager.class, remap = false)
 public abstract class RenderSectionManagerEmptyMixin {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/sodium");
+
+    /** Records the chunk-load timestamp the moment Sodium recognises a chunk (including
+     *  all-air chunks that produce no geometry). Mirrors vanilla MC's behaviour where the
+     *  per-section fade timer starts at chunk-load, not at first-geometry. Without this,
+     *  the first block placed in a chunk that was loaded as all-air would read as a
+     *  brand-new chunk in vulkium's tracking and trigger a fade. Now placing a block in
+     *  any chunk that's been loaded for longer than fadeDuration is correctly suppressed. */
+    @Inject(method = "onChunkAdded", at = @At("HEAD"))
+    private void vulkium$noteChunkAdded(int x, int z, CallbackInfo ci) {
+        SectionManager.get().noteChunkAdded(x, z);
+    }
 
     @Inject(method = "applyBuildOutputs", at = @At("HEAD"))
     private void vulkium$catchSyntheticEmpties(ArrayList<BuilderTaskOutput> outputs,

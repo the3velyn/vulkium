@@ -121,6 +121,30 @@ public final class SectionManager {
 
     public RegionManager regionManager() { return regionManager; }
 
+    /**
+     * Records the "chunk first seen" timestamp for the given chunk column. Called from
+     * Sodium's {@code onChunkAdded} hook so vulkium tracks the moment MC's chunk-load
+     * event fires — including for chunks with no geometry. Without this, all-air chunks
+     * wouldn't get a first-seen entry until the player placed a block, making the first
+     * placement read as "new chunk → fade in" instead of "block edit in an existing
+     * loaded chunk → no fade".
+     *
+     * <p>{@code putIfAbsent} semantics: if we already saw a section in this chunk via
+     * an earlier ingest, the existing (earlier) timestamp wins so we don't reset the
+     * chunk's fade clock backwards.
+     *
+     * <p>Called from Sodium's worker / render thread depending on Sodium internals;
+     * the underlying fastutil map isn't synchronised. In practice {@code onChunkAdded}
+     * always runs on the render thread (it's called from MC's setSectionDirtyWithNeighbors
+     * → Sodium redirect), so this is safe.
+     */
+    public void noteChunkAdded(int chunkX, int chunkZ) {
+        long chunkKey = ((long) chunkZ << 32) | (chunkX & 0xFFFFFFFFL);
+        if (chunkFirstSeenMs.get(chunkKey) == chunkFirstSeenMs.defaultReturnValue()) {
+            chunkFirstSeenMs.put(chunkKey, System.currentTimeMillis());
+        }
+    }
+
     /** Diagnostic counter for the sodium ingest path. Bumped on every {@link #offerFromSodium}
      *  that produced at least one non-empty layer; logged at first few + every 1024th. */
     private final AtomicLong sodiumOffers = new AtomicLong();
