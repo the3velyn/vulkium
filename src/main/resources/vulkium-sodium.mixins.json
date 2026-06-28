@@ -6,6 +6,7 @@
   "client": [
     "ChunkBuildOutputMixin",
     "ChunkBuilderMeshingTaskMixin",
+    "DefaultChunkRendererMixin",
     "RenderRegionManagerMixin"
   ],
   "injectors": {
