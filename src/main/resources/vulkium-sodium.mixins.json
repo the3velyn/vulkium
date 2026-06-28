@@ -6,9 +6,9 @@
   "client": [
     "ChunkBuildOutputMixin",
     "ChunkBuilderMeshingTaskMixin",
+    "ChunkBuilderSortingTaskMixin",
     "DefaultChunkRendererMixin",
     "RenderRegionManagerMixin",
-    "RenderSectionManagerMixin",
     "VideoSettingsScreenMixin"
   ],
   "injectors": {
