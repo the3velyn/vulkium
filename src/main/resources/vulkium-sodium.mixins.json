@@ -8,7 +8,8 @@
     "ChunkBuilderMeshingTaskMixin",
     "DefaultChunkRendererMixin",
     "RenderRegionManagerMixin",
-    "RenderSectionManagerMixin"
+    "RenderSectionManagerMixin",
+    "VideoSettingsScreenMixin"
   ],
   "injectors": {
     "defaultRequire": 1
