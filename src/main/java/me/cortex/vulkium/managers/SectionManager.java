@@ -49,24 +49,26 @@ public final class SectionManager {
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet translucentSections =
         new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
 
-    /** Per-(chunkX, chunkZ) packed-key → first-seen wall-clock millis (low 32 bits of
-     *  System.currentTimeMillis). A "chunk" here is the full 16 × worldHeight × 16 column —
-     *  the unit MC loads/streams as one — NOT a single section. We stamp the time when the
-     *  first section in a chunk first-inserts into vulkium's live table, and use it on
-     *  every subsequent first-insert in the SAME chunk to gate the fade:
+    /** Per-section packed-key → "section first observed by Sodium" wall-clock millis.
+     *  Populated by {@code RenderSectionManagerEmptyMixin.onSectionAdded} the moment
+     *  Sodium registers a new section (which happens on chunk-load for ALL 16 sections
+     *  in a column, even all-air ones). Consumed by vulkium's ingest path on first-
+     *  insert to decide whether to fade:
      *  <ul>
-     *    <li>If we're within the fade window of the chunk's first-seen time → fade normally
-     *        (chunk is still streaming in, new sections look like part of the same load).</li>
-     *    <li>If we're past the fade window → stamp with the chunk's first-seen time (which
-     *        is far in the past), giving the new section instant full visibility. Matches
-     *        vanilla MC's behaviour: placing the first block in a previously-air subchunk
-     *        of an already-loaded chunk doesn't trigger a fade, because vanilla's per-
-     *        section fade timer was initialised when the chunk loaded (not when the
-     *        section first got geometry).</li>
+     *    <li>Section in map, delta &lt; fadeDuration → fade (section just arrived from
+     *        MC's stream, this is the initial fade window).</li>
+     *    <li>Section in map, delta ≥ fadeDuration → no fade (the section has been
+     *        recognised by Sodium for longer than the fade duration; this ingest is
+     *        a block-edit, not a fresh load).</li>
+     *    <li>Section not in map → no fade (defensive — shouldn't happen since
+     *        onSectionAdded always fires before our first ingest of a section).</li>
      *  </ul>
-     *  Pruned in {@link #sweepKeepDistance} when MC drops the chunk (cleanup). Packed
-     *  key matches {@code net.minecraft.world.level.ChunkPos.asLong(x, z)}. */
-    private final it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap chunkFirstSeenMs =
+     *  Matches vanilla MC's per-section fade timer semantics: timer starts when the
+     *  section is initialised by the renderer (chunk-load time), so block placements
+     *  in long-loaded sections don't re-fade.
+     *
+     *  <p>Pruned on {@link #evictLive} (per-section drop) and {@link #queueFlushAll}. */
+    private final it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap sectionFirstSeenMs =
         new it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap();
 
     /** Monotonic counter bumped on every add/remove to {@link #translucentSections}. Consumers
@@ -109,7 +111,7 @@ public final class SectionManager {
 
     private SectionManager() {
         sectionToRegionRef.defaultReturnValue(-1);
-        chunkFirstSeenMs.defaultReturnValue(Long.MIN_VALUE);
+        sectionFirstSeenMs.defaultReturnValue(Long.MIN_VALUE);
     }
 
     public static SectionManager get() { return INSTANCE; }
@@ -122,27 +124,30 @@ public final class SectionManager {
     public RegionManager regionManager() { return regionManager; }
 
     /**
-     * Records the "chunk first seen" timestamp for the given chunk column. Called from
-     * Sodium's {@code onChunkAdded} hook so vulkium tracks the moment MC's chunk-load
-     * event fires — including for chunks with no geometry. Without this, all-air chunks
-     * wouldn't get a first-seen entry until the player placed a block, making the first
-     * placement read as "new chunk → fade in" instead of "block edit in an existing
-     * loaded chunk → no fade".
+     * Records "section first observed" wall-clock time. Called from Sodium's
+     * {@code onSectionAdded} the moment Sodium creates a new RenderSection — happens
+     * for every section in every chunk MC loads (including all-air ones). Matches
+     * vanilla MC's per-section fade-timer-set-at-init semantics.
      *
-     * <p>{@code putIfAbsent} semantics: if we already saw a section in this chunk via
-     * an earlier ingest, the existing (earlier) timestamp wins so we don't reset the
-     * chunk's fade clock backwards.
+     * <p>{@code putIfAbsent} semantics: if we somehow already have an entry (e.g. F3+A
+     * raced the re-add), the older timestamp wins so we don't reset the fade clock.
      *
-     * <p>Called from Sodium's worker / render thread depending on Sodium internals;
-     * the underlying fastutil map isn't synchronised. In practice {@code onChunkAdded}
-     * always runs on the render thread (it's called from MC's setSectionDirtyWithNeighbors
-     * → Sodium redirect), so this is safe.
+     * <p>Render-thread only (onSectionAdded fires from MC's chunk-load / Sodium redirect
+     * paths, both render-thread). Fastutil map is not synchronised; do not call from
+     * worker threads.
      */
-    public void noteChunkAdded(int chunkX, int chunkZ) {
-        long chunkKey = ((long) chunkZ << 32) | (chunkX & 0xFFFFFFFFL);
-        if (chunkFirstSeenMs.get(chunkKey) == chunkFirstSeenMs.defaultReturnValue()) {
-            chunkFirstSeenMs.put(chunkKey, System.currentTimeMillis());
+    public void noteSectionAdded(int sectionX, int sectionY, int sectionZ) {
+        long key = net.minecraft.core.SectionPos.asLong(sectionX, sectionY, sectionZ);
+        if (sectionFirstSeenMs.get(key) == sectionFirstSeenMs.defaultReturnValue()) {
+            sectionFirstSeenMs.put(key, System.currentTimeMillis());
         }
+    }
+
+    /** Drop a section's first-seen entry when the section is removed from Sodium's
+     *  tracking (chunk unload, F3+A). Without this the map would grow unbounded. */
+    public void noteSectionRemoved(int sectionX, int sectionY, int sectionZ) {
+        long key = net.minecraft.core.SectionPos.asLong(sectionX, sectionY, sectionZ);
+        sectionFirstSeenMs.remove(key);
     }
 
     /** Diagnostic counter for the sodium ingest path. Bumped on every {@link #offerFromSodium}
@@ -482,33 +487,34 @@ public final class SectionManager {
                                 int localId = regionManager.getSectionRefId(ref);
                                 int compactRef = ((ref >>> 8) << 8) | (localId & 0xFF);
                                 long now = System.currentTimeMillis();
-                                // ChunkPos.asLong semantics: high 32 = z, low 32 = x.
-                                long chunkKey = ((long) sz << 32) | (sx & 0xFFFFFFFFL);
-                                long firstSeen = chunkFirstSeenMs.get(chunkKey);
+                                long firstSeen = sectionFirstSeenMs.get(p.key);
                                 int fadeDurationMs = renderer.fadeDurationMs();
                                 int stampMs;
-                                if (firstSeen == chunkFirstSeenMs.defaultReturnValue()) {
-                                    // First section in this chunk — record and fade from `now`.
-                                    chunkFirstSeenMs.put(chunkKey, now);
+                                if (firstSeen == sectionFirstSeenMs.defaultReturnValue()) {
+                                    // Defensive: Sodium's onSectionAdded should have fired before
+                                    // our first ingest. If it didn't, treat as a fresh section
+                                    // and fade from now. Records the time so later ingests for
+                                    // the same key see a sensible firstSeen.
+                                    sectionFirstSeenMs.put(p.key, now);
                                     stampMs = (int) now;
                                 } else if (now - firstSeen < fadeDurationMs) {
-                                    // Chunk still mid-fade — stamp with firstSeen so this new
-                                    // section's visibility tracks the chunk's ongoing fade
-                                    // (shader elapsed = now - firstSeen ∈ [0, fadeDuration) →
-                                    // partial fade matching neighbouring sections).
+                                    // Section was registered with Sodium recently (initial chunk
+                                    // load or F3+A) — fade by stamping with firstSeen. Shader
+                                    // elapsed = now - firstSeen ∈ [0, fadeDuration) → fade
+                                    // animates from wherever within the window we landed.
                                     stampMs = (int) firstSeen;
                                 } else {
-                                    // Chunk fully done fading — guarantee shader visibility=1
-                                    // by stamping with (now - 2*fadeDuration) so (now - stamp)
-                                    // = 2*fadeDuration > fadeDuration. Safety margin handles
-                                    // the shader running a frame or two behind the CPU and
-                                    // covers fade-duration changes mid-session.
+                                    // Section has been registered with Sodium for longer than
+                                    // fadeDuration — this ingest is a block-edit re-population
+                                    // of a previously-empty section in a long-loaded chunk.
+                                    // Stamp far enough in the past to guarantee shader
+                                    // visibility=1 with margin.
                                     stampMs = (int) (now - (long) fadeDurationMs * 2L);
                                 }
                                 ft.stamp(compactRef, stampMs);
                                 long n = sodiumFadeStamps.incrementAndGet();
                                 if (n <= 16 || n % 256 == 0) {
-                                    LOGGER.info("fade-stamp #{} key=0x{} compactRef=0x{} t={} (chunkFirstSeen={}, delta={}ms, fadeDur={})",
+                                    LOGGER.info("fade-stamp #{} key=0x{} compactRef=0x{} t={} (sectionFirstSeen={}, delta={}ms, fadeDur={})",
                                         n, Long.toHexString(p.key), Integer.toHexString(compactRef),
                                         stampMs, firstSeen, now - firstSeen, fadeDurationMs);
                                 }
@@ -563,9 +569,10 @@ public final class SectionManager {
             evictLive(key);
         }
         // F3+A is a "redraw everything from scratch" event — the user expects the world
-        // to re-fade as the chunks rebuild. Wipe per-chunk first-seen tracking so each
-        // re-ingest stamps with `now` as if it were a fresh load.
-        chunkFirstSeenMs.clear();
+        // to re-fade as the chunks rebuild. Wipe per-section first-seen tracking so each
+        // re-ingest behaves as a fresh load. Sodium's own onSectionAdded will re-populate
+        // entries as it re-registers sections during MC's allChanged-driven re-stream.
+        sectionFirstSeenMs.clear();
         // Drop queued worker-thread ingests that are now obsolete — they reference the arena
         // slots we just freed, and MC will re-dispatch compile tasks for the same sections
         // after resetLevelRenderData anyway. Retry queue too: its entries point at bytes
@@ -770,11 +777,9 @@ public final class SectionManager {
             if (outOfRadius || !mcHasChunk) {
                 evict(key);
                 evicted++;
-                // If the whole chunk has been dropped (not just one section out of range),
-                // prune the chunk's first-seen tracking too so a re-stream genuinely fades.
-                if (!mcHasChunk) {
-                    chunkFirstSeenMs.remove(((long) sz << 32) | (sx & 0xFFFFFFFFL));
-                }
+                // Per-section first-seen pruning happens in noteSectionRemoved (driven by
+                // Sodium's onSectionRemoved hook), not here — sweep is for vulkium-side
+                // arena reclamation only.
                 // Re-request compile when the player approaches again. MC won't re-run
                 // SectionCompiler for chunks whose SectionMesh cache is still warm — so
                 // without this, walking back toward an evicted section leaves a permanent

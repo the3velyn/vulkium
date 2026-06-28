@@ -4,6 +4,7 @@ import me.cortex.vulkium.VulkiumConfig;
 import me.cortex.vulkium.config.TranslucencySortingLevel;
 import net.caffeinemc.mods.sodium.api.config.ConfigEntryPoint;
 import net.caffeinemc.mods.sodium.api.config.StorageEventHandler;
+import net.caffeinemc.mods.sodium.api.config.option.OptionFlag;
 import net.caffeinemc.mods.sodium.api.config.option.OptionImpact;
 import net.caffeinemc.mods.sodium.api.config.structure.ConfigBuilder;
 import net.caffeinemc.mods.sodium.api.config.structure.OptionPageBuilder;
@@ -50,13 +51,20 @@ public class VulkiumConfigEntryPoint implements ConfigEntryPoint {
                 .setName(Component.literal("Vulkium Enabled"))
                 .setTooltip(Component.literal(
                     "Master toggle for vulkium's mesh-shader terrain pipeline. " +
-                    "When off, Sodium handles terrain rendering. " +
-                    "Toggling mid-session may leave Sodium with empty GPU storages " +
-                    "until next world reload."))
+                    "When off, Sodium handles terrain rendering. Triggers a chunk " +
+                    "reload on apply so the inactive renderer can rebuild its GPU " +
+                    "data — brief loading hitch, then full handoff."))
                 .setStorageHandler(flush)
                 .setBinding(v -> cfg.forceDisable = !v, () -> !cfg.forceDisable)
                 .setDefaultValue(true)
                 .setImpact(OptionImpact.HIGH)
+                // REQUIRES_RENDERER_RELOAD triggers MC's LevelRenderer.allChanged on apply.
+                // That flushes both Sodium's render-state and vulkium's live table, then
+                // streams everything back in — whichever renderer is now active uploads
+                // fresh GPU data. Without this, toggling vulkium off would leave Sodium
+                // with no uploaded geometry (because vulkium had been cancelling Sodium's
+                // uploadResults) and terrain would stay blank until manual F3+A.
+                .setFlags(OptionFlag.REQUIRES_RENDERER_RELOAD)
             )
             .addOption(b.createBooleanOption(id("general.render_fog"))
                 .setName(Component.literal("Render Fog"))

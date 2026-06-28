@@ -46,15 +46,24 @@ import java.util.List;
 public abstract class RenderSectionManagerEmptyMixin {
     private static final Logger LOGGER = LoggerFactory.getLogger("vulkium/sodium");
 
-    /** Records the chunk-load timestamp the moment Sodium recognises a chunk (including
-     *  all-air chunks that produce no geometry). Mirrors vanilla MC's behaviour where the
-     *  per-section fade timer starts at chunk-load, not at first-geometry. Without this,
-     *  the first block placed in a chunk that was loaded as all-air would read as a
-     *  brand-new chunk in vulkium's tracking and trigger a fade. Now placing a block in
-     *  any chunk that's been loaded for longer than fadeDuration is correctly suppressed. */
-    @Inject(method = "onChunkAdded", at = @At("HEAD"))
-    private void vulkium$noteChunkAdded(int x, int z, CallbackInfo ci) {
-        SectionManager.get().noteChunkAdded(x, z);
+    /** Records per-section "first observed" time the moment Sodium creates a RenderSection.
+     *  Fires for every section in every chunk MC loads — including all-air ones (the
+     *  hasOnlyAir() branch still goes through this method per onChunkAdded's loop).
+     *  Mirrors vanilla MC's per-section fade-timer semantics: timer starts when the
+     *  section is initialised by the renderer, not when geometry first appears. Block
+     *  placements in long-loaded sections are then correctly suppressed (delta from
+     *  registration > fadeDuration → no fade), while sections that just streamed in
+     *  fade individually based on their own arrival time (not the parent chunk's). */
+    @Inject(method = "onSectionAdded", at = @At("HEAD"))
+    private void vulkium$noteSectionAdded(int x, int y, int z, CallbackInfo ci) {
+        SectionManager.get().noteSectionAdded(x, y, z);
+    }
+
+    /** Drops per-section first-seen tracking when Sodium removes a RenderSection
+     *  (chunk unload, F3+A). Prevents unbounded growth of sectionFirstSeenMs. */
+    @Inject(method = "onSectionRemoved", at = @At("HEAD"))
+    private void vulkium$noteSectionRemoved(int x, int y, int z, CallbackInfo ci) {
+        SectionManager.get().noteSectionRemoved(x, y, z);
     }
 
     @Inject(method = "applyBuildOutputs", at = @At("HEAD"))
