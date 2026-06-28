@@ -273,6 +273,13 @@ Showstoppers / accepted differences for approach (a):
   - **`b5bf6a0`** — `RenderRegionManagerMixin` upgraded from observer to HEAD cancellation. With the upload cancelled, Sodium never instantiates per-region `DeviceResources` (its `GlBufferArena`s for geometry + index never grow). Only its constant 32 MB `MojangStagingBuffer` (allocated in `RenderRegionManager` constructor) remains — small, ignore. Safety analysis in the mixin doc-comment.
   - User should still drop `terrainArenaMb` in `vulkium.json` to something sane for the sodium edition (Sodium does the chunk compile, vulkium just stores the GPU geometry — 512 MB is plenty for default RD).
 
+- **2026-06-28 (later)** Pushed Stages 0-4 + testing fixes + uploadResults cancel to origin (`266e8c1`).
+- **2026-06-28** Optimisation continuation pass:
+  - **`1d0a1be` — Stage 2.5 face binning restored.** TerrainUploader now walks Sodium's `vertexSegments[]` per opaque layer and reorders into vulkium's task-shader bin order (`POS_X→0, POS_Z→1, POS_Y→2, NEG_X→3, NEG_Z→4, NEG_Y→5, UNASSIGNED→tail`). populateTasks gets real `faceBinCounts[6]` again — ~35-50% fewer mesh workgroups dispatched on outdoor scenes vs the all-unsigned Stage 2 fallback. SOLID + CUTOUT merged into one face-binned blob since the per-vertex material byte already carries the cutoff ordinal.
+  - **`71122f3` — Stage 6.1 mixin cleanup.** Deleted four MC-vanilla ingest mixins that never fire under Sodium: `SectionCompilerMixin`, `CompiledSectionMeshMixin`, `LevelRendererPrepareChunkRendersMixin`, `RenderSectionResortMixin`. -237 lines. Manifest entries dropped. Kept `RenderSectionMixin` + `ChunkSectionsToRenderMixin` as defensive — zero runtime cost since their targets don't fire, but they catch any vanilla-fallback path Sodium might leak.
+  - **`1ad2dd7` — translucent sort cancel.** `RenderSectionManagerMixin` cancels `scheduleSort(long, boolean)` at HEAD. Sodium's translucent sort tasks compute orderings that flowed into the now-cancelled `uploadResults` index-buffer branch → pure worker-CPU waste. One HEAD cancel covers both call sites (`integrateTranslucentData` after fresh build + `triggerSections` camera-movement sweep). Vulkium uses Sodium's build-order translucent vertices verbatim — known limitation noted in plan.
+  - **`f49313a` — Stage 6.2 dead-API strip.** `SectionEntry.LayerGeometry` deleted, `SectionEntry.layers` field deleted, `SectionManager.offerFromCompile` deleted, `SectionCapture.onSectionMeshCompiled` deleted along with the worker-thread compile-key plumbing. -150 lines net. `SectionCapture` kept as a thin facade (sentinel + zero metric stubs) so `VulkiumKeys`/`VulkiumHudOverlay` don't need touching.
+
 ## Optimisation audit — Sodium work we now bypass
 
 After the two cancel-mixins (`DefaultChunkRendererMixin` + `RenderRegionManagerMixin`), here's what Sodium still does per frame that vulkium no longer consumes:
@@ -282,7 +289,7 @@ After the two cancel-mixins (`DefaultChunkRendererMixin` + `RenderRegionManagerM
 | Terrain GPU draw (`DefaultChunkRenderer.render`) | medium GPU + CPU | HEAD cancel | ✅ cancelled |
 | Per-region GPU buffer upload (`RenderRegionManager.uploadResults`) | huge GPU mem | HEAD cancel | ✅ cancelled |
 | Per-frame render-list build (visibility traversal + frustum cull) | low CPU (~1-3ms) | risky — dual-purpose (also drives worker prioritisation by camera distance) | deferred |
-| Translucent per-quad sort tasks (`SortTriggering.integrateTranslucentData` → sort worker) | medium CPU (only when camera moves through translucent threshold) | yes via mixin | deferred — needs sort lifecycle research |
+| Translucent per-quad sort tasks (`SortTriggering.integrateTranslucentData` → sort worker) | medium CPU (only when camera moves through translucent threshold) | yes via mixin | ✅ cancelled (`RenderSectionManagerMixin#scheduleSort`) |
 | Shared index buffer ensureCapacity (`DefaultChunkRenderer:92`) | trivial | already skipped (parent method cancelled) | n/a |
 | Section-info graph + tree updates | low CPU | NO — vulkium needs Sodium's worker pool to keep building, which needs the graph to know what to build | keep |
 | `MojangStagingBuffer(32_000_000)` constructor allocation | 32 MB GPU constant | tricky (buffer is referenced by RenderRegion constructor params) | skip — not worth the risk |
