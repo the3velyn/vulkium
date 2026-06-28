@@ -23,8 +23,12 @@
 #define COLOR_SCALE (1.0 / 255.0)
 
 vec3 decodeVertexPosition(Vertex v) {
-    uint posLo = v.position.x;
-    uint posHi = v.position.y;
+    // CompactChunkVertex writes packPositionHi at byte 0 and packPositionLo at byte 4
+    // (see CompactChunkVertex.java#getEncoder). The 20-byte struct's leading uvec2 reads
+    // those two dwords in order, so position.x = HI and position.y = LO. (Verified against
+    // sodium's own chunk_vertex.glsl#_deinterleave_u20x3 — `data.x` is hi, `data.y` is lo.)
+    uint posHi = v.position.x;
+    uint posLo = v.position.y;
     uvec3 quantized = uvec3(
         ((posHi >>  0) & 0x3FFu) << 10 | ((posLo >>  0) & 0x3FFu),
         ((posHi >> 10) & 0x3FFu) << 10 | ((posLo >> 10) & 0x3FFu),
@@ -76,12 +80,16 @@ uint rawVertexAlphaCutoff(Vertex v) {
     return (v.lightData >> 17) & 3u;
 }
 
+// Sodium's AlphaCutoffParameter enum: ZERO(0)=0.0, TINY(1)=0.0001, HALF(2)=0.5, ONE(3)=1.0.
+// frag.frag's discard test is `albedo.a <= cut` so 0.0 means "discard exactly zero", 1.0
+// means "discard everything"; HALF (0.5) matches MC's CUTOUT terrain coverage-preservation
+// threshold and is the value tall-grass / leaves / etc. land on.
 float decodeVertexAlphaCutoff(Vertex v) {
-    return (float[](0.0f, 0.5f, 0.0f, 0.0f))[rawVertexAlphaCutoff(v)];
+    return (float[](0.0f, 0.0001f, 0.5f, 1.0f))[rawVertexAlphaCutoff(v)];
 }
 
 float getVertexAlphaCutoff(uint cutoffIdx) {
-    return (float[](0.0f, 0.5f, 0.0f, 0.0f))[cutoffIdx];
+    return (float[](0.0f, 0.0001f, 0.5f, 1.0f))[cutoffIdx];
 }
 
 vec2 decodeLightUV(Vertex v) {

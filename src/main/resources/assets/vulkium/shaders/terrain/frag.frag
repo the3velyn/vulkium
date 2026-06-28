@@ -86,20 +86,19 @@ void main() {
     }
     vec4 albedo = texture(tex_diffuse, sampleUv);
     uint alphaCutoffIdx = uint(gl_PrimitiveID) & 3u;
-    // Cutoff threshold must MATCH the threshold MC used when it built coverage-preserved
-    // mipmaps for the atlas. MipmapGenerator.ALPHA_CUTOFF = 0.5 and the CUTOUT_TERRAIN
-    // RenderPipeline registers shaderDefine ALPHA_CUTOUT = 0.5 — vanilla cutout terrain
-    // tests at 0.5, not 0.1. Using a lower threshold (e.g. 0.1) pulls in alpha values
-    // that coverage-preservation scaled UP specifically to survive the 0.5 test — so at
-    // distance, mip-averaged leaves/grass pass the 0.1 cutoff en masse and render as
-    // opaque rectangles. 0.5 gives vanilla-identical distance fade: preserved-coverage
-    // fraction of fragments passes, MIPPED RGB applied, smooth silhouette.
-    //
-    // cutoffBits=1 (CUTOUT layer) → 0.5. cutoffBits=0 (SOLID/TRANSLUCENT) → 0.0 (no
-    // discard: SOLID never has transparent pixels; TRANSLUCENT needs the full alpha for
-    // blending). The old idx=2 path (0.5 at bit 2) was never wired from the CPU side and
-    // is unreachable — removing it.
-    float cut = (alphaCutoffIdx == 1u) ? 0.5 : 0.0;
+    // Sodium AlphaCutoffParameter enum ordinals:
+    //   0 ZERO → 0.0    (SOLID / TRANSLUCENT — no discard; SOLID never has zero alpha,
+    //                    TRANSLUCENT needs full alpha for blending)
+    //   1 TINY → 0.0001 (rare; effectively "discard exactly zero")
+    //   2 HALF → 0.5    (CUTOUT — leaves, grass, iron bars, etc. matches MC's
+    //                    MipmapGenerator.ALPHA_CUTOFF coverage-preservation threshold)
+    //   3 ONE  → 1.0    (discard everything; sodium uses for some edge cases)
+    // Standalone-edition vulkium emitted a 1-bit cutoff (idx=0 or 1) from CPU-side per
+    // layer; Sodium emits the 2-bit material-byte ordinal directly, so we must use the
+    // full Sodium enum table here. The earlier 1-arm conditional (idx==1 ? 0.5 : 0.0)
+    // mapped Sodium's CUTOUT (idx=2) to cut=0.0 — distant plants rendered as opaque
+    // rectangles for the same coverage-preservation reason the old comment warned about.
+    float cut = (float[](0.0, 0.0001, 0.5, 1.0))[alphaCutoffIdx];
     if (albedo.a <= cut) discard;
 
     vec4 multiplier = interpolateMultiplier();
