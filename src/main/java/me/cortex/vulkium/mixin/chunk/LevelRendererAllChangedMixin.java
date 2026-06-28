@@ -48,16 +48,26 @@ public abstract class LevelRendererAllChangedMixin {
                 .warn("Renderer shutdown on allChanged failed", t);
         }
         SectionManager.get().queueFlushAll();
-        // Force LevelRenderer.resetLevelRenderData so ViewArea gets rebuilt at the current RD.
-        // MC's LevelExtractor.allChanged only updates SectionUpdateTracker + lastViewDistance;
-        // ViewArea itself is only rebuilt from inside LevelExtractor.extract (gated on
-        // shouldResetLevelRenderData, which is only set by resource-reload). This means raising
-        // the RD slider past the initial value never extends the visible grid until the user
-        // reloads chunks or resources. Piggy-backing the full reset here makes F3+A (and other
-        // allChanged paths) also expand the grid when RD has grown.
-        net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
-        if (mc != null && mc.levelRenderer != null) {
-            mc.levelRenderer.resetLevelRenderData();
-        }
+        // NO eager levelRenderer.resetLevelRenderData() in 26.2-pre-2 — it breaks recompile.
+        //
+        // History: this was added because older MC's allChanged() only updated
+        // SectionUpdateTracker + lastViewDistance, so ViewArea wasn't rebuilt and an enlarged
+        // RD slider wouldn't extend the visible grid until a manual reload. We force-reset
+        // here to make F3+A (and other allChanged paths) also rebuild ViewArea.
+        //
+        // In 26.2-pre-2, allChanged() now sets shouldInvalidateCompiledGeometry=true, and the
+        // next-frame LevelExtractor.extract calls LevelRenderer.invalidateCompiledGeometry(),
+        // which itself creates a fresh ViewArea and reconnects SectionOcclusionGraph via
+        // waitAndReset(newViewArea). So MC already does the rebuild for us — our eager
+        // resetLevelRenderData() is now redundant.
+        //
+        // Worse, it's actively harmful: resetLevelRenderData() nulls viewArea and calls
+        // SectionOcclusionGraph.waitAndReset(null). The graph's worker can't recover from a
+        // null-target reset, so even though invalidateCompiledGeometry rebinds it to a new
+        // ViewArea afterward, the graph never produces visibleSections — so no sections ever
+        // get marked dirty, MC's compile workers go idle, and terrain never returns after
+        // F3+A or the in-game vulkium toggle (which also fires allChanged()). 27-second
+        // observation with seq%128 capture logging: zero captures post-F3+A, confirmed in
+        // the repro log on 2026-06-01.
     }
 }

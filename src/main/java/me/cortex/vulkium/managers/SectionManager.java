@@ -90,6 +90,12 @@ public final class SectionManager {
     private long drained = 0L;
     private long droppedBytes = 0L;
 
+    // Silent-drop counters for the "hole in the world" diagnostic. Each drop type increments
+    // its own counter; LOGGER.warn fires on first few + every Nth so steady-state isn't noisy
+    // but the user gets a clear signal which path is firing.
+    private final java.util.concurrent.atomic.AtomicLong unknownSectionDrops = new java.util.concurrent.atomic.AtomicLong();
+    private final java.util.concurrent.atomic.AtomicLong regionOverflowDrops = new java.util.concurrent.atomic.AtomicLong();
+
     private SectionManager() {
         sectionToRegionRef.defaultReturnValue(-1);
     }
@@ -206,7 +212,14 @@ public final class SectionManager {
             SectionEntry prev = live.put(p.key, p.entry);
             if (prev != null) {
                 freeEntry(prev);
-            } else if (regionManager != null && p.key != SectionCapture.UNKNOWN_SECTION) {
+            } else if (p.key == SectionCapture.UNKNOWN_SECTION) {
+                // Capture mixin couldn't resolve the section key — landed in `live` but with
+                // no region slot, so it never gets drawn. Symptom: hole in the world.
+                long drops = unknownSectionDrops.incrementAndGet();
+                if (drops <= 4 || drops % 256 == 0) {
+                    LOGGER.warn("UNKNOWN_SECTION ingest (no region allocation): drop #{} — capture mixin thread-local was unset", drops);
+                }
+            } else if (regionManager != null) {
                 // First time we've seen this section — allocate a slot in the region ledger so the
                 // section is addressable (regionId << 8) | posInRegion for later draw dispatch.
                 int sx = SectionPos.x(p.key);
@@ -223,6 +236,11 @@ public final class SectionManager {
                     // new regions" symptom.
                     live.remove(p.key);
                     freeEntry(p.entry);
+                    long drops = regionOverflowDrops.incrementAndGet();
+                    if (drops <= 4 || drops % 64 == 0) {
+                        LOGGER.warn("Region ledger full — dropped section 0x{} (drop #{}); raise vulkium.json maxRegions or wait for eviction",
+                            Long.toHexString(p.key), drops);
+                    }
                     drained++;
                     return;
                 }
