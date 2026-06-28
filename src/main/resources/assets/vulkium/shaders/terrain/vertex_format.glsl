@@ -91,15 +91,20 @@ float getVertexAlphaCutoff(uint cutoffIdx) {
 }
 
 vec2 decodeLightUV(Vertex v) {
-    // Sodium clamps to [8, 248] at build time. Same lightmap sample formula vanilla
-    // uses: uv = light/256 + 0.5/16, then clamp to [0.5/16, 15.5/16]. The [8,248]
-    // pre-clamp narrows the resulting UV to about [0.0625, 0.969] — well inside the
-    // clamped range — so the clamp() below is a no-op in practice. Kept verbatim so
-    // any future light path that bypasses Sodium still goes through the safe sample.
+    // Sodium pre-bakes the half-texel offset. The encoder is
+    // `Mth.clamp(light + 8, 8, 248)` where `light` is MC's already-16-scaled raw value
+    // (block-light 0..15 → 0..240). Adding 8 produces `(b + 0.5) * 16` — exactly the
+    // texel-center for a 16×16 lightmap, divided-by-256 gives the sampler UV directly.
+    // The OLD vulkium decoder added another `+0.5/16` (= +8/256) on top of MC's raw
+    // values, which under Sodium DOUBLES the offset → +0.0625 UV bias → lightmap
+    // sampling lands too far toward the bright corner. Visible symptom: biome-tinted
+    // terrain reads brighter / hotter colour than it should.
+    //
+    // The [8, 248] pre-clamp also handles edge-clamping inside the lightmap — no
+    // explicit clamp() needed here.
     uvec2 light = uvec2(
         (v.lightData >> 0) & 0xFFu,
         (v.lightData >> 8) & 0xFFu
     );
-    vec2 uv = vec2(light) / 256.0 + vec2(0.5 / 16.0);
-    return clamp(uv, vec2(0.5 / 16.0), vec2(15.5 / 16.0));
+    return vec2(light) / 256.0;
 }
