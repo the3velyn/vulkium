@@ -8,7 +8,6 @@
     "blaze3d.VulkanDeviceMixin",
     "chunk.LevelRendererAllChangedMixin",
     "chunk.LevelExtractorAccessor",
-    "gui.VideoSettingsScreenMixin",
     "camera.GameRendererBobMixin",
     "camera.LevelRendererProjMixin"
   ],

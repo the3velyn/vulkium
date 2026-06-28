@@ -9,8 +9,7 @@
     "ChunkBuilderSortingTaskMixin",
     "DefaultChunkRendererMixin",
     "RenderRegionManagerMixin",
-    "RenderSectionManagerEmptyMixin",
-    "VideoSettingsScreenMixin"
+    "RenderSectionManagerEmptyMixin"
   ],
   "injectors": {
     "defaultRequire": 1

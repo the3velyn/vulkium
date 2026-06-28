@@ -11,7 +11,8 @@
   "license": "LGPL-3.0",
   "environment": "client",
   "entrypoints": {
-    "client": ["me.cortex.vulkium.Vulkium"]
+    "client": ["me.cortex.vulkium.Vulkium"],
+    "sodium:config_api_user": ["me.cortex.vulkium.gui.VulkiumConfigEntryPoint"]
   },
   "mixins": [
     "vulkium.mixins.json",
