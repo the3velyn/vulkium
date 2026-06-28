@@ -1,0 +1,14 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "me.cortex.vulkium.mixin.sodium",
+  "compatibilityLevel": "JAVA_21",
+  "client": [
+    "ChunkBuildOutputMixin",
+    "ChunkBuilderMeshingTaskMixin",
+    "RenderRegionManagerMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

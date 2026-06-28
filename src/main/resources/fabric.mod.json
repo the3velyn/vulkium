@@ -13,16 +13,19 @@
   "entrypoints": {
     "client": ["me.cortex.vulkium.Vulkium"]
   },
-  "mixins": ["vulkium.mixins.json"],
+  "mixins": [
+    "vulkium.mixins.json",
+    "vulkium-sodium.mixins.json"
+  ],
   "accessWidener": "vulkium.accesswidener",
   "depends": {
     "fabricloader": ">=0.19.0",
     "minecraft": "*",
     "java": ">=25",
-    "fabric-lifecycle-events-v1": "*"
+    "fabric-lifecycle-events-v1": "*",
+    "sodium": ">=0.9.0-beta.2"
   },
   "breaks": {
-    "sodium": "*",
     "vulkanmod": "*",
     "iris": "*"
   }

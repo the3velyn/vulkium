@@ -88,6 +88,16 @@ dependencies {
     embed("fabric-lifecycle-events-v1")
     embed("fabric-resource-loader-v0")
     embed("fabric-rendering-v1")
+
+    // Sodium (compile + dev runtime, NOT bundled — user provides their own at install).
+    // This branch (mc-26.2-sodium) targets Sodium as a hard dependency; standalone edition
+    // on mc-26.2 instead declares `breaks.sodium` in fabric.mod.json. Sodium ships with
+    // official mappings (no Yarn remap needed), so plain compileOnly+runtimeOnly works —
+    // we don't need Loom's mod* configurations (which aren't wired up in this build setup
+    // anyway). compileOnly puts Sodium's types on the classpath for our mixins; runtimeOnly
+    // puts the actual mod into the dev runClient's mods directory.
+    compileOnly("maven.modrinth:sodium:mc26.2-0.9.1-beta.2-fabric")
+    runtimeOnly("maven.modrinth:sodium:mc26.2-0.9.1-beta.2-fabric")
 }
 
 // --- Loom configuration ---------------------------------------------------
