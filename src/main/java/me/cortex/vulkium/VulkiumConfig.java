@@ -96,17 +96,23 @@ public final class VulkiumConfig {
     /** Terrain arena size in MB. Undersizing causes {@code uploadSectionSplit} to return
      *  {@code SIZE_LIMIT}; existing geometry keeps rendering from its allocated slots but new
      *  chunks never write their section headers, so <i>new chunks stop rendering</i> once
-     *  the arena fills (progressive starvation rather than crash). Sizing guidance:
+     *  the arena fills (progressive starvation rather than crash).
+     *  <p>Sizing guidance (sodium-edition, 20-byte CompactChunkVertex):
      *  <ul>
-     *    <li>RD≤16: 256 MB typically fine.</li>
-     *    <li>RD 24-32: 512-1024 MB.</li>
-     *    <li>RD 48-64 or dense-biome exploration: 1024-4096 MB.</li>
-     *    <li>RD 96+ on a 16 GB GPU: 4-8 GB is reasonable and the allocator handles it.</li>
+     *    <li>RD≤12: 512 MB typically fine.</li>
+     *    <li>RD 16-24: 1024-2048 MB.</li>
+     *    <li>RD 32: 2048-4096 MB depending on biome density.</li>
+     *    <li>RD 48-64: 4096-8192 MB.</li>
+     *    <li>RD 96+ on a 16+ GB GPU: max out the 8192 MB cap.</li>
      *  </ul>
-     *  Internal SegmentedManager address is 34-bit quad-granular (~32 GB byte-space ceiling
-     *  before {@code int} addr truncation), so the slider's 8192 MB cap leaves 4× headroom
-     *  below the truncation boundary. */
-    public int terrainArenaMb = 512;
+     *  Default 1024 MB is the safe baseline for RD 16-20 most players actually use; raise
+     *  via the in-game Vulkium → Memory page if RD is higher or chunks start failing to
+     *  render at the camera fringe. Standalone-edition's 512 MB default predated the
+     *  20-byte vertex format (was 16 B) — sodium edition needs 25% more arena per quad.
+     *  <p>Internal SegmentedManager address is 34-bit quad-granular (~32 GB byte-space
+     *  ceiling before {@code int} addr truncation), so the slider's 8192 MB cap leaves
+     *  4× headroom below the truncation boundary. */
+    public int terrainArenaMb = 1024;
 
     /** Max regions in the ledger. One region = 8×4×8 sections = 256 sections. */
     public int maxRegions = 1024;

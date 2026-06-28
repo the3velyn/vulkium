@@ -56,8 +56,15 @@ public final class BufferArena implements AutoCloseable {
         return (int) segments.getSize(quadAddr) * 4 * vertexFormatSize;
     }
 
+    /** A section's existing slot can host any quad count up to its allocated size — the
+     *  extra space is wasted until reallocation but the geometry is valid for the lower
+     *  count. Letting rebuilds shrink-reuse means a block edit that removes geometry
+     *  (e.g. mined a wall, broke last of a tree) doesn't have to alloc-new and can't
+     *  hit SIZE_LIMIT just because the arena's full of unrelated chunks. The exact-
+     *  match path was a perf optimisation (no waste) but failed correctness when arena
+     *  pressure rejected legitimate rebuilds. */
     public boolean canReuse(int addr, int quads) {
-        return segments.getSize(addr) == quads;
+        return segments.getSize(addr) >= quads;
     }
 
     public long totalQuads() { return totalQuads; }

@@ -172,9 +172,31 @@ public final class SectionManager {
     /** Diagnostic counter for fade-stamp first-insert. */
     private final AtomicLong sodiumFadeStamps = new AtomicLong();
 
+    /** Total SIZE_LIMIT arena-full hits this session (across upload attempts including
+     *  retries). Bumped from {@link #ingest} on every failure; logged at boot + every
+     *  Nth for visibility on whether the arena is genuinely undersized. */
+    private final AtomicLong arenaFullHits = new AtomicLong();
+    /** Sections that exhausted MAX_UPLOAD_RETRIES and were dropped. */
+    private final AtomicLong arenaDroppedSections = new AtomicLong();
+    /** Wall-clock of the last arena-state log, for periodic dump throttling. */
+    private long lastArenaStatLogMs;
+
     public void offerFromSodium(long sectionPosKey, ChunkBuildOutput output) {
         if (output == null) return;
         if (output.meshes == null || output.meshes.isEmpty()) {
+            // Cheap guard: skip enqueueing eviction for sections we never had in our live
+            // table. At chunk-load Sodium emits a synthetic empty ChunkBuildOutput for
+            // EVERY all-air section (RenderSectionManager.submitBuildTask fast-path); on a
+            // 32 RD chunk-load that's thousands of empty offers. Without this guard each
+            // would queue a no-op eviction that still walks evictLive (live.remove, free
+            // empty sectionEntry, sectionToRegionRef.remove, translucentVersion++,
+            // uploader.releaseSection), spuriously bumping translucentVersion and forcing
+            // TranslucentSectionSorter into a re-sort it doesn't need. Only enqueue if we
+            // actually had data for this section.
+            if (sectionToRegionRef.get(sectionPosKey) == sectionToRegionRef.defaultReturnValue()
+                    && !live.containsKey(sectionPosKey)) {
+                return;
+            }
             long n = sodiumEmptyEvicts.incrementAndGet();
             if (n <= 16 || n % 64 == 0) {
                 LOGGER.info("offerFromSodium EMPTY → evict #{} key=0x{} (sectionToRegionRef={})",
@@ -263,6 +285,27 @@ public final class SectionManager {
             }
             n++;
         }
+
+        // Periodic arena-pressure dump (every ~5s, cheap — one wall-clock read per
+        // drain). Surfaces "vulkium silently rejecting chunks" cases where the
+        // standard SIZE_LIMIT warnings get throttled out by their per-event gates.
+        long nowMs = System.currentTimeMillis();
+        if (nowMs - lastArenaStatLogMs >= 5000L) {
+            lastArenaStatLogMs = nowMs;
+            me.cortex.vulkium.render.TerrainUploader up =
+                me.cortex.vulkium.render.Renderer.get().terrainUploader();
+            if (up != null) {
+                LOGGER.info("arena {}/{} MB ({}% used, {} live sections), queue={}/retry={}/resort={}, " +
+                    "arenaFullHits={}, droppedSections={}",
+                    up.arena().usedMB(), up.arena().allocatedMB(),
+                    up.arena().allocatedMB() == 0 ? 0
+                        : (100L * up.arena().usedMB() / up.arena().allocatedMB()),
+                    live.size(),
+                    ingestQueue.size(), retryQueue.size(), resortQueue.size(),
+                    arenaFullHits.get(), arenaDroppedSections.get());
+            }
+        }
+
         return n;
     }
 
@@ -358,9 +401,13 @@ public final class SectionManager {
                     uploader.uploadSectionSplit(p.key, p.entry, stream);
                 int addr = up.addr;
                 if (addr == me.cortex.vulkium.managers.util.SegmentedManager.SIZE_LIMIT) {
-                    if (drained <= 8 || drained % 4096 == 0) {
-                        LOGGER.warn("Terrain arena full — upload skipped for section 0x{} (drained={})",
-                            Long.toHexString(p.key), drained);
+                    long hits = arenaFullHits.incrementAndGet();
+                    if (hits <= 16 || hits % 256 == 0) {
+                        long usedMb = uploader.arena().usedMB();
+                        long capMb = uploader.arena().allocatedMB();
+                        LOGGER.warn("Terrain arena full — section 0x{} skipped (hit #{}, arena {}/{}MB, retries={}/{})",
+                            Long.toHexString(p.key), hits, usedMb, capMb,
+                            p.retryCount, MAX_UPLOAD_RETRIES);
                     }
                     // Re-queue the ingest with a bumped retry count. Fixes the "chunks
                     // fail to load initially but F3+A fixes them" symptom: previously
@@ -376,9 +423,12 @@ public final class SectionManager {
                     }
                     // Fall through to freeEntry — we're giving up on this section. A later
                     // MC-driven recompile (block edit, F3+A, chunk reload) will re-capture.
-                    if (drained % 4096 == 0) {
-                        LOGGER.warn("Section 0x{} exhausted {} upload retries, dropping",
-                            Long.toHexString(p.key), MAX_UPLOAD_RETRIES);
+                    long dropped = arenaDroppedSections.incrementAndGet();
+                    if (dropped <= 16 || dropped % 64 == 0) {
+                        long usedMb = uploader.arena().usedMB();
+                        long capMb = uploader.arena().allocatedMB();
+                        LOGGER.warn("Section 0x{} DROPPED after {} retries (drop #{}, arena {}/{}MB) — raise terrainArenaMb or lower RD",
+                            Long.toHexString(p.key), MAX_UPLOAD_RETRIES, dropped, usedMb, capMb);
                     }
                 } else if (regionManager != null) {
                     // Populate the section's 32-byte meta slab in RegionManager's sectionBuffer
