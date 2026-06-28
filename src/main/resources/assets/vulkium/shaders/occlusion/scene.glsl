@@ -16,21 +16,32 @@
 #extension GL_EXT_shader_8bit_storage : require
 
 // Sodium CompactChunkVertex layout (20 bytes/vertex, std430-packed).
-//   position:  positionHi(4B) + positionLo(4B) — 20-bit-per-component split.
-//              For each comp c: quantC = ((posHi >> (10*c)) & 0x3FF) << 10
-//                                       | ((posLo >> (10*c)) & 0x3FF);
+//   posHi:     bits 0-9 = x_hi10, bits 10-19 = y_hi10, bits 20-29 = z_hi10
+//   posLo:     bits 0-9 = x_lo10, bits 10-19 = y_lo10, bits 20-29 = z_lo10
+//              Per component c: quantC = ((posHi >> (10*c)) & 0x3FF) << 10
+//                                      | ((posLo >> (10*c)) & 0x3FF);
 //              world = quantC * (32.0 / 2^20) - 8.0
 //   colour:    ARGB8, RGB pre-multiplied by AO (ColorARGB.mulRGB at buffer-write time).
 //   texCoord:  RG16, low 15 bits = quantized UV (scale 1/32768), bit 15 = sign-bias.
 //   lightData: byte0=blockLight (clamped [8,248]), byte1=skyLight (clamped [8,248]),
 //              byte2=material (bit 0 = useMipmaps, bits 1-7 = alphaCutoff ordinal),
 //              byte3=sectionIdx (chunk-local Y).
-// See `terrain/vertex_format.glsl` for the actual decoders; this is just the storage shape.
+//
+// IMPORTANT — 5 separate `uint` fields, NOT a leading `uvec2`. In std430 the array stride
+// rounds the struct size up to the struct's alignment, and a uvec2 member forces 8-byte
+// struct alignment → `Vertex data[]` would stride at 24 bytes between elements, reading
+// 4 bytes of the NEXT record into the lightData slot of the current one (and so on, every
+// vertex past index 0 drifts further out of phase). The visible symptom is "huge mess of
+// triangles." Five uints = struct alignment 4 = array stride 20 = exact match to Sodium's
+// CompactChunkVertex.STRIDE.
+//
+// See `terrain/vertex_format.glsl` for the decoders; this is just the storage shape.
 struct Vertex {
-    uvec2 position;
-    uint  colour;
-    uint  texCoord;
-    uint  lightData;
+    uint posHi;
+    uint posLo;
+    uint colour;
+    uint texCoord;
+    uint lightData;
 };
 
 // -----------------------------------------------------------------------------
@@ -113,13 +124,11 @@ layout(buffer_reference, std430, buffer_reference_align=4) readonly restrict buf
     uint data[];
 };
 
-// Sodium's 20-byte vertex stride is not a power of 2 — buffer_reference_align is the
-// alignment of the FIRST element (the BDA pointer), not the stride between elements.
-// std430 packs `struct Vertex { uvec2; uint; uint; uint }` cleanly at 20 bytes with
-// 8-byte natural alignment of the leading uvec2; setting align=8 lets the BDA pointer
-// be 8-byte aligned (which CPU-side TerrainUploader / BufferArena both guarantee — the
-// arena base comes from a fresh DeviceBuffer allocation).
-layout(buffer_reference, std430, buffer_reference_align=8) restrict buffer TerrainDataPtr {
+// 5 uints → struct alignment 4 → BDA pointer alignment 4 → array stride 20.
+// CPU-side TerrainUploader / BufferArena allocate from a fresh DeviceBuffer whose base is
+// at least 4-byte aligned (in practice page-aligned). The 20-byte stride matches Sodium's
+// CompactChunkVertex.STRIDE exactly — no per-element padding.
+layout(buffer_reference, std430, buffer_reference_align=4) restrict buffer TerrainDataPtr {
     Vertex data[];
 };
 

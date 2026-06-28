@@ -24,15 +24,13 @@
 
 vec3 decodeVertexPosition(Vertex v) {
     // CompactChunkVertex writes packPositionHi at byte 0 and packPositionLo at byte 4
-    // (see CompactChunkVertex.java#getEncoder). The 20-byte struct's leading uvec2 reads
-    // those two dwords in order, so position.x = HI and position.y = LO. (Verified against
-    // sodium's own chunk_vertex.glsl#_deinterleave_u20x3 — `data.x` is hi, `data.y` is lo.)
-    uint posHi = v.position.x;
-    uint posLo = v.position.y;
+    // (see CompactChunkVertex.java#getEncoder). Verified against sodium's own decoder in
+    // common/.../shaders/include/chunk_vertex.glsl#_deinterleave_u20x3 — `data.x` is hi,
+    // `data.y` is lo.
     uvec3 quantized = uvec3(
-        ((posHi >>  0) & 0x3FFu) << 10 | ((posLo >>  0) & 0x3FFu),
-        ((posHi >> 10) & 0x3FFu) << 10 | ((posLo >> 10) & 0x3FFu),
-        ((posHi >> 20) & 0x3FFu) << 10 | ((posLo >> 20) & 0x3FFu)
+        ((v.posHi >>  0) & 0x3FFu) << 10 | ((v.posLo >>  0) & 0x3FFu),
+        ((v.posHi >> 10) & 0x3FFu) << 10 | ((v.posLo >> 10) & 0x3FFu),
+        ((v.posHi >> 20) & 0x3FFu) << 10 | ((v.posLo >> 20) & 0x3FFu)
     );
     return vec3(quantized) * SODIUM_POS_INV_SCALE - SODIUM_POS_ORIGIN;
 }
