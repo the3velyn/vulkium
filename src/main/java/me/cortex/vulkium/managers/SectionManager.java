@@ -2,6 +2,10 @@ package me.cortex.vulkium.managers;
 
 import com.mojang.blaze3d.vertex.MeshData;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+import net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkBuildOutput;
+import net.caffeinemc.mods.sodium.client.render.chunk.data.BuiltSectionMeshParts;
+import net.caffeinemc.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
+import net.caffeinemc.mods.sodium.client.util.NativeBuffer;
 import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
 import net.minecraft.client.renderer.chunk.SectionCompiler;
 import net.minecraft.core.SectionPos;
@@ -12,6 +16,7 @@ import org.slf4j.LoggerFactory;
 import java.nio.ByteBuffer;
 import java.util.Map;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * Owns vulkium's view of per-section geometry: the in-memory section table, upload queue, and
@@ -143,6 +148,57 @@ public final class SectionManager {
                 ds));
         }
 
+        ingestQueue.offer(PendingIngest.fresh(sectionPosKey, entry));
+    }
+
+    /** Diagnostic counter for the sodium ingest path. Bumped on every {@link #offerFromSodium}
+     *  that produced at least one non-empty layer; logged at first few + every 1024th. */
+    private final AtomicLong sodiumOffers = new AtomicLong();
+
+    /**
+     * Sodium-edition worker-thread hand-off. Called from {@code ChunkBuilderMeshingTaskMixin}
+     * after Sodium's build task finishes. Copies each layer's {@link NativeBuffer} into a
+     * fresh memAlloc-owned ByteBuffer (Sodium recycles the source after the build task
+     * returns) and queues the captured entry for the render thread.
+     *
+     * <p>Empty layers (null mesh or zero-byte buffer) are skipped silently. An output with
+     * no usable layers does not enqueue anything.
+     */
+    public void offerFromSodium(long sectionPosKey, ChunkBuildOutput output) {
+        if (output == null || output.meshes == null || output.meshes.isEmpty()) return;
+
+        SectionEntry entry = null;
+        for (Map.Entry<TerrainRenderPass, BuiltSectionMeshParts> e : output.meshes.entrySet()) {
+            BuiltSectionMeshParts parts = e.getValue();
+            if (parts == null) continue;
+            NativeBuffer nb = parts.getVertexData();
+            if (nb == null) continue;
+            ByteBuffer src = nb.getDirectBuffer();
+            int remaining = src.remaining();
+            if (remaining <= 0) continue;
+
+            ByteBuffer copy = MemoryUtil.memAlloc(remaining);
+            copy.put(src.duplicate()).flip();
+
+            int[] srcSegments = parts.getVertexSegments();
+            int[] segments = srcSegments != null ? srcSegments.clone() : new int[0];
+            int totalVerts = 0;
+            for (int i = 0; i < segments.length; i += 2) {
+                totalVerts += segments[i];
+            }
+
+            if (entry == null) entry = new SectionEntry();
+            entry.sodiumLayers.put(e.getKey(),
+                new SectionEntry.SodiumLayerGeometry(copy, segments, totalVerts));
+        }
+
+        if (entry == null) return;
+
+        long n = sodiumOffers.incrementAndGet();
+        if (n <= 4 || n % 1024 == 0) {
+            LOGGER.info("offerFromSodium #{} key=0x{} layers={}",
+                n, Long.toHexString(sectionPosKey), entry.sodiumLayers.size());
+        }
         ingestQueue.offer(PendingIngest.fresh(sectionPosKey, entry));
     }
 
@@ -530,6 +586,10 @@ public final class SectionManager {
             if (g.indexBytes != null) MemoryUtil.memFree(g.indexBytes);
         }
         e.layers.clear();
+        for (SectionEntry.SodiumLayerGeometry g : e.sodiumLayers.values()) {
+            if (g.vertexBytes != null) MemoryUtil.memFree(g.vertexBytes);
+        }
+        e.sodiumLayers.clear();
     }
 
     private static long sizeOf(SectionEntry e) {
@@ -537,6 +597,9 @@ public final class SectionManager {
         for (SectionEntry.LayerGeometry g : e.layers.values()) {
             if (g.vertexBytes != null) n += g.vertexBytes.capacity();
             if (g.indexBytes != null) n += g.indexBytes.capacity();
+        }
+        for (SectionEntry.SodiumLayerGeometry g : e.sodiumLayers.values()) {
+            if (g.vertexBytes != null) n += g.vertexBytes.capacity();
         }
         return n;
     }
