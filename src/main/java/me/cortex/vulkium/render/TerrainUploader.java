@@ -168,36 +168,90 @@ public final class TerrainUploader implements AutoCloseable {
             }
         }
 
-        // 3. Pass-through Sodium bytes into the arena.
-        // Arena layout: [opaque_layer_0][opaque_layer_1]...[translucent] — Sodium guarantees
-        // that within each layer, vertices are grouped by ModelQuadFacing (per vertexSegments),
-        // so any all-unsigned-bin opaque dispatch will draw all 6 face directions in order.
-        // Stage 2.5 will restore per-face bin dispatch by walking vertexSegments and
-        // permuting facings into vulkium's task-shader bin order. For Stage 2 we leave
-        // faceBinCounts zeroed → populateTasks treats everything as unsigned tail.
+        // 3. Pass-through Sodium bytes into the arena, reordered by face direction.
+        // Arena layout per section: [opaque face-binned][translucent].
+        //
+        // Within the opaque region we permute Sodium's vertex layout (which groups quads
+        // by ModelQuadFacing per layer) into vulkium's task-shader bin order:
+        //   bin 0 = +X (east)      = sodium POS_X (ordinal 0)
+        //   bin 1 = +Z (south)     = sodium POS_Z (ordinal 2)
+        //   bin 2 = +Y (top)       = sodium POS_Y (ordinal 1)
+        //   bin 3 = -X (west)      = sodium NEG_X (ordinal 3)
+        //   bin 4 = -Z (north)     = sodium NEG_Z (ordinal 5)
+        //   bin 5 = -Y (bottom)    = sodium NEG_Y (ordinal 4)
+        //   tail  = unsigned       = sodium UNASSIGNED (ordinal 6)
+        // populateTasks (task_common.glsl) reads faceBinCounts[0..5] and emits only the
+        // three bins whose outward normal faces the camera + the tail bin → ~35-50%
+        // fewer mesh workgroups dispatched on typical outdoor scenes.
+        //
+        // We DELIBERATELY merge SOLID and CUTOUT into one face-binned blob. The 2-bit
+        // alphaCutoff is per-vertex on Sodium (encoded in the lightData material byte),
+        // so the mesh+frag stages can distinguish layers without us keeping them split.
         long baseByteOffset = arena.byteOffsetOf(addr);
         long dstByteOffset = baseByteOffset;
         boolean newAlloc = existing != addr;
+        int[] faceBinCounts = new int[6];
         try {
-            // Opaque layers — concat in iteration order (SOLID first, then CUTOUT, or
-            // whichever Sodium gave us). The mesh shader doesn't care about per-pass split
-            // on the opaque side; alphaCutoff is per-render-pass, not per-vertex.
+            // Walk all opaque layers' vertexSegments to accumulate per-sodium-facing vert
+            // counts. Sodium emits at most one segment per (layer, facing) pair (see
+            // ChunkBuildBuffers.createMesh) but we tolerate duplicates defensively.
+            int[] sodiumPerFacingVerts = new int[ModelQuadFacingCount];
+            int sodiumTotalOpaqueVerts = 0;
             for (Map.Entry<TerrainRenderPass, SectionEntry.SodiumLayerGeometry> e : entry.sodiumLayers.entrySet()) {
                 if (e.getKey().isTranslucent()) continue;
                 SectionEntry.SodiumLayerGeometry g = e.getValue();
-                if (g == null || g.vertexBytes == null) continue;
-                ByteBuffer src = g.vertexBytes;
-                int bytes = src.remaining();
-                if (bytes <= 0) continue;
-                long dst = stream.upload(arena.buffer(), dstByteOffset, bytes);
-                ByteBuffer dstBuf = MemoryUtil.memByteBuffer(dst, bytes);
-                dstBuf.put(src.duplicate());
-                dstByteOffset += bytes;
+                if (g == null || g.vertexSegments == null) continue;
+                int[] segs = g.vertexSegments;
+                for (int i = 0; i + 1 < segs.length; i += 2) {
+                    int cnt = segs[i];
+                    if (cnt <= 0) continue;
+                    int facing = segs[i + 1];
+                    if (facing < 0 || facing >= ModelQuadFacingCount) continue;
+                    sodiumPerFacingVerts[facing] += cnt;
+                    sodiumTotalOpaqueVerts += cnt;
+                }
             }
-            // Translucent layer — appended right after opaque so translucent draws index
-            // [addr + opaqueQuads, addr + totalQuads). Sodium's build-order is whatever
-            // ResortTransparencyTask hands it; we don't re-sort on this branch. Cache the
-            // bytes for a potential future POV resort path.
+            // Per-vulkium-bin quad counts (NOT including unsigned tail — that's implied by
+            // total - sum(bins)). Vertices to quads = /4 (Sodium emits 4 verts/quad).
+            for (int bin = 0; bin < 6; bin++) {
+                faceBinCounts[bin] = sodiumPerFacingVerts[VULKIUM_BIN_TO_SODIUM_FACING[bin]] / 4;
+            }
+
+            int totalOpaqueBytes = sodiumTotalOpaqueVerts * VERTEX_STRIDE;
+            if (totalOpaqueBytes > 0) {
+                long opaqueDstPtr = stream.upload(arena.buffer(), dstByteOffset, totalOpaqueBytes);
+                long writeCursor = 0L;
+                // Emit in vulkium order: bins 0-5, then UNASSIGNED tail.
+                for (int targetFacing : VULKIUM_EMIT_ORDER) {
+                    for (Map.Entry<TerrainRenderPass, SectionEntry.SodiumLayerGeometry> e : entry.sodiumLayers.entrySet()) {
+                        if (e.getKey().isTranslucent()) continue;
+                        SectionEntry.SodiumLayerGeometry g = e.getValue();
+                        if (g == null || g.vertexBytes == null || g.vertexSegments == null) continue;
+                        long srcBaseAddr = MemoryUtil.memAddress(g.vertexBytes);
+                        int[] segs = g.vertexSegments;
+                        long layerSrcOff = 0L;
+                        for (int i = 0; i + 1 < segs.length; i += 2) {
+                            int cnt = segs[i];
+                            int segBytes = cnt * VERTEX_STRIDE;
+                            if (cnt > 0 && segs[i + 1] == targetFacing) {
+                                MemoryUtil.memCopy(srcBaseAddr + layerSrcOff,
+                                                   opaqueDstPtr + writeCursor, segBytes);
+                                writeCursor += segBytes;
+                            }
+                            layerSrcOff += segBytes;
+                        }
+                    }
+                }
+                dstByteOffset += totalOpaqueBytes;
+                opaqueVerts = sodiumTotalOpaqueVerts;
+            } else {
+                opaqueVerts = 0;
+            }
+
+            // Translucent layer — appended after the opaque face-binned region. Translucent
+            // doesn't get per-face culling (alpha-blended geometry needs every quad drawn);
+            // Sodium's translucent buffer is already sorted by its own ResortTransparencyTask
+            // when applicable. Cache the bytes for a potential future POV resort path.
             if (translucentLayer != null && translucentLayer.vertexBytes != null) {
                 ByteBuffer src = translucentLayer.vertexBytes;
                 int bytes = src.remaining();
@@ -223,8 +277,26 @@ public final class TerrainUploader implements AutoCloseable {
         sectionToAddr.put(sectionPosKey, addr);
         sectionOpaqueQuads.put(sectionPosKey, opaqueVerts / 4);
         if (translucentVerts == 0) translucentUnsortedCache.remove(sectionPosKey);
-        return new UploadResult(addr, opaqueVerts / 4, translucentVerts / 4, new int[6]);
+        return new UploadResult(addr, opaqueVerts / 4, translucentVerts / 4, faceBinCounts);
     }
+
+    /** Number of {@code ModelQuadFacing} values, including UNASSIGNED. */
+    private static final int ModelQuadFacingCount = 7;
+
+    /** vulkium task-shader bin index → sodium {@code ModelQuadFacing} ordinal. The 6 face
+     *  bins; UNASSIGNED is handled separately as the tail. */
+    private static final int[] VULKIUM_BIN_TO_SODIUM_FACING = {
+        0, // bin 0 (+X east)    ← POS_X
+        2, // bin 1 (+Z south)   ← POS_Z
+        1, // bin 2 (+Y top)     ← POS_Y
+        3, // bin 3 (-X west)    ← NEG_X
+        5, // bin 4 (-Z north)   ← NEG_Z
+        4  // bin 5 (-Y bottom)  ← NEG_Y
+    };
+
+    /** Sodium facing ordinals in the order we emit them into the arena. Bins 0-5 in
+     *  vulkium order, then UNASSIGNED as the tail. */
+    private static final int[] VULKIUM_EMIT_ORDER = {0, 2, 1, 3, 5, 4, 6};
 
     /** Drop a section from the arena. Called when a section is evicted from the live table. */
     public void releaseSection(long sectionPosKey) {
