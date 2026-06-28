@@ -15,7 +15,23 @@
 // me.cortex.vulkium.blaze3d.MojangBackendFixup so the extension resolves at device-create.
 #extension GL_EXT_shader_8bit_storage : require
 
-#define Vertex uvec4
+// Sodium CompactChunkVertex layout (20 bytes/vertex, std430-packed).
+//   position:  positionHi(4B) + positionLo(4B) — 20-bit-per-component split.
+//              For each comp c: quantC = ((posHi >> (10*c)) & 0x3FF) << 10
+//                                       | ((posLo >> (10*c)) & 0x3FF);
+//              world = quantC * (32.0 / 2^20) - 8.0
+//   colour:    ARGB8, RGB pre-multiplied by AO (ColorARGB.mulRGB at buffer-write time).
+//   texCoord:  RG16, low 15 bits = quantized UV (scale 1/32768), bit 15 = sign-bias.
+//   lightData: byte0=blockLight (clamped [8,248]), byte1=skyLight (clamped [8,248]),
+//              byte2=material (bit 0 = useMipmaps, bits 1-7 = alphaCutoff ordinal),
+//              byte3=sectionIdx (chunk-local Y).
+// See `terrain/vertex_format.glsl` for the actual decoders; this is just the storage shape.
+struct Vertex {
+    uvec2 position;
+    uint  colour;
+    uint  texCoord;
+    uint  lightData;
+};
 
 // -----------------------------------------------------------------------------
 // Structs (unchanged from nvidium — same bit layout in memory)
@@ -97,7 +113,13 @@ layout(buffer_reference, std430, buffer_reference_align=4) readonly restrict buf
     uint data[];
 };
 
-layout(buffer_reference, std430, buffer_reference_align=16) restrict buffer TerrainDataPtr {
+// Sodium's 20-byte vertex stride is not a power of 2 — buffer_reference_align is the
+// alignment of the FIRST element (the BDA pointer), not the stride between elements.
+// std430 packs `struct Vertex { uvec2; uint; uint; uint }` cleanly at 20 bytes with
+// 8-byte natural alignment of the leading uvec2; setting align=8 lets the BDA pointer
+// be 8-byte aligned (which CPU-side TerrainUploader / BufferArena both guarantee — the
+// arena base comes from a fresh DeviceBuffer allocation).
+layout(buffer_reference, std430, buffer_reference_align=8) restrict buffer TerrainDataPtr {
     Vertex data[];
 };
 
