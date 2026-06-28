@@ -6,11 +6,11 @@ import me.cortex.vulkium.managers.SectionEntry;
 import me.cortex.vulkium.managers.util.SegmentedManager;
 import me.cortex.vulkium.vk.DeviceBuffer;
 import me.cortex.vulkium.vk.UploadStream;
+import net.caffeinemc.mods.sodium.client.render.chunk.terrain.DefaultTerrainRenderPasses;
 import net.caffeinemc.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
 import org.lwjgl.system.MemoryUtil;
 
 import java.nio.ByteBuffer;
-import java.util.Map;
 
 /**
  * Streams captured per-section terrain geometry into a device-local {@link BufferArena}.
@@ -121,12 +121,21 @@ public final class TerrainUploader implements AutoCloseable {
         int translucentBytes = 0;
         int translucentVerts = 0;
         SectionEntry.SodiumLayerGeometry translucentLayer = null;
-        for (Map.Entry<TerrainRenderPass, SectionEntry.SodiumLayerGeometry> e : entry.sodiumLayers.entrySet()) {
-            SectionEntry.SodiumLayerGeometry g = e.getValue();
+        // Iterate in DefaultTerrainRenderPasses.ALL order (SOLID, CUTOUT, TRANSLUCENT) — the
+        // sodiumLayers map is a HashMap with non-deterministic iteration order, which under
+        // certain JVM hash bucketings put CUTOUT before SOLID. That orders CUTOUT bytes
+        // ahead of SOLID bytes within a face bin, and the mesh shader emits in that order.
+        // With reverse-Z depth-compare GREATER_OR_EQUAL, the LATER-rendered quad wins ties:
+        // grass overlay quads (CUTOUT) sit at the SAME depth as the dirt face (SOLID), so
+        // when CUTOUT emitted first then SOLID drawn over it, dirt won the tie and the green
+        // overlay never reached the framebuffer. Symptom: grass sides showed plain untinted
+        // dirt (vertex.colour = white instead of biomeGreen).
+        for (TerrainRenderPass pass : DefaultTerrainRenderPasses.ALL) {
+            SectionEntry.SodiumLayerGeometry g = entry.sodiumLayers.get(pass);
             if (g == null || g.vertexBytes == null || g.totalVertexCount <= 0) continue;
             int bytes = g.vertexBytes.remaining();
             if (bytes <= 0) continue;
-            if (e.getKey().isTranslucent()) {
+            if (pass.isTranslucent()) {
                 translucentBytes += bytes;
                 translucentVerts += g.totalVertexCount;
                 translucentLayer = g; // sodium emits at most one translucent pass per section
@@ -197,9 +206,9 @@ public final class TerrainUploader implements AutoCloseable {
             // ChunkBuildBuffers.createMesh) but we tolerate duplicates defensively.
             int[] sodiumPerFacingVerts = new int[ModelQuadFacingCount];
             int sodiumTotalOpaqueVerts = 0;
-            for (Map.Entry<TerrainRenderPass, SectionEntry.SodiumLayerGeometry> e : entry.sodiumLayers.entrySet()) {
-                if (e.getKey().isTranslucent()) continue;
-                SectionEntry.SodiumLayerGeometry g = e.getValue();
+            for (TerrainRenderPass pass : DefaultTerrainRenderPasses.ALL) {
+                if (pass.isTranslucent()) continue;
+                SectionEntry.SodiumLayerGeometry g = entry.sodiumLayers.get(pass);
                 if (g == null || g.vertexSegments == null) continue;
                 int[] segs = g.vertexSegments;
                 for (int i = 0; i + 1 < segs.length; i += 2) {
@@ -222,10 +231,15 @@ public final class TerrainUploader implements AutoCloseable {
                 long opaqueDstPtr = stream.upload(arena.buffer(), dstByteOffset, totalOpaqueBytes);
                 long writeCursor = 0L;
                 // Emit in vulkium order: bins 0-5, then UNASSIGNED tail.
+                // Layer order WITHIN a bin matters: SOLID must come before CUTOUT so the
+                // mesh shader emits dirt-style quads first and CUTOUT overlay quads after.
+                // With reverse-Z GREATER_OR_EQUAL, later-emitted wins ties — overlay
+                // (CUTOUT) on top of dirt (SOLID) at the same depth needs that ordering or
+                // dirt wins and biome-tinted overlays disappear (grass-side symptom).
                 for (int targetFacing : VULKIUM_EMIT_ORDER) {
-                    for (Map.Entry<TerrainRenderPass, SectionEntry.SodiumLayerGeometry> e : entry.sodiumLayers.entrySet()) {
-                        if (e.getKey().isTranslucent()) continue;
-                        SectionEntry.SodiumLayerGeometry g = e.getValue();
+                    for (TerrainRenderPass pass : DefaultTerrainRenderPasses.ALL) {
+                        if (pass.isTranslucent()) continue;
+                        SectionEntry.SodiumLayerGeometry g = entry.sodiumLayers.get(pass);
                         if (g == null || g.vertexBytes == null || g.vertexSegments == null) continue;
                         long srcBaseAddr = MemoryUtil.memAddress(g.vertexBytes);
                         int[] segs = g.vertexSegments;
