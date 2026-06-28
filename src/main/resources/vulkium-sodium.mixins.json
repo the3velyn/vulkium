@@ -7,7 +7,8 @@
     "ChunkBuildOutputMixin",
     "ChunkBuilderMeshingTaskMixin",
     "DefaultChunkRendererMixin",
-    "RenderRegionManagerMixin"
+    "RenderRegionManagerMixin",
+    "RenderSectionManagerMixin"
   ],
   "injectors": {
     "defaultRequire": 1
