@@ -68,11 +68,9 @@ Local references:
 
 Plan-only document. Six stages, each independently verifiable. Recommended landing order is sequential — earlier stages set up state later stages depend on. **All stages assume sodium is a hard dep** (this branch). Do not gate on `sodiumPresent`.
 
-### Stage 0 — Confirm Sodium's draw can be cancelled in-place (recon, no code)
+### Stage 0 — Confirm Sodium's draw can be cancelled in-place (recon, no code) ✅
 
-Before any of this work pays off, we need to know that **we can prevent Sodium's terrain draw** (otherwise we get double-rendering + Z-fight). Grep modern Sodium for the actual draw site: `ChunkRenderer.render(...)` and/or `SodiumWorldRenderer.renderLayer(...)`. Determine whether `@Inject` at HEAD with `cancellable=true` is feasible per-pass or only wholesale.
-
-Deliverable: a one-paragraph entry in this doc identifying the exact target class + method + injection point. If this turns out to be intractable, the whole sodium-compat approach needs rethinking (cooperate, not replace).
+**Resolved 2026-06-28.** Target: `net.caffeinemc.mods.sodium.client.render.chunk.DefaultChunkRenderer#render` (9-arg, public void). Sodium invokes this once per `TerrainRenderPass` (SOLID, CUTOUT, TRANSLUCENT) per frame via the call chain `SodiumWorldRenderer.drawChunkLayer → renderLayer → DefaultChunkRenderer.render`. Per-layer cancellation is feasible by conditioning on the `TerrainRenderPass` arg; we cancel all three to fully own terrain. Cancellation at HEAD is safe: `super.begin()/end()` bracket the body INSIDE the method, the calling `renderLayer` does nothing after the call, and Sodium's own early-return on empty batches already exercises a skipped-draw path (proves the state machine tolerates it). Critically, the SAME method funnels both Sodium GL and Sodium Vulkan backends — the backend split lives in `MultiDrawBatch.draw` further down. One cancel covers both. No dev-vs-release class moves vs `0.9.1-beta.2` for this class.
 
 ### Stage 1 — Java data routing (no rendering yet)
 
@@ -256,3 +254,11 @@ Showstoppers / accepted differences for approach (a):
 - **2026-06-27** User flagged: audit vulkium for code now redundant because Sodium handles it. MVP construction is the named candidate. Logbook step #7 lists the full candidate set.
 - **2026-06-27** User clarified: this branch hard-depends on Sodium, so the cleanup deletes redundant code outright — no `sodiumPresent` runtime gates. Standalone behavior lives on the `mc-26.2` branch already.
 - **2026-06-28** Plan-only session. Implementation plan for Sodium → vulkium rendering drafted as the "Implementation plan" section above. Six stages (0 recon → 1 routing → 2 uploader → 3 shader → 4 cancel-sodium-draw → 5 GUI → 6 cleanup), each independently verifiable with rollback. Total est. several focused hours; recommend landing one stage per commit and pushing after each verification passes. No code changes this session.
+- **2026-06-28** Stages 0-4 landed in one session. Commits on `mc-26.2-sodium`:
+  - Stage 0 (recon) — finding written above; no code.
+  - Stage 1 (3fbf104) — `SectionEntry.SodiumLayerGeometry` + `SectionManager.offerFromSodium` + ChunkBuilderMeshingTaskMixin now captures and forwards (no longer observer-only).
+  - Stage 2 (4c443f1) — `TerrainUploader` rewritten: stride 16→20, pass-through memcpy of Sodium bytes, deleted MC-vertex conversion entirely. Face binning regressed to all-unsigned (Stage 2.5 will restore via Sodium's `vertexSegments`).
+  - Stage 3 (374ac1f) — `scene.glsl`'s `Vertex` is now a 20-byte struct mirroring `CompactChunkVertex`; `vertex_format.glsl` decoders fully rewritten for Sodium's bit layout (20-bit hi/lo position split, pre-mul AO colour, [8,248]-clamped light, material byte for cutoff/mipping). std430 packs cleanly.
+  - Stage 4 (2deafda) — `DefaultChunkRendererMixin` cancels Sodium's terrain draw via `@Inject HEAD/cancellable` on the 9-arg `render`. Gated on `Vulkium.isEnabled()`.
+  - Untested at commit time (`./gradlew build` is compile-check only per project convention). User runClient verification pending. Expected behavior end-to-end: Sodium owns chunk-build, vulkium owns the GPU dispatch, no double-render. Known regression vs standalone-edition: per-face culling is OFF (Stage 2 dropped it) — expect ~2× draw cost on opaque terrain until Stage 2.5 lands.
+  - Pre-existing shader WIP (chunk-fade FadeTimesPtr / `computeSectionVisibility` etc.) preserved uncommitted per `feedback_runclient_autorelaunch`/WIP-file convention; Stage 3 commit was surgical to keep the fade work separable.
