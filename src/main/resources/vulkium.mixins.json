@@ -6,8 +6,6 @@
   "client": [
     "blaze3d.VulkanBackendMixin",
     "blaze3d.VulkanDeviceMixin",
-    "chunk.RenderSectionMixin",
-    "chunk.ChunkSectionsToRenderMixin",
     "chunk.LevelRendererAllChangedMixin",
     "chunk.LevelExtractorAccessor",
     "gui.VideoSettingsScreenMixin",
