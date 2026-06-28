@@ -35,19 +35,24 @@ vec3 decodeVertexPosition(Vertex v) {
     return vec3(quantized) * SODIUM_POS_INV_SCALE - SODIUM_POS_ORIGIN;
 }
 
-// Sodium pre-multiplies RGB by AO at buffer-write time (ColorARGB.mulRGB). The lit
-// terrain shader path multiplies by the lightmap sample; AO baked into RGB just makes
-// the AO occluded fragments darker than the lightmap alone would.
+// Sodium stores vertex.color via ColorARGB.toABGR — so the in-memory packed int is
+// ABGR, NOT ARGB. After little-endian putInt the memory bytes are [R, G, B, A] in
+// order — matching Vulkan's RGBA8_UNORM spec exactly (this is why Sodium's own
+// vertex-fetch path works). On the LE GPU side our uint reads:
+//   bits  0-7  = byte0 = R
+//   bits  8-15 = byte1 = G
+//   bits 16-23 = byte2 = B
+//   bits 24-31 = byte3 = A
+// RGB is pre-multiplied by AO at buffer-write time (ColorARGB.mulRGB).
 //
-// Byte layout (LE): byte0=B, byte1=G, byte2=R, byte3=A. (ARGB int stored as A in MSB.)
-// We pass alpha through; for SOLID/CUTOUT it's 0xFF, for TRANSLUCENT Sodium carries the
-// vanilla per-quad alpha needed for blending.
+// The earlier ARGB-shaped decoder (R from bits 16-23) inverted R↔B → reddish water,
+// shifted biome tint. This is the ABGR-aware path.
 vec4 decodeVertexColour(Vertex v) {
     uint c = v.colour;
     return vec4(
-        float((c >> 16) & 0xFFu),
-        float((c >>  8) & 0xFFu),
         float((c >>  0) & 0xFFu),
+        float((c >>  8) & 0xFFu),
+        float((c >> 16) & 0xFFu),
         float((c >> 24) & 0xFFu)
     ) * COLOR_SCALE;
 }
