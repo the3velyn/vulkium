@@ -49,17 +49,6 @@ public final class SectionManager {
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet translucentSections =
         new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
 
-    /** Section keys we evicted because MC compiled them to zero layers (the user mined out
-     *  the last block in the section, or any other edit that emptied it). When a future
-     *  ingest re-populates the same key we want to skip the chunk-fade stamp — semantically
-     *  this is a block edit, not a fresh chunk load, so fading the new geometry in (e.g.
-     *  the player bridges a path back over the void they just mined) looks wrong. The set
-     *  is cleared on actual chunk-unload eviction in {@link #sweepKeepDistance} so a chunk
-     *  that genuinely unloads + reloads still fades on its return. Worker-thread reads in
-     *  {@link SectionCapture} hand off via {@link #markEvictedAsEmpty}; render-thread
-     *  consumes the bit in {@link #ingest}. Concurrent set sized for the rare case. */
-    private final it.unimi.dsi.fastutil.longs.LongOpenHashSet emptiedByEdit =
-        new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
     /** Monotonic counter bumped on every add/remove to {@link #translucentSections}. Consumers
      *  (TranslucentSectionSorter) snapshot it alongside the camera chunk to skip re-sorting
      *  when neither the section set nor the camera has moved. */
@@ -121,11 +110,18 @@ public final class SectionManager {
      * fresh memAlloc-owned ByteBuffer (Sodium recycles the source after the build task
      * returns) and queues the captured entry for the render thread.
      *
-     * <p>Empty layers (null mesh or zero-byte buffer) are skipped silently. An output with
-     * no usable layers does not enqueue anything.
+     * <p>Empty-section handling: when Sodium produces a build with NO usable geometry
+     * (meshes map null/empty, or all entries null/zero-byte), we queue an eviction. This
+     * happens when the user breaks the last block in a section — without the eviction
+     * vulkium would keep rendering the stale pre-edit geometry forever. Sodium itself
+     * emits a build with empty meshes on this path; we just translate to {@link #evict}.
      */
     public void offerFromSodium(long sectionPosKey, ChunkBuildOutput output) {
-        if (output == null || output.meshes == null || output.meshes.isEmpty()) return;
+        if (output == null) return;
+        if (output.meshes == null || output.meshes.isEmpty()) {
+            evict(sectionPosKey);
+            return;
+        }
 
         SectionEntry entry = null;
         for (Map.Entry<TerrainRenderPass, BuiltSectionMeshParts> e : output.meshes.entrySet()) {
@@ -152,7 +148,12 @@ public final class SectionManager {
                 new SectionEntry.SodiumLayerGeometry(copy, segments, totalVerts));
         }
 
-        if (entry == null) return;
+        // No layer in the meshes map produced real bytes — semantically the same as
+        // an empty build (e.g. all sub-meshes were null). Treat as eviction.
+        if (entry == null) {
+            evict(sectionPosKey);
+            return;
+        }
 
         long n = sodiumOffers.incrementAndGet();
         if (n <= 4 || n % 1024 == 0) {
@@ -188,9 +189,6 @@ public final class SectionManager {
             PendingIngest p = ingestQueue.poll();
             if (p == null) break;
             if (p.entry == null) {
-                if (p.evictedByEmptyEdit) {
-                    emptiedByEdit.add(p.key);
-                }
                 evictLive(p.key);
             } else {
                 ingest(p);
@@ -393,24 +391,26 @@ public final class SectionManager {
                         MemoryUtil.memPutInt(ptr + 24, negZ | (negY << 16));
                         MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
 
-                        // Chunk fade-in: stamp upload time only on first-insert (not on
-                        // rebuilds). Critically, the index must match what the shader reads
-                        // — sectionData[(regionId<<8) | localId] uses LOCAL-ID (dense, via
+                        // Chunk fade-in: stamp upload time on EVERY first-insert (including
+                        // re-populations of previously-empty sections — e.g. the player
+                        // places a block in a section they just mined empty, or bridges
+                        // back over a void they cut). Standalone vulkium had an
+                        // `emptiedByEdit` suppression here that distinguished "first chunk
+                        // load" from "re-population from edit"; the user prefers the
+                        // simpler "any first-insert fades" rule, so the suppression is
+                        // gone. Eviction in this branch always fires through plain
+                        // {@link #evict} (which clears live + region ref + arena slot),
+                        // so a subsequent build for the same key is genuinely a fresh
+                        // first-insert and gets a fresh stamp.
+                        //
+                        // Index note: the fade slot must match what the shader reads —
+                        // sectionData[(regionId<<8) | localId] uses LOCAL-ID (dense, via
                         // Region.pos2id), not the pos-key that allocateSection returns in
                         // `ref`. OpaqueDispatchList writes (regionId<<8)|compactId with
                         // compactId==localId, and the task shader indexes fadeTimes with
                         // the same redirected sectionId. Translate ref → localId with
                         // getSectionRefId before stamping.
-                        // Suppress fade-in for sections we previously evicted because they
-                        // compiled to zero layers (block edit emptied the section). Re-
-                        // populating those keys with new geometry — e.g. the player bridges
-                        // blocks back over the void they just mined — is semantically a
-                        // block edit, not a fresh chunk load, so fading the new geometry in
-                        // looks wrong. The bit is consumed (removed from the set) here so
-                        // a later genuine chunk-unload + reload of the same key can fade
-                        // again.
-                        boolean wasEmptiedByEdit = emptiedByEdit.remove(p.key);
-                        if (firstInsert && !wasEmptiedByEdit) {
+                        if (firstInsert) {
                             me.cortex.vulkium.render.SectionFadeTimes ft =
                                 renderer.fadeTimes();
                             if (ft != null) {
@@ -449,17 +449,6 @@ public final class SectionManager {
         ingestQueue.offer(PendingIngest.eviction(sectionPosKey));
     }
 
-    /** Evict a section because MC's compile produced zero layers (block edit emptied the
-     *  section). Functionally identical to {@link #evict(long)} but the next ingest of
-     *  this key will skip the chunk-fade stamp — semantically a re-population from edit
-     *  is not a fresh chunk load and shouldn't fade in. Posted from the worker thread by
-     *  {@link SectionCapture#onSectionMeshCompiled}; the render-thread drain records the
-     *  bit in {@link #emptiedByEdit} synchronously with the eviction. */
-    public void evictAsEmpty(long sectionPosKey) {
-        if (sectionPosKey == SectionCapture.UNKNOWN_SECTION) return;
-        ingestQueue.offer(PendingIngest.evictionFromEmptyEdit(sectionPosKey));
-    }
-
     /**
      * Evict every live section SYNCHRONOUSLY on the calling thread (render thread — the F3+A
      * and allChanged paths run there). Previously we queued per-section eviction events and
@@ -478,10 +467,6 @@ public final class SectionManager {
         for (long key : keys) {
             evictLive(key);
         }
-        // F3+A / world-rejoin paths drain everything; the next round of compiles is a fresh
-        // load and should fade as normal. Clear the empty-edit bookkeeping so re-ingest
-        // doesn't silence the chunk-fade.
-        emptiedByEdit.clear();
         // Drop queued worker-thread ingests that are now obsolete — they reference the arena
         // slots we just freed, and MC will re-dispatch compile tasks for the same sections
         // after resetLevelRenderData anyway. Retry queue too: its entries point at bytes
@@ -555,21 +540,15 @@ public final class SectionManager {
         return n;
     }
 
-    private record PendingIngest(long key, SectionEntry entry, int retryCount, boolean evictedByEmptyEdit) {
+    private record PendingIngest(long key, SectionEntry entry, int retryCount) {
         /** Sentinel: entry=null means "drop this section from the live table". */
-        static PendingIngest eviction(long key) { return new PendingIngest(key, null, 0, false); }
-        /** Eviction caused by MC compiling the section to zero layers (block edit emptied
-         *  it). Drained-side records the key so the next ingest of this key skips the
-         *  chunk-fade stamp. */
-        static PendingIngest evictionFromEmptyEdit(long key) {
-            return new PendingIngest(key, null, 0, true);
-        }
+        static PendingIngest eviction(long key) { return new PendingIngest(key, null, 0); }
         /** Normal ingest (first attempt). */
         static PendingIngest fresh(long key, SectionEntry entry) {
-            return new PendingIngest(key, entry, 0, false);
+            return new PendingIngest(key, entry, 0);
         }
         PendingIngest withRetry() {
-            return new PendingIngest(key, entry, retryCount + 1, evictedByEmptyEdit);
+            return new PendingIngest(key, entry, retryCount + 1);
         }
     }
 
@@ -690,11 +669,6 @@ public final class SectionManager {
             // (fell out of the server's streaming radius) or never loaded.
             boolean mcHasChunk = level.hasChunk(sx, sz);
             if (outOfRadius || !mcHasChunk) {
-                // Clear any stale "emptied by edit" bit for keys that are now genuinely
-                // out of range / unloaded — when MC streams the chunk back in, the next
-                // ingest should fade like a normal chunk load, not be silenced by a
-                // bit that the edit-eviction left behind.
-                emptiedByEdit.remove(key);
                 evict(key);
                 evicted++;
                 // Re-request compile when the player approaches again. MC won't re-run
