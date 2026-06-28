@@ -9,9 +9,9 @@ plugins {
 // single-module Fabric mod; no multi-platform split.
 
 val modVersion = "0.1.0"
-val minecraftVersion = "26.2-pre-2"
+val minecraftVersion = "26.2"
 val fabricLoaderVersion = "0.19.1"
-val fabricApiVersion = "0.150.1+26.2"
+val fabricApiVersion = "0.153.0+26.2"
 val lwjglVersion = "3.4.1"
 val jdkVersion = 25
 
