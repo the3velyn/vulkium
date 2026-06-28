@@ -49,6 +49,26 @@ public final class SectionManager {
     private final it.unimi.dsi.fastutil.longs.LongOpenHashSet translucentSections =
         new it.unimi.dsi.fastutil.longs.LongOpenHashSet();
 
+    /** Per-(chunkX, chunkZ) packed-key → first-seen wall-clock millis (low 32 bits of
+     *  System.currentTimeMillis). A "chunk" here is the full 16 × worldHeight × 16 column —
+     *  the unit MC loads/streams as one — NOT a single section. We stamp the time when the
+     *  first section in a chunk first-inserts into vulkium's live table, and use it on
+     *  every subsequent first-insert in the SAME chunk to gate the fade:
+     *  <ul>
+     *    <li>If we're within the fade window of the chunk's first-seen time → fade normally
+     *        (chunk is still streaming in, new sections look like part of the same load).</li>
+     *    <li>If we're past the fade window → stamp with the chunk's first-seen time (which
+     *        is far in the past), giving the new section instant full visibility. Matches
+     *        vanilla MC's behaviour: placing the first block in a previously-air subchunk
+     *        of an already-loaded chunk doesn't trigger a fade, because vanilla's per-
+     *        section fade timer was initialised when the chunk loaded (not when the
+     *        section first got geometry).</li>
+     *  </ul>
+     *  Pruned in {@link #sweepKeepDistance} when MC drops the chunk (cleanup). Packed
+     *  key matches {@code net.minecraft.world.level.ChunkPos.asLong(x, z)}. */
+    private final it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap chunkFirstSeenMs =
+        new it.unimi.dsi.fastutil.longs.Long2LongOpenHashMap();
+
     /** Monotonic counter bumped on every add/remove to {@link #translucentSections}. Consumers
      *  (TranslucentSectionSorter) snapshot it alongside the camera chunk to skip re-sorting
      *  when neither the section set nor the camera has moved. */
@@ -89,6 +109,7 @@ public final class SectionManager {
 
     private SectionManager() {
         sectionToRegionRef.defaultReturnValue(-1);
+        chunkFirstSeenMs.defaultReturnValue(Long.MIN_VALUE);
     }
 
     public static SectionManager get() { return INSTANCE; }
@@ -116,9 +137,21 @@ public final class SectionManager {
      * vulkium would keep rendering the stale pre-edit geometry forever. Sodium itself
      * emits a build with empty meshes on this path; we just translate to {@link #evict}.
      */
+    /** Diagnostic counter for empty-build eviction (last-block-broken path). */
+    private final AtomicLong sodiumEmptyEvicts = new AtomicLong();
+
+    /** Diagnostic counter for fade-stamp first-insert. */
+    private final AtomicLong sodiumFadeStamps = new AtomicLong();
+
     public void offerFromSodium(long sectionPosKey, ChunkBuildOutput output) {
         if (output == null) return;
         if (output.meshes == null || output.meshes.isEmpty()) {
+            long n = sodiumEmptyEvicts.incrementAndGet();
+            if (n <= 16 || n % 64 == 0) {
+                LOGGER.info("offerFromSodium EMPTY → evict #{} key=0x{} (sectionToRegionRef={})",
+                    n, Long.toHexString(sectionPosKey),
+                    sectionToRegionRef.get(sectionPosKey));
+            }
             evict(sectionPosKey);
             return;
         }
@@ -151,6 +184,12 @@ public final class SectionManager {
         // No layer in the meshes map produced real bytes — semantically the same as
         // an empty build (e.g. all sub-meshes were null). Treat as eviction.
         if (entry == null) {
+            long n = sodiumEmptyEvicts.incrementAndGet();
+            if (n <= 16 || n % 64 == 0) {
+                LOGGER.info("offerFromSodium ALL-NULL → evict #{} key=0x{} (sectionToRegionRef={})",
+                    n, Long.toHexString(sectionPosKey),
+                    sectionToRegionRef.get(sectionPosKey));
+            }
             evict(sectionPosKey);
             return;
         }
@@ -391,17 +430,19 @@ public final class SectionManager {
                         MemoryUtil.memPutInt(ptr + 24, negZ | (negY << 16));
                         MemoryUtil.memPutInt(ptr + 28, opaqueQuads);
 
-                        // Chunk fade-in: stamp upload time on EVERY first-insert (including
-                        // re-populations of previously-empty sections — e.g. the player
-                        // places a block in a section they just mined empty, or bridges
-                        // back over a void they cut). Standalone vulkium had an
-                        // `emptiedByEdit` suppression here that distinguished "first chunk
-                        // load" from "re-population from edit"; the user prefers the
-                        // simpler "any first-insert fades" rule, so the suppression is
-                        // gone. Eviction in this branch always fires through plain
-                        // {@link #evict} (which clears live + region ref + arena slot),
-                        // so a subsequent build for the same key is genuinely a fresh
-                        // first-insert and gets a fresh stamp.
+                        // Chunk fade-in: stamp upload time on first-insert, BUT gate on
+                        // the parent chunk's fade window. Matches vanilla MC's per-chunk
+                        // fade behaviour — when you place a block in a previously-air
+                        // subchunk of an already-loaded chunk, no fade fires. Vanilla
+                        // achieves this because its per-section fade timer is initialised
+                        // at chunk-load time (not at first-geometry time); vulkium only
+                        // ingests sections when they have geometry, so we track per-chunk
+                        // first-seen separately in {@link #chunkFirstSeenMs}.
+                        //
+                        // Logic: first-insert in a chunk where chunkFirstSeen is recent
+                        // (within ~fadeDuration*2) → fade normally with `now`. Otherwise
+                        // stamp with `chunkFirstSeen` (a value far enough in the past that
+                        // the shader's visibility math clamps to 1.0 immediately).
                         //
                         // Index note: the fade slot must match what the shader reads —
                         // sectionData[(regionId<<8) | localId] uses LOCAL-ID (dense, via
@@ -416,7 +457,37 @@ public final class SectionManager {
                             if (ft != null) {
                                 int localId = regionManager.getSectionRefId(ref);
                                 int compactRef = ((ref >>> 8) << 8) | (localId & 0xFF);
-                                ft.stamp(compactRef, (int) System.currentTimeMillis());
+                                long now = System.currentTimeMillis();
+                                // ChunkPos.asLong semantics: high 32 = z, low 32 = x.
+                                long chunkKey = ((long) sz << 32) | (sx & 0xFFFFFFFFL);
+                                long firstSeen = chunkFirstSeenMs.get(chunkKey);
+                                int fadeDurationMs = renderer.fadeDurationMs();
+                                int stampMs;
+                                if (firstSeen == chunkFirstSeenMs.defaultReturnValue()) {
+                                    // First section in this chunk — record and fade from `now`.
+                                    chunkFirstSeenMs.put(chunkKey, now);
+                                    stampMs = (int) now;
+                                } else if (now - firstSeen < fadeDurationMs) {
+                                    // Chunk still mid-fade — stamp with firstSeen so this new
+                                    // section's visibility tracks the chunk's ongoing fade
+                                    // (shader elapsed = now - firstSeen ∈ [0, fadeDuration) →
+                                    // partial fade matching neighbouring sections).
+                                    stampMs = (int) firstSeen;
+                                } else {
+                                    // Chunk fully done fading — guarantee shader visibility=1
+                                    // by stamping with (now - 2*fadeDuration) so (now - stamp)
+                                    // = 2*fadeDuration > fadeDuration. Safety margin handles
+                                    // the shader running a frame or two behind the CPU and
+                                    // covers fade-duration changes mid-session.
+                                    stampMs = (int) (now - (long) fadeDurationMs * 2L);
+                                }
+                                ft.stamp(compactRef, stampMs);
+                                long n = sodiumFadeStamps.incrementAndGet();
+                                if (n <= 16 || n % 256 == 0) {
+                                    LOGGER.info("fade-stamp #{} key=0x{} compactRef=0x{} t={} (chunkFirstSeen={}, delta={}ms, fadeDur={})",
+                                        n, Long.toHexString(p.key), Integer.toHexString(compactRef),
+                                        stampMs, firstSeen, now - firstSeen, fadeDurationMs);
+                                }
                             }
                         }
                     }
@@ -467,6 +538,10 @@ public final class SectionManager {
         for (long key : keys) {
             evictLive(key);
         }
+        // F3+A is a "redraw everything from scratch" event — the user expects the world
+        // to re-fade as the chunks rebuild. Wipe per-chunk first-seen tracking so each
+        // re-ingest stamps with `now` as if it were a fresh load.
+        chunkFirstSeenMs.clear();
         // Drop queued worker-thread ingests that are now obsolete — they reference the arena
         // slots we just freed, and MC will re-dispatch compile tasks for the same sections
         // after resetLevelRenderData anyway. Retry queue too: its entries point at bytes
@@ -671,6 +746,11 @@ public final class SectionManager {
             if (outOfRadius || !mcHasChunk) {
                 evict(key);
                 evicted++;
+                // If the whole chunk has been dropped (not just one section out of range),
+                // prune the chunk's first-seen tracking too so a re-stream genuinely fades.
+                if (!mcHasChunk) {
+                    chunkFirstSeenMs.remove(((long) sz << 32) | (sx & 0xFFFFFFFFL));
+                }
                 // Re-request compile when the player approaches again. MC won't re-run
                 // SectionCompiler for chunks whose SectionMesh cache is still warm — so
                 // without this, walking back toward an evicted section leaves a permanent

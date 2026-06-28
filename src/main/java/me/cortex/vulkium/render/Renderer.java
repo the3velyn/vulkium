@@ -74,6 +74,7 @@ public final class Renderer {
     /** Per-section upload-timestamp buffer for the vanilla chunk fade-in effect. Host-mapped
      *  BDA; CPU stamps on ingest, GPU reads in the task shader to compute visibility. */
     private SectionFadeTimes fadeTimes;
+    private volatile int cachedFadeDurationMs;
     private int hzbWidth;
     private int hzbHeight;
     private long hzbLastBuildNs;
@@ -310,6 +311,7 @@ public final class Renderer {
                 .chunkSectionFadeInTime().get();
             if (t != null) fadeDurationMs = (int) Math.max(0L, Math.round(t * 1000.0));
         } catch (Throwable ignored) { /* option read races with client init; default 0 = no fade */ }
+        this.cachedFadeDurationMs = fadeDurationMs;
         sceneUniform.fade((int) System.currentTimeMillis(), fadeDurationMs);
 
         // Vanilla fog. cam.fogData is populated by MC's FogRenderer.setupFog every frame
@@ -411,6 +413,12 @@ public final class Renderer {
     public me.cortex.vulkium.diag.GpuTimerPool gpuTimers() { return gpuTimers; }
     public OpaqueDispatchList opaqueDispatchList() { return opaqueDispatchList; }
     public SectionFadeTimes fadeTimes() { return fadeTimes; }
+
+    /** Most recent fadeDurationMs pushed to the shader UBO. Read by SectionManager.ingest
+     *  to decide whether a chunk's first-seen time is "old enough" to suppress fade-in on
+     *  newly-populated empty sections. Zero before the first frame; defaults to vanilla's
+     *  chunkSectionFadeInTime × 1000 thereafter. */
+    public int fadeDurationMs() { return cachedFadeDurationMs; }
     public TranslucentSectionSorter translucentSorter() { return translucentSorter; }
     public TerrainUploader terrainUploader() { return terrainUploader; }
     public UploadStream uploadStream() { return uploadStream; }
