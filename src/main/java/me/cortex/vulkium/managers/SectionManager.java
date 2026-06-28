@@ -1,13 +1,10 @@
 package me.cortex.vulkium.managers;
 
-import com.mojang.blaze3d.vertex.MeshData;
 import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import net.caffeinemc.mods.sodium.client.render.chunk.compile.ChunkBuildOutput;
 import net.caffeinemc.mods.sodium.client.render.chunk.data.BuiltSectionMeshParts;
 import net.caffeinemc.mods.sodium.client.render.chunk.terrain.TerrainRenderPass;
 import net.caffeinemc.mods.sodium.client.util.NativeBuffer;
-import net.minecraft.client.renderer.chunk.ChunkSectionLayer;
-import net.minecraft.client.renderer.chunk.SectionCompiler;
 import net.minecraft.core.SectionPos;
 import org.lwjgl.system.MemoryUtil;
 import org.slf4j.Logger;
@@ -113,43 +110,6 @@ public final class SectionManager {
     }
 
     public RegionManager regionManager() { return regionManager; }
-
-    /**
-     * Called from the worker thread that compiled a section. Copies MC's vertex/index bytes
-     * into fresh direct buffers (MC would otherwise recycle its {@code ByteBufferBuilder.Result}
-     * memory before we get to use it).
-     */
-    public void offerFromCompile(long sectionPosKey, SectionCompiler.Results results) {
-        Map<ChunkSectionLayer, MeshData> layers = results.renderedLayers;
-        if (layers.isEmpty()) return;
-
-        SectionEntry entry = new SectionEntry();
-        for (Map.Entry<ChunkSectionLayer, MeshData> e : layers.entrySet()) {
-            MeshData m = e.getValue();
-            if (m == null) continue;
-
-            ByteBuffer srcVb = m.vertexBuffer();
-            ByteBuffer srcIb = m.indexBuffer();
-            ByteBuffer vb = null;
-            ByteBuffer ib = null;
-            if (srcVb != null && srcVb.remaining() > 0) {
-                vb = MemoryUtil.memAlloc(srcVb.remaining());
-                vb.put(srcVb.duplicate()).flip();
-            }
-            if (srcIb != null && srcIb.remaining() > 0) {
-                ib = MemoryUtil.memAlloc(srcIb.remaining());
-                ib.put(srcIb.duplicate()).flip();
-            }
-            MeshData.DrawState ds = m.drawState();
-            entry.layers.put(e.getKey(), new SectionEntry.LayerGeometry(
-                vb, ib,
-                ds == null ? 0 : ds.vertexCount(),
-                ds == null ? 0 : ds.indexCount(),
-                ds));
-        }
-
-        ingestQueue.offer(PendingIngest.fresh(sectionPosKey, entry));
-    }
 
     /** Diagnostic counter for the sodium ingest path. Bumped on every {@link #offerFromSodium}
      *  that produced at least one non-empty layer; logged at first few + every 1024th. */
@@ -581,11 +541,6 @@ public final class SectionManager {
     public long droppedBytes() { return droppedBytes; }
 
     private static void freeEntry(SectionEntry e) {
-        for (SectionEntry.LayerGeometry g : e.layers.values()) {
-            if (g.vertexBytes != null) MemoryUtil.memFree(g.vertexBytes);
-            if (g.indexBytes != null) MemoryUtil.memFree(g.indexBytes);
-        }
-        e.layers.clear();
         for (SectionEntry.SodiumLayerGeometry g : e.sodiumLayers.values()) {
             if (g.vertexBytes != null) MemoryUtil.memFree(g.vertexBytes);
         }
@@ -594,10 +549,6 @@ public final class SectionManager {
 
     private static long sizeOf(SectionEntry e) {
         long n = 0;
-        for (SectionEntry.LayerGeometry g : e.layers.values()) {
-            if (g.vertexBytes != null) n += g.vertexBytes.capacity();
-            if (g.indexBytes != null) n += g.indexBytes.capacity();
-        }
         for (SectionEntry.SodiumLayerGeometry g : e.sodiumLayers.values()) {
             if (g.vertexBytes != null) n += g.vertexBytes.capacity();
         }
