@@ -262,3 +262,29 @@ Showstoppers / accepted differences for approach (a):
   - Stage 4 (2deafda) — `DefaultChunkRendererMixin` cancels Sodium's terrain draw via `@Inject HEAD/cancellable` on the 9-arg `render`. Gated on `Vulkium.isEnabled()`.
   - Untested at commit time (`./gradlew build` is compile-check only per project convention). User runClient verification pending. Expected behavior end-to-end: Sodium owns chunk-build, vulkium owns the GPU dispatch, no double-render. Known regression vs standalone-edition: per-face culling is OFF (Stage 2 dropped it) — expect ~2× draw cost on opaque terrain until Stage 2.5 lands.
   - Pre-existing shader WIP (chunk-fade FadeTimesPtr / `computeSectionVisibility` etc.) preserved uncommitted per `feedback_runclient_autorelaunch`/WIP-file convention; Stage 3 commit was surgical to keep the fade work separable.
+- **2026-06-28** Testing pass landed four follow-up fixes:
+  - **`d236923` — position hi/lo swap.** Stage 3's decoder had `v.position.x = posLo` but Sodium writes `packPositionHi` at byte 0 → `position.x = posHi`. Cross-checked against sodium's own decoder in `common/.../shaders/include/chunk_vertex.glsl#_deinterleave_u20x3`. Also fixed cutoff threshold table — Sodium emits the full `AlphaCutoffParameter` ordinal (HALF=2), the standalone `idx==1 ? 0.5 : 0.0` mapped CUTOUT to no-discard.
+  - **`b449b53` — std430 array stride.** Stage 3 modelled `Vertex` as `struct { uvec2 position; uint colour; uint texCoord; uint lightData }` — 20 bytes of members but `uvec2`'s 8-byte alignment forces struct alignment 8 → `Vertex data[]` stride rounds to `roundUp(20, 8) = 24`. Shader read 24-byte records out of a 20-byte arena → every vertex past index 0 drifted further out of phase. Fix: replace the leading `uvec2` with two `uint`s. Five uints = struct alignment 4 = array stride 20 = matches Sodium's STRIDE. Visible symptom before fix: "huge mess of triangles."
+  - **`8f8119f` — lightmap UV double offset.** Sodium's `Mth.clamp(light + 8, 8, 248)` pre-bakes the half-texel offset; vulkium's standalone decoder added `+0.5/16` on top → +0.0625 UV bias toward bright corner of the lightmap. Fix: just `light/256`, no extra offset.
+  - **`6ddeb6d` — colour R/B swap.** Sodium does `out.color = ColorARGB.toABGR(...)` before the buffer write — packed ints are ABGR (not ARGB), so after little-endian putInt the memory layout is `[R, G, B, A]` (matches Vulkan's RGBA8_UNORM byte order exactly). My recon agent's ARGB-shaped decoder put B into R and vice versa → reddish water, hot biome tints. Fix: pull R from bits 0-7, B from bits 16-23.
+  - **Process bug noted in flight**: the surgical commit dance (reset working tree → edit → build → commit → restore-from-backup) leaves `build/resources/main/...` stale at the post-build/pre-restore content. Re-running `./gradlew processResources --rerun-tasks` after restore syncs it. Symptom was `task.glsl` failing to find `computeSectionVisibility` because the WIP-stripped scene.glsl was still in the build outputs.
+- **2026-06-28** VRAM blowup root cause + first fix:
+  - User config had `terrainArenaMb: 4096` and `maxRegions: 4096` from standalone-edition tuning — vulkium's arena alone pre-allocated 4 GiB the moment it initialised. Combined with Sodium's own per-region geometry/index GPU buffers (also storing every section, because we cancelled Sodium's DRAW but not its UPLOAD), the user's 6 GiB card hit 80% utilisation and the Wayland compositor stalled.
+  - **`b5bf6a0`** — `RenderRegionManagerMixin` upgraded from observer to HEAD cancellation. With the upload cancelled, Sodium never instantiates per-region `DeviceResources` (its `GlBufferArena`s for geometry + index never grow). Only its constant 32 MB `MojangStagingBuffer` (allocated in `RenderRegionManager` constructor) remains — small, ignore. Safety analysis in the mixin doc-comment.
+  - User should still drop `terrainArenaMb` in `vulkium.json` to something sane for the sodium edition (Sodium does the chunk compile, vulkium just stores the GPU geometry — 512 MB is plenty for default RD).
+
+## Optimisation audit — Sodium work we now bypass
+
+After the two cancel-mixins (`DefaultChunkRendererMixin` + `RenderRegionManagerMixin`), here's what Sodium still does per frame that vulkium no longer consumes:
+
+| Sodium work | Cost | Cancellable? | Status |
+|---|---|---|---|
+| Terrain GPU draw (`DefaultChunkRenderer.render`) | medium GPU + CPU | HEAD cancel | ✅ cancelled |
+| Per-region GPU buffer upload (`RenderRegionManager.uploadResults`) | huge GPU mem | HEAD cancel | ✅ cancelled |
+| Per-frame render-list build (visibility traversal + frustum cull) | low CPU (~1-3ms) | risky — dual-purpose (also drives worker prioritisation by camera distance) | deferred |
+| Translucent per-quad sort tasks (`SortTriggering.integrateTranslucentData` → sort worker) | medium CPU (only when camera moves through translucent threshold) | yes via mixin | deferred — needs sort lifecycle research |
+| Shared index buffer ensureCapacity (`DefaultChunkRenderer:92`) | trivial | already skipped (parent method cancelled) | n/a |
+| Section-info graph + tree updates | low CPU | NO — vulkium needs Sodium's worker pool to keep building, which needs the graph to know what to build | keep |
+| `MojangStagingBuffer(32_000_000)` constructor allocation | 32 MB GPU constant | tricky (buffer is referenced by RenderRegion constructor params) | skip — not worth the risk |
+
+Deferred items above can be revisited if perf-profiling shows Sodium taking >5 ms/frame. With just the two cancels above, sodium frame time should drop substantially — its hot loops bottom out on `storage == null` early-returns.
