@@ -32,8 +32,10 @@ public final class BufferArena implements AutoCloseable {
 
     /** Returns a quad-granular address, or {@link SegmentedManager#SIZE_LIMIT} if full. */
     public int allocQuads(int quadCount) {
-        totalQuads += quadCount;
         int addr = (int) segments.alloc(quadCount);
+        if (addr != (int) SegmentedManager.SIZE_LIMIT) {
+            totalQuads += quadCount;
+        }
         // Sparse page-commit hook will go here.
         return addr;
     }
