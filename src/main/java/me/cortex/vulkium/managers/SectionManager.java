@@ -178,6 +178,18 @@ public final class SectionManager {
      *  that produced at least one non-empty layer; logged at first few + every 1024th. */
     private final AtomicLong sodiumOffers = new AtomicLong();
 
+    /** Cumulative vertex bytes ingested from sodium across the session. Bumped in
+     *  {@link #offerFromSodium} by the total bytes of all layers in each successful offer.
+     *  Mirrors standalone-era {@code SectionCapture.vertexBytesTotal} so the F3 HUD's
+     *  vb= line shows real numbers again instead of zero. */
+    private final AtomicLong sodiumVertexBytesIngested = new AtomicLong();
+
+    /** Public accessor for the HUD overlay; counts cumulative non-empty sodium offers. */
+    public long sodiumOffersTotal() { return sodiumOffers.get(); }
+
+    /** Public accessor for the HUD overlay; cumulative bytes ingested from sodium. */
+    public long sodiumVertexBytesIngestedTotal() { return sodiumVertexBytesIngested.get(); }
+
     /**
      * Sodium-edition worker-thread hand-off. Called from {@code ChunkBuilderMeshingTaskMixin}
      * after Sodium's build task finishes. Copies each layer's {@link NativeBuffer} into a
@@ -254,6 +266,7 @@ public final class SectionManager {
             if (entry == null) entry = new SectionEntry();
             entry.sodiumLayers.put(e.getKey(),
                 new SectionEntry.SodiumLayerGeometry(copy, segments, totalVerts));
+            sodiumVertexBytesIngested.addAndGet(remaining);
         }
 
         // No layer in the meshes map produced real bytes — semantically the same as

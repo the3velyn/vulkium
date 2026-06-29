@@ -32,8 +32,25 @@ public final class SectionCapture {
      *  SectionManager call sites guard against it defensively. */
     public static final long UNKNOWN_SECTION = Long.MIN_VALUE;
 
-    // --- diagnostics — return 0 forever under sodium ------------------------
-    public static long sectionsCaptured() { return 0L; }
-    public static long vertexBytesTotal() { return 0L; }
+    // --- diagnostics — delegated to the live sodium ingest counters ---------
+    /** Cumulative count of non-empty section ingests since session start. Under
+     *  sodium-edition this is bumped by {@code SectionManager.offerFromSodium}
+     *  rather than the deleted MC-vanilla {@code onSectionMeshCompiled} path,
+     *  but semantics match for HUD parity: each call corresponds to one fresh
+     *  build or rebuild Sodium handed us. */
+    public static long sectionsCaptured() {
+        return SectionManager.get().sodiumOffersTotal();
+    }
+    /** Cumulative vertex bytes ingested. Under sodium-edition these are Sodium's
+     *  pre-packed 20-byte CompactChunkVertex bytes, not MC's 28-byte vanilla
+     *  format — so vb= on the F3 HUD reads ~71% of what the standalone-era
+     *  value would have shown for the same workload. */
+    public static long vertexBytesTotal() {
+        return SectionManager.get().sodiumVertexBytesIngestedTotal();
+    }
+    /** Index bytes — always 0 on the sodium branch. Sodium doesn't ship per-
+     *  section index buffers through our ingest path (translucent sort comes via
+     *  {@code ChunkBuilderSortingTaskMixin} and goes straight to
+     *  {@code resortTranslucent} without accumulating a byte counter). */
     public static long indexBytesTotal()  { return 0L; }
 }
