@@ -46,6 +46,19 @@ public final class BufferArena implements AutoCloseable {
         // Sparse page-release hook will go here.
     }
 
+    /** Shrink an existing slot to {@code newQuads}, returning the tail to the free pool.
+     *  No-op if the slot is already that size or smaller. Called by TerrainUploader when
+     *  a rebuild's new quad count is smaller than the existing slot's capacity — without
+     *  this, the shrink-reuse path leaves wasted bytes inside slots that progressively
+     *  oversize themselves over a long session of mixed block edits. */
+    public void shrink(int addr, int newQuads) {
+        if (newQuads <= 0) return;
+        long oldQuads = segments.getSize(addr);
+        if (newQuads >= oldQuads) return;
+        int released = segments.shrink(addr, newQuads);
+        totalQuads -= released;
+    }
+
     public DeviceBuffer buffer() { return buffer; }
 
     public int vertexFormatSize() { return vertexFormatSize; }

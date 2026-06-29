@@ -445,13 +445,27 @@ public final class SectionManager {
                         retryQueue.offer(p.withRetry());
                         return; // skip freeEntry below — the bytes are reused by the retry
                     }
-                    // Fall through to freeEntry — we're giving up on this section. A later
-                    // MC-driven recompile (block edit, F3+A, chunk reload) will re-capture.
+                    // Fall through to freeEntry below — we're giving up on this section.
+                    // ALSO release the section explicitly so its stale arena slot (from
+                    // before the failed rebuild) doesn't sit forever holding bytes we can
+                    // no longer overwrite. Without this, every dropped section leaks its
+                    // old slot until the chunk eventually unloads via sweepKeepDistance,
+                    // which under "Keep all" never happens — the arena permanently
+                    // saturates with stale data nothing else can reuse.
+                    uploader.releaseSection(p.key);
+                    // Also drop from live + region ledger so a future MC-driven recompile
+                    // re-enters via the first-insert path with clean state.
+                    live.remove(p.key);
+                    int staleRef = sectionToRegionRef.remove(p.key);
+                    if (staleRef != -1 && regionManager != null) {
+                        try { regionManager.removeSection(staleRef); }
+                        catch (RuntimeException ignored) {}
+                    }
                     long dropped = arenaDroppedSections.incrementAndGet();
                     if (dropped <= 16 || dropped % 64 == 0) {
                         long usedMb = uploader.arena().usedMB();
                         long capMb = uploader.arena().allocatedMB();
-                        LOGGER.warn("Section 0x{} DROPPED after {} retries (drop #{}, arena {}/{}MB) — raise terrainArenaMb or lower RD",
+                        LOGGER.warn("Section 0x{} DROPPED after {} retries (drop #{}, arena {}/{}MB) — released slot + live entry. Raise terrainArenaMb or lower keep-distance",
                             Long.toHexString(p.key), MAX_UPLOAD_RETRIES, dropped, usedMb, capMb);
                     }
                 } else if (regionManager != null) {
