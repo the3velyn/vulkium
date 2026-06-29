@@ -143,18 +143,19 @@ public final class SectionManager {
         }
     }
 
-    /** Sodium dropped a render-section. Whether we mirror the eviction depends on the
-     *  user's {@code regionKeepDistance} setting (vulkium config):
+    /** Sodium dropped a render-section. Whether we mirror the eviction depends on
+     *  {@code regionKeepDistance} relative to Sodium's render-distance (32, vanilla
+     *  default):
      *  <ul>
-     *    <li>finite (32-255) — propagate the eviction so vulkium tracks Sodium's
-     *        working set; without this Sodium can evict-without-MC-unloading and
-     *        vulkium's {@code sweepKeepDistance} (gated on {@code !mcHasChunk}) never
-     *        reclaims, leaking arena slots forever.</li>
-     *    <li>"Keep all" (256+) — IGNORE Sodium's eviction so vulkium retains its
-     *        cached snapshot beyond Sodium's render-distance. This is the nvidium-
-     *        style "high effective RD via vulkium's larger working set" pattern the
-     *        user opts into with the Keep All setting. The stale data persists until
-     *        MC actually unloads the chunk (then {@code sweepKeepDistance} reclaims).</li>
+     *    <li>{@code keepDistance <= 32} — Sodium's working set is at least as large
+     *        as ours; propagate the eviction. (At exactly 32, Sodium would have
+     *        evicted these anyway; below 32 our own {@code sweepKeepDistance} would
+     *        evict them first so propagation is moot but harmless.)</li>
+     *    <li>{@code keepDistance > 32} — vulkium explicitly wants more than Sodium
+     *        keeps. Ignore Sodium's eviction; let {@code sweepKeepDistance} decide
+     *        when to drop based on our own radius and MC's chunk presence. This is
+     *        the nvidium-style "vulkium-cached beyond-Sodium working set" pattern
+     *        the user opts into by raising regionKeepDistance.</li>
      *  </ul>
      *
      *  <p>Always clears the per-section first-seen entry so a future re-add (player
@@ -162,15 +163,13 @@ public final class SectionManager {
     public void noteSectionRemoved(int sectionX, int sectionY, int sectionZ) {
         long key = net.minecraft.core.SectionPos.asLong(sectionX, sectionY, sectionZ);
         sectionFirstSeenMs.remove(key);
-        // Respect the user's keep-distance setting. >= 256 means "keep all" — don't
-        // propagate sodium's eviction.
         int keepDistance;
         try {
             keepDistance = me.cortex.vulkium.VulkiumConfig.get().regionKeepDistance;
         } catch (Throwable t) {
             keepDistance = 32; // safe default if config read races init
         }
-        if (keepDistance < 256) {
+        if (keepDistance <= 32) {
             evict(key);
         }
     }
