@@ -794,6 +794,64 @@ public final class SectionManager {
     }
 
     /**
+     * Arena-pressure eviction. Evicts the {@code maxToEvict} farthest live sections
+     * from the camera position, regardless of {@code regionKeepDistance}. Sections
+     * inside {@code minKeepChunks} of camera are protected (the near-camera ring is
+     * what the user actually sees; never sacrifice it). Used by the render loop when
+     * the terrain arena saturates — under "Keep all" this is the ONLY eviction path,
+     * because {@link #sweepKeepDistance} returns immediately at {@code keepDistance >= 256}.
+     *
+     * <p>O(n log n) per call (n = live section count). Caller throttles to avoid
+     * per-frame cost; expected to run once every ~30 frames when pressure is detected,
+     * not steady-state.
+     *
+     * @return number of sections evicted
+     */
+    public int evictFarthestUnderPressure(int cameraChunkX, int cameraChunkZ,
+                                           int maxToEvict, int minKeepChunks) {
+        long[] keys = live.keySet().toLongArray();
+        if (keys.length == 0 || maxToEvict <= 0) return 0;
+
+        long minKeepSq = (long) minKeepChunks * minKeepChunks;
+
+        // Compute distSq[] parallel to keys[]. Sort distSq[] to find the kth-largest
+        // threshold; evict every key whose distSq >= threshold (excluding the
+        // near-camera ring). O(n log n) sort is the cheapest correct approach for
+        // n in the 10k-100k range; per-frame partial-heap would be more efficient
+        // but the throttled-once-per-second call cadence makes the sort fine.
+        long[] distSq = new long[keys.length];
+        for (int i = 0; i < keys.length; i++) {
+            int sx = net.minecraft.core.SectionPos.x(keys[i]);
+            int sz = net.minecraft.core.SectionPos.z(keys[i]);
+            int dx = sx - cameraChunkX;
+            int dz = sz - cameraChunkZ;
+            distSq[i] = (long) dx * dx + (long) dz * dz;
+        }
+        long[] sortedDist = distSq.clone();
+        java.util.Arrays.sort(sortedDist);
+        int kth = Math.max(0, sortedDist.length - maxToEvict);
+        long threshold = sortedDist[kth];
+        // Edge: if everything is closer than the threshold (degenerate), bail.
+        if (threshold <= minKeepSq) {
+            // All candidates inside the protected ring — can't safely evict anything.
+            return 0;
+        }
+
+        int evicted = 0;
+        for (int i = 0; i < keys.length && evicted < maxToEvict; i++) {
+            if (distSq[i] >= threshold && distSq[i] > minKeepSq) {
+                evict(keys[i]);
+                evicted++;
+            }
+        }
+        if (evicted > 0) {
+            LOGGER.info("Arena pressure eviction: dropped {} farthest sections (cam=({},{}), thresholdDist={} chunks)",
+                evicted, cameraChunkX, cameraChunkZ, (int) Math.sqrt(threshold));
+        }
+        return evicted;
+    }
+
+    /**
      * Region-keep-distance sweep. Evicts sections vulkium no longer needs.
      *
      * <p>Two criteria, matching nvidium's three modes:

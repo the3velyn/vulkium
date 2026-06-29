@@ -163,6 +163,23 @@ public final class Renderer {
             me.cortex.vulkium.managers.SectionManager.get()
                 .sweepKeepDistance(cx, cz, keepDist, 256);
         }
+
+        // Arena pressure eviction: fires regardless of keepDist when the arena is
+        // near-saturated. Under "Keep all" (keepDist >= 256) the radius sweep above
+        // is a no-op — without this, once the arena fills new chunks at the camera
+        // edge stop loading until F3+A. Throttled to every 30 frames (~0.5s @ 60fps)
+        // so the O(n log n) sort doesn't run per-frame, and only triggers above 85%
+        // arena usage so it stays dormant under normal load.
+        if ((FrameDriver.frameCount() % 30L) == 0L && terrainUploader != null) {
+            long usedMb = terrainUploader.arena().usedMB();
+            long capMb = terrainUploader.arena().allocatedMB();
+            if (capMb > 0 && (usedMb * 100L / capMb) >= 85) {
+                // Evict 512 farthest per pass; keep a 12-chunk ring around the camera
+                // sacred (always-visible area).
+                me.cortex.vulkium.managers.SectionManager.get()
+                    .evictFarthestUnderPressure(cx, cz, 512, 12);
+            }
+        }
         // Region-level frustum cull, against OUR own frustum. MC's cam.cullFrustum is built
         // from the unmodified projectionMatrix (finite far ≈ rd*64 blocks), so reusing it
         // here would re-introduce the camera-locked cutoff at the region level even though
