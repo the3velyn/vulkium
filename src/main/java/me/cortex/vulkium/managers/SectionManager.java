@@ -827,11 +827,6 @@ public final class SectionManager {
 
         long minKeepSq = (long) minKeepChunks * minKeepChunks;
 
-        // Compute distSq[] parallel to keys[]. Sort distSq[] to find the kth-largest
-        // threshold; evict every key whose distSq >= threshold (excluding the
-        // near-camera ring). O(n log n) sort is the cheapest correct approach for
-        // n in the 10k-100k range; per-frame partial-heap would be more efficient
-        // but the throttled-once-per-second call cadence makes the sort fine.
         long[] distSq = new long[keys.length];
         for (int i = 0; i < keys.length; i++) {
             int sx = net.minecraft.core.SectionPos.x(keys[i]);
