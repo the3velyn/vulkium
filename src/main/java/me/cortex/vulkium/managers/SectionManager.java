@@ -143,11 +143,25 @@ public final class SectionManager {
         }
     }
 
-    /** Drop a section's first-seen entry when the section is removed from Sodium's
-     *  tracking (chunk unload, F3+A). Without this the map would grow unbounded. */
+    /** Sodium dropped a render-section: drop OUR mirror of it too. This is the leak fix
+     *  for the "arena fills very quickly at 32 RD" bug. Sodium can call onSectionRemoved
+     *  for sections that are still within MC's chunk-load radius (Sodium owns its own
+     *  render-distance bounding box separate from {@code ClientLevel.hasChunk}), so the
+     *  per-frame {@code sweepKeepDistance} pass which gates on {@code !mcHasChunk} never
+     *  reclaims them — every leaked section keeps its arena slot, its live entry, its
+     *  region ref, etc. forever until F3+A. Previously vulkium worked at much larger RDs
+     *  because there was no separate Sodium-side eviction signal at all; under the
+     *  sodium-edition we must mirror it.
+     *
+     *  <p>Also clears the per-section first-seen entry so a future re-add (player walks
+     *  back into range) genuinely re-fades like a fresh chunk-load. */
     public void noteSectionRemoved(int sectionX, int sectionY, int sectionZ) {
         long key = net.minecraft.core.SectionPos.asLong(sectionX, sectionY, sectionZ);
         sectionFirstSeenMs.remove(key);
+        // Queue an eviction through the standard pipeline so all the per-section state
+        // (live entry, region ref, arena slot, translucent index cache, etc.) clears
+        // uniformly on the render thread.
+        evict(key);
     }
 
     /** Diagnostic counter for the sodium ingest path. Bumped on every {@link #offerFromSodium}
