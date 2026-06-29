@@ -167,11 +167,6 @@ public final class TerrainUploader implements AutoCloseable {
         int addr;
         if (existing != (int) SegmentedManager.SIZE_LIMIT && arena.canReuse(existing, quadCount)) {
             addr = existing;
-            // Reclaim the tail when the new quad count is smaller than the slot — without
-            // this, shrink-reuse leaves dead bytes inside the slot that compound across
-            // many rebuilds (block edits varying geometry) and progressively bloats the
-            // arena. shrink() is a no-op when newQuads == existing slot size.
-            arena.shrink(addr, quadCount);
         } else {
             addr = arena.allocQuads(quadCount);
             if (addr == (int) SegmentedManager.SIZE_LIMIT) {

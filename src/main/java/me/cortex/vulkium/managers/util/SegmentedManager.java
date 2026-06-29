@@ -149,42 +149,9 @@ public class SegmentedManager {
         return slot & SIZE_MSK;
     }
 
-    /**
-     * Shrink an existing allocation in-place. Splits the slot at {@code addr} so that
-     * {@code [addr, addr+newSize)} remains TAKEN and {@code [addr+newSize, addr+oldSize)}
-     * is returned to FREE (coalescing with an adjacent free block on the right if present
-     * — left-side coalescing isn't needed since the front of the slot stays TAKEN).
-     *
-     * <p>Used by {@link BufferArena} on shrink-reuse to reclaim the tail bytes that would
-     * otherwise sit dead inside the slot until next realloc — important for long sessions
-     * where rebuild quad counts vary and slots would otherwise progressively oversize.
-     *
-     * @return bytes released back to the free pool
-     */
-    public int shrink(long addr, int newSize) {
-        addr &= ADDR_MSK;
-        var iter = TAKEN.iterator(addr << SIZE_BITS);
-        long slot = iter.nextLong();
-        if (slot >> SIZE_BITS != addr) throw new IllegalStateException();
-        long oldSize = slot & SIZE_MSK;
-        if (newSize <= 0 || newSize >= oldSize) return 0;
-        long delta = oldSize - newSize;
-        long releasedAddr = addr + newSize;
-
-        // Update TAKEN entry: same addr, smaller size.
-        iter.remove();
-        TAKEN.add((addr << SIZE_BITS) | newSize);
-
-        // Coalesce with the next free block if it starts exactly where the released
-        // chunk ends. (The free tree is keyed by (size << ADDR_BITS) | address so we
-        // can't directly look up by address; iterate to find adjacency.)
-        long releasedSize = delta;
-        // Defer right-coalesce — a key-by-size tree makes this O(n) without a second
-        // index. Acceptable: most sodium-fed shrinks free a non-adjacent tail so
-        // skipping the coalesce mostly costs nothing. If profiling shows excess free-
-        // tree depth, add a TAKEN.iterator look at the next slot to detect adjacency.
-
-        FREE.add((releasedSize << ADDR_BITS) | releasedAddr);
-        return (int) delta;
-    }
+    // In-place shrink was attempted but produced inconsistent FREE-tree state that
+    // free()'s coalesce logic couldn't handle (it assumes gaps between TAKEN slots
+    // are spanned by exactly one matching FREE block; shrink violated that). Removed
+    // in favour of the simpler "alloc-then-free" path on size-change rebuilds. If
+    // re-attempted, free()'s coalesce must be made invariant-tolerant first.
 }
