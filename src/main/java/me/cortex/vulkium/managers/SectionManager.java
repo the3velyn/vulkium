@@ -143,25 +143,36 @@ public final class SectionManager {
         }
     }
 
-    /** Sodium dropped a render-section: drop OUR mirror of it too. This is the leak fix
-     *  for the "arena fills very quickly at 32 RD" bug. Sodium can call onSectionRemoved
-     *  for sections that are still within MC's chunk-load radius (Sodium owns its own
-     *  render-distance bounding box separate from {@code ClientLevel.hasChunk}), so the
-     *  per-frame {@code sweepKeepDistance} pass which gates on {@code !mcHasChunk} never
-     *  reclaims them — every leaked section keeps its arena slot, its live entry, its
-     *  region ref, etc. forever until F3+A. Previously vulkium worked at much larger RDs
-     *  because there was no separate Sodium-side eviction signal at all; under the
-     *  sodium-edition we must mirror it.
+    /** Sodium dropped a render-section. Whether we mirror the eviction depends on the
+     *  user's {@code regionKeepDistance} setting (vulkium config):
+     *  <ul>
+     *    <li>finite (32-255) — propagate the eviction so vulkium tracks Sodium's
+     *        working set; without this Sodium can evict-without-MC-unloading and
+     *        vulkium's {@code sweepKeepDistance} (gated on {@code !mcHasChunk}) never
+     *        reclaims, leaking arena slots forever.</li>
+     *    <li>"Keep all" (256+) — IGNORE Sodium's eviction so vulkium retains its
+     *        cached snapshot beyond Sodium's render-distance. This is the nvidium-
+     *        style "high effective RD via vulkium's larger working set" pattern the
+     *        user opts into with the Keep All setting. The stale data persists until
+     *        MC actually unloads the chunk (then {@code sweepKeepDistance} reclaims).</li>
+     *  </ul>
      *
-     *  <p>Also clears the per-section first-seen entry so a future re-add (player walks
-     *  back into range) genuinely re-fades like a fresh chunk-load. */
+     *  <p>Always clears the per-section first-seen entry so a future re-add (player
+     *  walks back into range) genuinely re-fades like a fresh chunk-load. */
     public void noteSectionRemoved(int sectionX, int sectionY, int sectionZ) {
         long key = net.minecraft.core.SectionPos.asLong(sectionX, sectionY, sectionZ);
         sectionFirstSeenMs.remove(key);
-        // Queue an eviction through the standard pipeline so all the per-section state
-        // (live entry, region ref, arena slot, translucent index cache, etc.) clears
-        // uniformly on the render thread.
-        evict(key);
+        // Respect the user's keep-distance setting. >= 256 means "keep all" — don't
+        // propagate sodium's eviction.
+        int keepDistance;
+        try {
+            keepDistance = me.cortex.vulkium.VulkiumConfig.get().regionKeepDistance;
+        } catch (Throwable t) {
+            keepDistance = 32; // safe default if config read races init
+        }
+        if (keepDistance < 256) {
+            evict(key);
+        }
     }
 
     /** Diagnostic counter for the sodium ingest path. Bumped on every {@link #offerFromSodium}
