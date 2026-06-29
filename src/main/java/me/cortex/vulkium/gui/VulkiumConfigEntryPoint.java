@@ -155,7 +155,7 @@ public class VulkiumConfigEntryPoint implements ConfigEntryPoint {
                     "MC unloads chunk). 256 = keep all (memory-unbounded). Intermediate " +
                     "values evict outside that square radius around the camera."))
                 .setValueFormatter(v -> v >= 256
-                    ? Component.literal("Keep all")
+                    ? Component.literal("Keep max")
                     : Component.literal(v + " chunks"))
                 .setStorageHandler(flush)
                 .setBinding(v -> cfg.regionKeepDistance = v, () -> cfg.regionKeepDistance)
